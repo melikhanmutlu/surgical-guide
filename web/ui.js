@@ -34,7 +34,7 @@ window.UI = (function () {
       st2: S.selected && S.selected.size > 0,
       st3: !!S.anchor && S.lesion.ok && S.planes.length > 0 && plOk === S.planes.length,
       st4: fibOk,
-      st5: !!R && R.pieces === want && !gCrit,
+      st5: !!R && !!S.anchor && !!St.parts.guide && R.pieces === want && !gCrit,
       st6: S.screws.length > 0 && scOk === S.screws.length && !critOf(/^s\d/),
       st7: !$('expZip').disabled,
       st8: exported,
@@ -59,10 +59,10 @@ window.UI = (function () {
     const pill = $('readyPill');
     if (!S.anchor) { pill.className = 'pill'; pill.textContent = 'Hazırlanıyor'; }
     else if (crit) { pill.className = 'pill crit'; pill.textContent = 'Kritik uyarı'; }
-    pill.title = crit && S.anchor ? 'Kontrolleri aç' : '';
-    if ($('fibIntro')) $('fibIntro').hidden = !!(window.Fibula && Fibula.state().F);
     else if (done.st7) { pill.className = 'pill ok'; pill.textContent = 'Onaylı plan'; }
     else { pill.className = 'pill'; pill.textContent = 'Onay bekliyor'; }
+    pill.title = crit && S.anchor ? 'Kontrolleri aç' : '';
+    if ($('fibIntro')) $('fibIntro').hidden = !!(window.Fibula && Fibula.state().F);
     const dd = $('caseInfo').querySelector('dd');
     $('caseTitle').textContent = $('caseName').value.trim() || (dd ? dd.textContent : '');
     document.title = ($('caseName').value.trim() ? $('caseName').value.trim() + ' · ' : '') + 'Yolmed Guide Stüdyosu';

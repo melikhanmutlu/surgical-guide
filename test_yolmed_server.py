@@ -183,6 +183,16 @@ def main():
         got = contains(tm2, np.array([[-1, 0, R0 + 0.3 + 1.5], [-6 + 0.6 + 1.5, 0, R0 + 0.3 + 1.5], [-11 + 2.0, 0, R0 + cw + 2.0]], float))
         assert list(map(bool, got)) == [False, True, True], got
         print(f"split guide OK: bodies {r2['bodies']}, volume {r2['volume_mm3']:.1f} mm3")
+        # wrap depth that follows the bone: a deeper limit at one end, never shallower than the plain wrap
+        req3 = dict(req, wrap_profile=[[-15, -4], [0, -4], [15, -7]], g=dict(req["g"], W=24))
+        st, r3 = J(call(base, "POST", "/guide", req3))
+        assert st == 200 and r3["watertight"] is True and r3["bodies"] == 1, (st, r3.get("bodies"), r3.get("error"))
+        tm3 = trimesh.load(io.BytesIO(base64.b64decode(r3["stl_b64"])), file_type="stl")
+        assert tm3.bounds[0][2] >= 8 - 7 - 0.01, tm3.bounds
+        deep_end, shallow_end = contains(tm3, np.array([[13, 10.6, 2.6], [-13, 10.6, 2.6]], float))
+        assert bool(deep_end) and not bool(shallow_end), (deep_end, shallow_end)
+        st, r = J(call(base, "POST", "/guide", dict(req, wrap_profile=[[0, -4], [0, -5]]))); assert st == 400, r
+        print("wrap profile OK")
         st, r = J(call(base, "POST", "/guide", {"crop": crop})); assert st == 400 and "error" in r
     finally:
         srv.shutdown(); srv.server_close()

@@ -7,7 +7,7 @@ window.Lesion = (function () {
   const St = window.Studio; if (!St) return null;
   const { S, V, fmt, bus } = St, $ = id => document.getElementById(id);
   const COLOR = 0xd9363e;
-  let tool = null, mask = null, radius = 4, stroke = null, lastPaint = null;
+  let tool = null, mask = null, radius = 4, stroke = null, lastPaint = null, planMsg = '', planning = false;
 
   const n = () => S.red ? S.red.nx * S.red.ny * S.red.nz : 0;
   const ensure = () => { const N = n(); if (!mask || mask.length !== N) mask = new Uint8Array(N); };
@@ -44,7 +44,7 @@ window.Lesion = (function () {
     const s = stroke; stroke = null; lastPaint = null;
     if (s && s.n) changed(); else if (window.MPR) MPR.redraw();
   }
-  function changed() { build(); status(); St.emit('changed'); if (window.MPR) MPR.redraw(); }
+  function changed() { planMsg = ''; build(); status(); St.emit('changed'); if (window.MPR) MPR.redraw(); }
 
   // ---------- 3D body ----------
   function build() {
@@ -87,48 +87,62 @@ window.Lesion = (function () {
   function setTool(t) {
     tool = tool === t ? null : t;
     if (tool) {
+      if (St.S.mode !== 'orbit') St.setMode('orbit');
       if (window.SegEdit) SegEdit.off();
       if (window.Measure && Measure.active()) $('toolMeasure').click();
       // painting happens on the slices: make sure they are on screen
       if ($('vm3d') && $('vm3d').getAttribute('aria-pressed') === 'true') $('vmStrip').click();
+      // on narrower screens give the slices the room: close the review panel while painting
+      if (window.innerWidth < 1280 && window.Layout) Layout.setRight(false);
     }
     document.querySelectorAll('#lsTools [data-t]').forEach(b => b.setAttribute('aria-pressed', b.dataset.t === tool));
     const b = $('modeBadge');
-    if (tool) { b.hidden = false; b.textContent = `Lezyon ${tool === 'erase' ? 'silgisi' : 'fırçası'}: kesitlerde lezyonun üzerine sürükleyin. İlk ve son göründüğü kesitleri de boyayın. Bitirmek için Esc.`; }
+    if (tool) { b.hidden = false; b.textContent = `Lezyon ${tool === 'erase' ? 'silgisi' : 'fırçası'}: kesitlerde sürükleyin · Esc ile bitir`; }
     else if (/^Lezyon/.test(b.textContent)) b.hidden = true;
   }
   function status() {
     const c = count(), r = S.red, vol = r ? c * r.sp[0] * r.sp[1] * r.sp[2] / 1000 : 0;
     let ext = '';
     if (c && S.anchor) { const { u } = St.frameAxes(), o = points().map(q => q.sub(S.anchor.p).dot(u)); ext = ` · eksende ${fmt(Math.max(...o) - Math.min(...o))} mm`; }
-    $('lsStat').textContent = c ? `Boyanan lezyon ${fmt(vol, 2)} cm³${ext}.` : 'Henüz lezyon boyanmadı.';
-    $('lsPlan').disabled = !c; $('lsClear').disabled = !c;
+    $('lsStat').textContent = c ? `Boyanan lezyon ${fmt(vol, 2)} cm³${ext}.${planMsg}` : 'Henüz lezyon boyanmadı.';
+    $('lsPlan').disabled = !c || planning; $('lsClear').disabled = !c;
   }
+  let wrapNote = '';
   async function plan() {
-    const pts = points(); if (!pts.length) return;
+    const pts = points(); if (!pts.length || planning) return;
+    planning = true; $('lsPlan').disabled = true;
+    try { await planNow(pts); } finally { planning = false; status(); }
+  }
+  async function planNow(pts) {
     St.busy(true, 'Kesi ve vidalar lezyona göre hesaplanıyor…'); await St.sleep();
     try {
       // the guide is centred over the lesion
       if (!St.anchorFromLesion(pts)) { if (!S.anchor) { St.busy(false); St.alertMsg('Lezyonun üzerinde kemik yüzeyi bulunamadı; "Rezeksiyon bölgesini modelde seç" ile guide merkezini seçin.'); return; } }
       St.planFromLesion(pts);
+      St.busy(true, 'Guide\'ın takılabilirliği kontrol ediliyor…');
+      const f = await St.fitWrap();
+      wrapNote = !f ? '' : !f.ok ? ' Guide bu yerleşimde takılamıyor; kontrolleri inceleyin.' : (f.split ? ' Kavisli kemik nedeniyle iki ayrı guide seçildi.' : '') + (f.wrap < (S.kind === 'leg' ? 6 : 5) ? ` Guide takılabilsin diye sarma derinliği ${fmt(f.wrap, 1)} mm'ye indirildi.` : '');
     } finally { St.busy(false); }
+    // say what changed: cut positions and angles, screw count
+    const pl = S.planes.slice().sort((a, b) => a.off - b.off), ang = q => (q.yaw || q.pitch ? `, açı ${fmt(Math.hypot(q.yaw, q.pitch), 0)}°` : '');
+    if (pl.length) planMsg = ` Kesiler ${pl.map(q => `${fmt(q.off, 1)} mm${ang(q)}`).join(' ve ')}; ${S.screws.length} vida yerleştirildi.${wrapNote}`;
     status();
   }
   $('lesPaint').innerHTML = `<h3 class="sub">Lezyonu işaretle</h3>
     <span class="seg" id="lsTools" role="group" aria-label="Lezyon aracı">
-      <button data-t="paint" aria-pressed="false"><svg class="i"><use href="#i-brush"/></svg>Boya</button>
-      <button data-t="erase" aria-pressed="false"><svg class="i"><use href="#i-eraser"/></svg>Sil</button>
+      <button data-t="paint" aria-pressed="false"><svg class="i"><use href="#i-brush"/></svg>Fırça</button>
+      <button data-t="erase" aria-pressed="false"><svg class="i"><use href="#i-eraser"/></svg>Silgi</button>
     </span>
     <div class="ctl"><div class="ctl-row"><label for="lsRad">Fırça yarıçapı</label><output id="lsRadO">4 mm</output></div><input type="range" id="lsRad" min="1" max="12" step="0.5" value="4"></div>
     <div class="btns"><button class="primary" id="lsPlan" disabled><svg class="i"><use href="#i-spark"/></svg>Lezyondan kesi ve vida öner</button><button id="lsClear" disabled>Temizle</button></div>
     <p class="hint" id="lsStat"></p>
-    <p class="hint">Kesiler boyanan bölgeyi güvenlik payı kadar dışarıda bırakır; açı, en az kemik alınacak şekilde 30°'ye kadar seçilir.</p>`;
+    <p class="hint">Lezyonun ilk ve son göründüğü kesitleri de boyayın. Kesiler boyanan bölgeyi güvenlik payı kadar dışarıda bırakır; açı, en az kemik alınacak şekilde 30°'ye kadar seçilir.</p>`;
   document.querySelectorAll('#lsTools [data-t]').forEach(b => b.addEventListener('click', () => setTool(b.dataset.t)));
   $('lsRad').addEventListener('input', e => { radius = +e.target.value; $('lsRadO').textContent = `${fmt(radius, 1)} mm`; });
   $('lsPlan').addEventListener('click', plan);
   $('lsClear').addEventListener('click', () => { mask = null; changed(); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && tool) setTool(tool); });
-  bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring)) { mask = null; St.setPart('lesionPaint', null, null); status(); } });
+  bus.addEventListener('volume', e => { if (tool) setTool(tool); if (!(e.detail && e.detail.restoring)) { mask = null; St.setPart('lesionPaint', null, null); status(); } });
   bus.addEventListener('changed', () => { if (!stroke) status(); });
 
   // ---------- plan storage (run-length encoded) ----------
@@ -139,7 +153,7 @@ window.Lesion = (function () {
     get: () => (count() ? { dims: [S.red.nx, S.red.ny, S.red.nz], m: rle(mask) } : null),
     set(x) {
       mask = x && S.red && Array.isArray(x.dims) && x.dims.join() === [S.red.nx, S.red.ny, S.red.nz].join() && typeof x.m === 'string' ? unrle(x.m, n()) : null;
-      build(); status(); if (window.MPR) MPR.redraw();
+      planMsg = ''; build(); status(); if (window.MPR) MPR.redraw();
     },
   };
   status();

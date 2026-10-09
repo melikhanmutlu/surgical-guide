@@ -30,6 +30,7 @@ window.Unzip = (function () {
       n = u64(z, 32); cdSize = u64(z, 40); cdOff = u64(z, 48);
     }
     if (n > LIMIT.entries) throw new Error(`zip içinde çok fazla dosya (${n})`);
+    if (cdOff + cdSize > file.size) throw new Error('zip dizini bozuk (dosya eksik ya da kesik)');
     const c = await view(file.slice(cdOff, cdOff + cdSize)), out = [], dec = new TextDecoder();
     for (let p = 0, k = 0; k < n && p + 46 <= c.byteLength; k++) {
       if (u32(c, p) !== 0x02014b50) throw new Error('zip dizini bozuk');
@@ -66,9 +67,11 @@ window.Unzip = (function () {
       let i = 0;
       for (const en of list) {
         i++; if (en.name.endsWith('/') || junk(en.name)) continue;
-        if (en.flags & 1) { skipped.push(en.name); continue; }   // encrypted
-        total += en.size; if (total > LIMIT.bytes) throw new Error('zip açıldığında çok büyük (6 GB üstü)');
+        if (en.flags & 1 || (en.method !== 0 && en.method !== 8)) { skipped.push(en.name); continue; }   // encrypted or unsupported
+        if (total + en.size > LIMIT.bytes) throw new Error('zip açıldığında çok büyük (6 GB üstü)');
         const blob = await data(f, en), base = en.name.split('/').pop();
+        // the declared size can lie (zip bomb): count what actually came out
+        total += blob.size; if (total > LIMIT.bytes) throw new Error('zip açıldığında çok büyük (6 GB üstü)');
         const file = new File([blob], base), rel = root + '/' + en.name;
         Object.defineProperty(file, 'relPath', { value: rel });
         if (isZipName(base)) await walk(file, root + '/' + en.name.slice(0, -base.length), depth + 1); else out.push(file);

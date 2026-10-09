@@ -87,7 +87,7 @@ window.Audit = (function () {
   const when = iso => new Date(iso).toLocaleString('tr-TR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
   function stTxt(role, h) {
     const s = status(role, h);
-    return s.state === 'valid' ? `<span class="tag ok">Onaylı</span> ${esc(s.e.name)} · ${when(s.e.at)}` : s.state === 'stale' ? `<span class="tag warn">Plan değişti</span> ${esc(s.e.name)} onayından sonra plan değişti; yeniden onay gerekli.`
+    return s.state === 'valid' ? `<span class="tag ok">Onaylı</span> ${esc(s.e.name)} · ${esc(when(s.e.at))}` : s.state === 'stale' ? `<span class="tag warn">Plan değişti</span> ${esc(s.e.name)} onayından sonra plan değişti; yeniden onay gerekli.`
       : s.state === 'broken' ? '<span class="tag crit">Geçersiz</span> Kayıt zinciri bozuk.' : '<span class="tag">Bekliyor</span>';
   }
   function block(role, h) {
@@ -107,8 +107,8 @@ window.Audit = (function () {
       ${block('eng', h)}${block('sur', h)}
       <p class="hint" id="auMsg">${esc(note)}</p>
       <details class="sub-d"><summary>Onay kaydı (${log.length})</summary>
-        <p class="hint">${chain.ok ? `Zincir doğrulandı${log.length ? ` · son özet ${lastH.slice(0, 16)}` : ''}.` : `<b style="color:var(--crit)">Zincir ${chain.bad + 1}. kayıtta bozuk.</b>`} Plan özeti ${h.slice(0, 16)}.</p>
-        <ol class="aulog">${log.slice().reverse().map(e => `<li>${when(e.at)} · ${ROLE[e.role]} ${esc(e.name)} ${ACT[e.action]}${e.comment ? `: “${esc(e.comment)}”` : ''}<small>#${e.n} ${e.hash.slice(0, 12)} · plan ${e.plan.slice(0, 8)}</small></li>`).join('') || '<li>Kayıt yok.</li>'}</ol>
+        <p class="hint">${chain.ok ? `Zincir doğrulandı${log.length ? ` · son özet ${esc(String(lastH).slice(0, 16))}` : ''}.` : `<b style="color:var(--crit)">Zincir ${chain.bad + 1}. kayıtta bozuk.</b>`} Plan özeti ${h.slice(0, 16)}.</p>
+        <ol class="aulog">${log.slice().reverse().map(e => `<li>${esc(when(e.at))} · ${esc(ROLE[e.role] || '')} ${esc(e.name)} ${esc(ACT[e.action] || '')}${e.comment ? `: “${esc(e.comment)}”` : ''}<small>#${Number(e.n) || 0} ${esc(String(e.hash || '').slice(0, 12))} · plan ${esc(String(e.plan || '').slice(0, 8))}</small></li>`).join('') || '<li>Kayıt yok.</li>'}</ol>
       </details>`;
     box.querySelectorAll('[data-a]').forEach(b => b.addEventListener('click', () => act(b.dataset.r, b.dataset.a)));
     $('au_eng_n').addEventListener('input', e => { engName = e.target.value; });

@@ -40,6 +40,8 @@ from scipy import ndimage as ndi
 import seg_server  # /health and /segment are served by seg_server.Handler, unchanged
 
 MAX_BODY = 256 * 1024 * 1024
+MAX_PLAN_BODY = 4 * 1024 * 1024       # case and version requests carry only plan JSON
+MAX_CROP = 128e6                      # voxels in a guide crop (a 100 mm guide at 0.3 mm is ~100 M)
 MAX_GRID = 40e6                       # guide grid cells (~2 GB peak at this size)
 GUIDE_SLOTS = threading.BoundedSemaphore(int(os.environ.get("YOLMED_GUIDE_JOBS", "1")))
 
@@ -147,6 +149,11 @@ class CaseStore:
 
 
 # --------------------------------------------------------------------------------------------- guide
+def _ccw(pts):
+    """True when a 2-D polygon is counter-clockwise (positive shoelace area)."""
+    return sum(x0 * y1 - x1 * y0 for (x0, y0), (x1, y1) in zip(pts, pts[1:] + pts[:1])) > 0
+
+
 def _unit(a):
     a = np.asarray(a, float)
     n = np.linalg.norm(a)
@@ -239,6 +246,8 @@ def build_guide(req):
     sp = np.asarray(crop["sp"], float)
     corg = np.asarray(crop["origin"], float)
     axes = np.asarray(crop["axes"], float).reshape(3, 3)       # rows: i, j, k unit vectors
+    if nx * ny * nz > MAX_CROP:
+        raise HttpError(422, f"crop too large ({nx}x{ny}x{nz}); at most {int(MAX_CROP)} voxels")
     raw = base64.b64decode(req["mask_b64"])
     if len(raw) != nx * ny * nz:
         raise HttpError(400, f"mask has {len(raw)} bytes, expected nx*ny*nz = {nx * ny * nz}")
@@ -261,6 +270,19 @@ def build_guide(req):
         raise HttpError(400, "invalid crop grid")
     cw = clear + wall
     bridge_lo, bridge_hi = cw - 0.5, cw + 2.5
+    # optional depth limit along the guide ([uu, nn] pairs, nn <= 0): on a curved jaw the wrap follows the bone
+    prof = req.get("wrap_profile")
+    if prof:
+        if not isinstance(prof, list) or not 2 <= len(prof) <= 2000:
+            raise HttpError(400, "wrap_profile must be a list of 2..2000 [u, depth] pairs")
+        try:
+            prof = np.asarray(prof, float).reshape(-1, 2)
+        except (TypeError, ValueError):
+            raise HttpError(400, "wrap_profile must be a list of [u, depth] pairs")
+        if not np.all(np.isfinite(prof)) or np.any(np.diff(prof[:, 0]) <= 0) or prof[:, 1].min() < -(wrap + 80) or prof[:, 1].max() > 0:
+            raise HttpError(400, "wrap_profile values out of range")
+        prof[:, 1] = np.minimum(prof[:, 1], -wrap)
+    deep = float(-prof[:, 1].min()) if prof is not None and len(prof) else wrap
 
     # guide frame (orthonormalised; keep the given v direction so `side` keeps its meaning)
     p = np.asarray(fr["p"], float)
@@ -284,11 +306,11 @@ def build_guide(req):
     A = (axes * sp[:, None]).T                          # columns: world step per i, j, k
     bone_f = (np.stack([ii, jj, kk], 1) @ A.T + corg - p) @ R
     inside = ((np.abs(bone_f[:, 0]) <= L / 2 + 1) & (np.abs(bone_f[:, 1]) <= W / 2 + 1)
-              & (bone_f[:, 2] >= -wrap - 1))
+              & (bone_f[:, 2] >= -deep - 1))
     if not inside.any():
         raise HttpError(422, "no bone inside the guide footprint")
     top = bone_f[inside, 2].max() + bridge_hi + 1.0
-    lo = np.array([-L / 2, -W / 2, -wrap]) - 2 * r
+    lo = np.array([-L / 2, -W / 2, -deep]) - 2 * r
     hi = np.array([L / 2, W / 2, top]) + 2 * r
     screws = req.get("screws") or []
     for s in screws:
@@ -342,7 +364,15 @@ def build_guide(req):
     BIG = float(np.linalg.norm(ghi - glo)) * 2 + 50
     zhi = hi[2] + 10
     # every limit in uu / vv / nn is applied by ONE final box intersection, so no coplanar faces meet
-    box = m3d.Manifold.cube((L, W, zhi + wrap)).translate((-L / 2, -W / 2, -wrap))
+    if prof is not None and len(prof):
+        # profile in (uu, nn), extruded across the guide width: z -> -vv after the rotation, then centred
+        uu = np.clip(prof[:, 0], -L / 2, L / 2)
+        pts = [(-L / 2, zhi), (-L / 2, float(np.interp(-L / 2, prof[:, 0], prof[:, 1])))]
+        pts += [(float(a), float(b)) for a, b in zip(uu, prof[:, 1]) if -L / 2 < a < L / 2]
+        pts += [(L / 2, float(np.interp(L / 2, prof[:, 0], prof[:, 1]))), (L / 2, zhi)]
+        box = m3d.Manifold.extrude(m3d.CrossSection([pts] if _ccw(pts) else [pts[::-1]]), W).rotate((90, 0, 0)).translate((0, W / 2, 0))
+    else:
+        box = m3d.Manifold.cube((L, W, zhi + wrap)).translate((-L / 2, -W / 2, -wrap))
     v0 = W / 2 - bridge if side > 0 else -W / 2 - BIG
     vslab = m3d.Manifold.cube((BIG, bridge + BIG, BIG)).translate((-BIG / 2, v0, -BIG / 2))
 
@@ -427,6 +457,7 @@ CASE_RE = re.compile(r"^/cases/([A-Za-z0-9_-]+)(/draft|/versions(?:/(\d+))?)?/?$
 
 class Handler(seg_server.Handler):
     store = None
+    timeout = 60          # seconds a client may stall while sending; ends half-open connections
 
     def _cors(self):
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -441,14 +472,14 @@ class Handler(seg_server.Handler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
 
-    def _body(self):
+    def _body(self, limit=MAX_PLAN_BODY):
         try:
             n = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             raise HttpError(400, "bad Content-Length")
         if n < 0:
             raise HttpError(400, "bad Content-Length")
-        if n > MAX_BODY:
+        if n > limit:
             raise HttpError(413, "request too large")
         try:
             obj = json.loads(self.rfile.read(n) or b"null")
@@ -493,12 +524,12 @@ class Handler(seg_server.Handler):
                     return self._json(200, st.get_version(cid, int(vn)))
                 raise HttpError(405, "method not allowed")
             if path == "/guide" and method == "POST":
-                b = self._body()
+                # take the job slot before reading the (large) body, so waiting requests hold no memory
                 if not GUIDE_SLOTS.acquire(timeout=120):
                     raise HttpError(503, "guide service busy, try again")
                 try:
-                    return self._json(200, build_guide(b))
-                except (KeyError, TypeError, ValueError, IndexError) as e:
+                    return self._json(200, build_guide(self._body(MAX_BODY)))
+                except (KeyError, TypeError, ValueError, IndexError, OverflowError) as e:
                     raise HttpError(400, f"bad guide request: {type(e).__name__}: {e}")
                 finally:
                     GUIDE_SLOTS.release()

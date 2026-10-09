@@ -56,7 +56,7 @@ window.Fibula = (function () {
     cands.forEach(c => { const others = long.filter(o => o !== c && o.rad > c.rad * 1.25); c.tibia = others.sort((a, b) => a.C.distanceTo(c.C) - b.C.distanceTo(c.C))[0] || null; });
     const fibs = cands.filter(c => c.tibia).length ? cands.filter(c => c.tibia) : cands;
     F = { source, label, vol, red, labels, cands: fibs, c: null };
-    $('fibCand').innerHTML = fibs.map((c, i) => `<option value="${i}">Aday ${i + 1}: ${fmt(c.len, 0)} mm, çap ${fmt(2 * c.rad, 0)} mm, ${c.C.x > 0 ? 'sol' : 'sağ'} (tahmini)</option>`).join('');
+    $('fibCand').innerHTML = fibs.map((c, i) => `<option value="${i}" title="Taraf tahminidir">Aday ${i + 1} · ${fmt(c.len, 0)} mm · Ø${fmt(2 * c.rad, 0)} · ${c.C.x > 0 ? 'sol' : 'sağ'}</option>`).join('');
     St.busy(false); msg(fibs[0].tibia ? '' : 'Tibia ayırt edilemedi; fibula guide\'ının yanal yönü tahmini.');
     $('sceneSeg').hidden = false; $('fibBody').hidden = false;
     return true;

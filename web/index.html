@@ -41,7 +41,7 @@
   --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 6px 20px rgba(0, 0, 0, .35);
   color-scheme: dark }
 [hidden] { display: none !important; }
-html, body { height: 100%; }
+html, body { height: 100%; overflow: clip; }
 body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 var(--font-body); overflow: hidden; -webkit-font-smoothing: antialiased; }
 .app { height: 100dvh; display: grid; grid-template-rows: auto minmax(0, 1fr); background: var(--bg); }
 
@@ -253,6 +253,7 @@ button.link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2p
 .deliver li { counter-increment: d; display: grid; grid-template-columns: 22px 1fr auto; gap: 8px; align-items: start; padding: 10px 0; border-bottom: 1px solid var(--line); }
 .deliver li::before { content: counter(d); font: 500 12px var(--font-mono); color: var(--muted); width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--line-strong); display: grid; place-items: center; }
 .deliver p { margin-top: 2px; }
+.deliver li:has(> .btns) > .btns { grid-column: 2 / -1; flex-wrap: wrap; }
 /* numeric entry next to sliders */
 .ctl-row .num { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font: 12.5px var(--font-mono); }
 .ctl-row .num input { width: 64px; height: 24px; padding: 0 4px; text-align: right; font: 12.5px var(--font-mono); font-variant-numeric: tabular-nums; }
@@ -305,7 +306,8 @@ button.primary:disabled { opacity: 1; background: var(--sunken); color: var(--mu
 .busy .pbar { width: 120px; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; position: relative; }
 .busy .pbar i { position: absolute; top: 0; bottom: 0; width: 35%; background: var(--accent); border-radius: 2px; animation: slide 1.2s ease-in-out infinite; }
 .busy .pbar.det i { animation: none; left: 0; transition: width .3s; }
-.busy .pbar.det { width: 200px; } #busyText { font-variant-numeric: tabular-nums; }
+.busy .pbar.det { width: 160px; flex: none; } #busyText { font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.busy { max-width: calc(100% - 32px); }
 @keyframes slide { from { left: -35%; } to { left: 100%; } }
 @media (prefers-reduced-motion: reduce) { .busy .pbar i { animation: none; left: 0; } }
 /* dialogs */
@@ -450,10 +452,10 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
           <div class="btns"><button id="pickAnchor"><svg class="i"><use href="#i-target"/></svg>Rezeksiyon bölgesini modelde seç</button></div>
           <div class="ctl"><label for="resType" class="lbl2">Rezeksiyon tipi</label><select id="resType"><option value="">Segment (iki kesi arası)</option><option value="R">Kondil dahil, sağ (tek kesi)</option><option value="L">Kondil dahil, sol (tek kesi)</option></select></div>
           <p class="hint" id="resTypeHint" hidden>Ramus ve kondil, kondile en uzak kesiden itibaren çıkarılır. Diğer kesiler yalnız guide yuvası olarak kalır. Kondil konumu Anatomi adımındaki referanstan gelir.</p>
+          <div class="ctl"><label for="perSide" class="lbl2">Her tarafta vida</label><select id="perSide"><option value="1">1 vida</option><option value="2" selected>2 vida</option></select></div>
           <div id="lesPaint" class="col"></div>
           <h3 class="sub">Ya da sınırı elle ayarla</h3>
           <div id="lesCtl" class="col"></div>
-          <div class="ctl"><label for="perSide" class="lbl2">Her tarafta vida</label><select id="perSide"><option value="1">1 vida</option><option value="2" selected>2 vida</option></select></div>
           <div class="btns"><button id="suggest"><svg class="i"><use href="#i-spark"/></svg>Kesi ve vida öner</button></div>
           <p class="hint" id="lesStatus"></p>
           <h3 class="sub">Kesiler</h3>
@@ -545,7 +547,7 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
           <ol class="deliver">
             <li><div><b>Üretim STL'i</b><p class="hint" id="prodMsg">Su geçirmez üretim STL'i sunucuda Manifold ile üretilir.</p></div><button id="expSrv" title="Sunucuda yüzey tabanlı (Manifold) boolean ile su geçirmez STL"><svg class="i"><use href="#i-server"/></svg>Üret</button></li>
             <li><div><b>Üretim paketi</b><p class="hint">STL'ler, plan ve rapor tek .zip dosyasında.</p></div><button class="primary" id="expZip"><svg class="i"><use href="#i-download"/></svg>İndir</button></li>
-            <li><div><b>Tek tek STL</b><p class="hint" id="oneMsg">Kemik modelleri her zaman indirilebilir; guide plan onaylanınca.</p></div><span class="btns" id="oneStl"><button data-one="full" title="Rezeksiyon öncesi, kesilmemiş kemik">Tam kemik</button><button data-one="bone" title="Rezeksiyondan sonra kalan kemik">Kalan kemik</button><button data-one="res" title="Rezeke edilecek parça">Rezeke parça</button><button data-one="guide" title="Üretim STL'i alındıysa o, yoksa önizleme">Guide</button></span></li>
+            <li><div><b>Tek tek STL</b><p class="hint" id="oneMsg">Kemik modelleri her zaman indirilebilir; guide ise plan onaylanınca indirilir.</p></div><span class="btns" id="oneStl"><button data-one="full" title="Rezeksiyon öncesi, kesilmemiş kemik">Tam kemik</button><button data-one="bone" title="Rezeksiyondan sonra kalan kemik">Kalan kemik</button><button data-one="res" title="Rezeke edilecek parça">Rezeke parça</button><button data-one="guide" title="Üretim STL'i alındıysa o, yoksa önizleme">Guide</button></span></li>
             <li><div><b>Ek dosyalar</b><p class="hint" title="3MF: guide'lar ve modeller. DICOM SEG: kalan kemik ve rezeke parça, kaynak BT ile aynı koordinatta (yalnız DICOM vaka). Navigasyon: nokta, düzlem, vida ve implant eksenleri (LPS mm).">3MF, DICOM SEG ve navigasyon. Pakette de vardır.</p><p class="hint" id="xMsg"></p></div><span class="btns"><button id="x3mf"><svg class="i"><use href="#i-download"/></svg>3MF</button><button id="xSeg">DICOM SEG</button><button id="xNav">Navigasyon</button></span></li>
             <li><div><b>Cerrahi rapor</b><p class="hint">Görüntüler, kesim tablosu, montaj sırası ve imza alanı.</p></div><span class="btns"><button id="expPdf"><svg class="i"><use href="#i-download"/></svg>PDF</button><button id="expRep">HTML</button></span></li>
           </ol>
@@ -576,6 +578,7 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
         <span class="seg" role="group" aria-label="Görünüm düzeni"><button id="vm3d" aria-pressed="true" title="Yalnız 3B (K)">3B</button><button id="vmStrip" aria-pressed="false" title="Büyük 3B ve kesit şeridi (K)">3B + şerit</button><button id="vmQuad" aria-pressed="false" title="Dört eşit görünüm (K)">2×2</button></span>
         <span class="seg" id="sceneSeg" role="group" aria-label="Sahne" hidden><button id="scM" aria-pressed="true" title="Mandibula ve yerleştirilmiş greftler">Mandibula</button><button id="scF" aria-pressed="false" title="Fibula, segmentler ve fibula guide'ı">Fibula</button><button id="scS" aria-pressed="false" title="Mandibula ve fibula yan yana">Yan yana</button></span>
         <span class="seg" id="gizmoSeg" role="group" aria-label="Tutamaç" hidden><button id="gzT" aria-pressed="true" title="Eksen boyunca taşı (W)">Taşı</button><button id="gzR" aria-pressed="false" title="Açıyı değiştir (E)">Döndür</button></span>
+        <span id="dragBox" hidden><select id="dragAxis" aria-label="Sürükleme ekseni" title="Kesiyi modelde tutup sürüklerken izlediği yol"><option value="bone">Kemik boyunca</option><option value="guide">Guide ekseni</option></select></span>
         <span class="seg" id="toolSeg" role="group" aria-label="Araç"><button id="toolMeasure" aria-pressed="false" title="Ölçüm (M)"><svg class="i"><use href="#i-ruler"/></svg>Ölç</button></span>
         <span id="winBox" hidden><select id="win" aria-label="Pencere"><option value="bone">Kemik penceresi</option><option value="soft">Yumuşak doku</option><option value="wide">Geniş</option></select></span>
         <button id="fit">Ortala</button>

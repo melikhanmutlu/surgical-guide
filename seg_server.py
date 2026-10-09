@@ -23,6 +23,7 @@ from scipy import ndimage as ndi
 from surgiguide.volume import Volume
 from surgiguide import segment as seg
 
+MAX_VOXELS = 256 * 1024 * 1024 // 2   # int16 volume of at most 256 MB
 NAMES_TR = {"mandible": "Mandibula", "fibula": "Fibula"}
 
 
@@ -82,9 +83,12 @@ class Handler(BaseHTTPRequestHandler):
             sp = [float(x) for x in q["sp"].split(",")]
             origin = [float(x) for x in q["origin"].split(",")]
             axes = np.array([float(x) for x in q["axes"].split(",")]).reshape(3, 3)
-            raw = self.rfile.read(int(self.headers["Content-Length"]))
+            n = int(self.headers.get("Content-Length") or -1)
+            if min(nx, ny, nz) < 1 or nx * ny * nz > MAX_VOXELS or n != 2 * nx * ny * nz:
+                raise ValueError("Content-Length must be 2*nx*ny*nz bytes, at most %d voxels" % MAX_VOXELS)
+            raw = self.rfile.read(n)
             hu = np.frombuffer(raw, "<i2").reshape(nz, ny, nx).astype(np.float32)
-        except (KeyError, ValueError) as e:
+        except (KeyError, ValueError, TypeError) as e:
             self.send_error(400, f"bad request: {e}"); return
         vol = Volume(hu, sp, origin, axes.T)   # axes rows are the i, j, k unit vectors
         if self.backend == "totalseg":
