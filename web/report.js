@@ -147,7 +147,7 @@ window.Report = (function () {
     d.h2('Kesim tablosu');
     const sorted = S.planes.slice().sort((a, b) => a.off - b.off);
     d.table(['Kesi', 'Konum (eksen)', 'Yatay açı', 'Dikey açı', 'Yuva', 'Onay'], S.planes.map((p, i) => [`Kesi ${i + 1}`, `${fmt(p.off)} mm`, `${fmt(p.yaw)}°`, `${fmt(p.pitch)}°`, `${fmt(p.w)} mm`, p.ok ? (p.by || 'onaylı') : 'bekliyor']), [0.16, 0.2, 0.15, 0.15, 0.12, 0.22]);
-    d.text(`Rezeksiyon: lezyon ${fmt(S.lesion.from)} – ${fmt(S.lesion.to)} mm, güvenlik payı ${fmt(S.lesion.margin)} mm${sorted.length >= 2 ? `, kesiler arası ${fmt(sorted.at(-1).off - sorted[0].off)} mm` : ''}${S.resectedVolume ? `, rezeke hacim ${fmt(S.resectedVolume / 1000, 2)} cm³` : ''}.`, { size: 22 });
+    d.text(`Rezeksiyon: lezyon ${fmt(S.lesion.from)} – ${fmt(S.lesion.to)} mm, güvenlik payı ${fmt(S.lesion.margin)} mm${S.lesion.condyle ? `, kondil dahil (${S.lesion.condyle === 'R' ? 'sağ' : 'sol'}) rezeksiyon` : ''}${S.g.split ? ', iki ayrı guide' : ''}${!S.lesion.condyle && sorted.length >= 2 ? `, kesiler arası ${fmt(sorted.at(-1).off - sorted[0].off)} mm` : ''}${S.resectedVolume ? `, rezeke hacim ${fmt(S.resectedVolume / 1000, 2)} cm³` : ''}.`, { size: 22 });
     if (S.screws.length) {
       d.h2('Vidalar');
       d.table(['Vida', 'Konum (eksen, yanal)', 'Eğim', 'Matkap / kovan', 'Boy', 'Kemikte'], S.screws.map((s, i) => { const si = S.result && S.result.screwInfo[i]; return [`Vida ${i + 1}`, `${fmt(s.u)}, ${fmt(s.v)} mm`, `${fmt(s.tiltU, 0)}°, ${fmt(s.tiltV, 0)}°`, `${fmt(s.d)} / ${fmt(s.D)} mm`, `${fmt(s.len, 0)} mm`, si && si.ok ? `${fmt(si.inBone)} mm` : '–']; }), [0.13, 0.24, 0.16, 0.19, 0.12, 0.16]);

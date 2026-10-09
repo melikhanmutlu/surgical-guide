@@ -110,8 +110,8 @@ window.Fibula = (function () {
 
   // ---------- defect between the first and last mandible cut ----------
   function defect() {
-    if (!S.anchor || !S.resMask || S.planes.length < 2) return null;
-    const pl = St.planesWorld().sort((a, b) => a.off - b.off), A = pl[0], B = pl[pl.length - 1], r = S.red;
+    const E = S.resMask && St.resEnds(); if (!E) return null;
+    const { A, B } = E, r = S.red;
     const dir = B.p.clone().sub(A.p).normalize(), len = B.p.distanceTo(A.p);
     const NA = A.N.clone(), NB = B.N.clone(); if (NA.dot(dir) < 0) NA.negate(); if (NB.dot(dir) < 0) NB.negate();
     const bw = 1.5, nb = Math.ceil(len / bw) + 2, acc = Array.from({ length: nb }, () => [0, 0, 0, 0]), ea = [0, 0, 0, 0], eb = [0, 0, 0, 0];

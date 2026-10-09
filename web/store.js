@@ -81,7 +81,7 @@
   }
 
   // ---------- state ----------
-  let backend = null, caseId = null, caseName = '', lastJSON = null, userAt = -1e9, snapTimer = null, saveTimer = null, pendingSave = null;
+  let backend = null, caseId = null, caseName = '', lastJSON = null, userAt = -1e9, lastSnap = 0, snapTimer = null, saveTimer = null, pendingSave = null;
   let autosave = true, dirty = false;
   try { autosave = localStorage.getItem('yolmed.autosave') !== '0'; } catch (e) {}
   const H = { list: [], idx: -1 };   // entries: {plan, label, at, cp}
@@ -99,10 +99,10 @@
   const NAMES = {
     p: { off: 'konum', yaw: 'yatay açı', pitch: 'dikey açı', w: 'yuva genişliği' },
     s: { u: 'konum', v: 'yanal konum', tiltU: 'eğim', tiltV: 'yanal eğim', d: 'matkap çapı', D: 'kovan çapı', sleeveH: 'kovan yüksekliği', len: 'vida boyu' },
-    g: { rot: 'guide dönüşü', L: 'guide uzunluğu', W: 'guide genişliği', wrap: 'sarma derinliği', wall: 'duvar kalınlığı', clear: 'oturma aralığı', bridge: 'köprü genişliği', side: 'köprü tarafı' },
-    l: { from: 'lezyon başlangıcı', to: 'lezyon bitişi', margin: 'güvenlik payı' },
+    g: { rot: 'guide dönüşü', L: 'guide uzunluğu', W: 'guide genişliği', wrap: 'sarma derinliği', wall: 'duvar kalınlığı', clear: 'oturma aralığı', bridge: 'köprü genişliği', side: 'köprü tarafı', split: 'guide düzeni', flange: 'yakalama kenarı' },
+    l: { from: 'lezyon başlangıcı', to: 'lezyon bitişi', margin: 'güvenlik payı', condyle: 'kondil dahil rezeksiyon' },
   };
-  const num = (x, k) => St.fmt(x, Number.isInteger(x) && !/off|from|to|u$|v$/.test(k) ? 0 : 1);
+  const num = (x, k) => x == null ? 'yok' : typeof x === 'string' ? ({ R: 'sağ', L: 'sol' }[x] || x) : St.fmt(x, Number.isInteger(x) && !/off|from|to|u$|v$/.test(k) ? 0 : 1);
   function diffObj(a, b, names, prefix, out) {
     const ch = Object.keys(names).filter(k => a[k] !== b[k]);
     ch.forEach(k => out.push(`${prefix}${prefix ? ' ' : ''}${names[k]} ${num(a[k], k)} → ${num(b[k], k)}`));
@@ -133,12 +133,14 @@
     return t.length > 2 ? `${t[0]} · ${t[1]} +${t.length - 2}` : t.join(' · ');
   }
   const entry = (plan, label) => ({ plan, label, at: Date.now() });
-  function baseline(label) { const p = St.planOf(); lastJSON = JSON.stringify(p); H.list = [entry(p, label || 'Başlangıç')]; H.idx = 0; updUndo(); }
+  function baseline(label) { const p = St.planOf(); lastJSON = JSON.stringify(p); H.list = [entry(p, label || 'Başlangıç')]; H.idx = 0; lastSnap = performance.now(); updUndo(); }
   function snapshot(label, forceUser) {
     if (S.restoring || !S.red) return;
     const plan = St.planOf(), js = JSON.stringify(plan);
     if (js === lastJSON) return;
-    const user = forceUser || performance.now() - userAt < 5000;
+    // a user step: the person did something since the last snapshot (slow rebuilds can finish long after the click)
+    const user = forceUser || performance.now() - userAt < 5000 || userAt > lastSnap;
+    lastSnap = performance.now();
     lastJSON = js;
     if (H.idx < 0) { H.list = [entry(plan, 'Başlangıç')]; H.idx = 0; }
     else if (!user) H.list[H.idx].plan = plan;     // derived update (preset, async recompute): not an undo step
@@ -169,7 +171,7 @@
   St.bus.addEventListener('changed', () => { if (S.restoring) return; clearTimeout(snapTimer); snapTimer = setTimeout(snapshot, 300); });
   St.bus.addEventListener('volume', e => {
     if (e.detail && e.detail.restoring) return;
-    caseId = null; caseName = ''; $('caseName').value = ''; H.list = []; H.idx = -1; lastJSON = null; updUndo(); renderCaseHead(); renderVersions([]); setSave('Kaydedilmedi');
+    caseId = null; caseName = ''; $('caseName').value = ''; H.list = []; H.idx = -1; lastJSON = null; lastSnap = performance.now(); updUndo(); renderCaseHead(); renderVersions([]); setSave('Kaydedilmedi');
     markCurrent();
   });
   St.bus.addEventListener('exported', () => { if (backend) saveVersion('Üretim paketi alındı'); });

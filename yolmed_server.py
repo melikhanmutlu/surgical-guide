@@ -355,6 +355,17 @@ def build_guide(req):
     guide = m3d.Manifold.batch_boolean(parts, m3d.OpType.Add)
     if holes:
         guide = guide - m3d.Manifold.batch_boolean(holes, m3d.OpType.Add)
+    # two separate guides: remove everything between the outermost cuts beyond a capture flange past each slot
+    gap = req.get("gap")
+    if gap:
+        fl = float(gap.get("flange", 3.0))
+        half = m3d.Manifold.cube((BIG, BIG, BIG)).translate((-BIG / 2, -BIG / 2, 0))
+        ends = []
+        for key, sgn in (("A", 1.0), ("B", -1.0)):
+            pl = gap[key]
+            Nf = R.T @ _unit(pl["N"]) * sgn                  # points into the gap
+            ends.append(half.transform(_frame_to(Nf, to_f(pl["p"]) + Nf * (float(pl["w"]) / 2 + fl))))
+        guide = guide - (ends[0] ^ ends[1])
     T["boolean"] = time.perf_counter() - t0
 
     # drop marching-cubes specks and slivers left between close slots (< 1 mm^3 or < 1 % of the main body,

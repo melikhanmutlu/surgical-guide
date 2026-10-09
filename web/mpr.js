@@ -155,7 +155,7 @@
     label(ctx, v.lab[2], w / 2, 30 * dpr, '#8fa39b', dpr); label(ctx, v.lab[3], w / 2, h - 8 * dpr, '#8fa39b', dpr);
   }
   // overlays drawn by other modules (measurements, segmentation edits, reference lines)
-  const overlayAPI = () => ({ toIdx, idxToImg, label, st, dims });
+  const overlayAPI = () => ({ toIdx, idxToImg, label, st, dims, contour, planeLine });
   function label(ctx, t, x, y, col, dpr) { ctx.font = `${12 * dpr}px "IBM Plex Mono", monospace`; ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillText(t, x + dpr, y + dpr); ctx.fillStyle = col; ctx.fillText(t, x, y); }
 
   let raf = 0;

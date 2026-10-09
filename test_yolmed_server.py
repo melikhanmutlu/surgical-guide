@@ -175,6 +175,14 @@ def main():
         for (name, (_, want)), got in zip(probes.items(), inside):
             assert bool(got) == want, f"probe '{name}': expected {want}, got {got}"
         print("guide geometry probes OK")
+        # two separate guides: nothing between the cuts beyond a 3 mm flange, one body per side
+        req2 = dict(req, gap={"A": req["planes"][0], "B": req["planes"][1], "flange": 3.0})
+        st, r2 = J(call(base, "POST", "/guide", req2))
+        assert st == 200 and r2["watertight"] is True and r2["bodies"] == 2, (st, r2.get("bodies"))
+        tm2 = trimesh.load(io.BytesIO(base64.b64decode(r2["stl_b64"])), file_type="stl")
+        got = contains(tm2, np.array([[-1, 0, R0 + 0.3 + 1.5], [-6 + 0.6 + 1.5, 0, R0 + 0.3 + 1.5], [-11 + 2.0, 0, R0 + cw + 2.0]], float))
+        assert list(map(bool, got)) == [False, True, True], got
+        print(f"split guide OK: bodies {r2['bodies']}, volume {r2['volume_mm3']:.1f} mm3")
         st, r = J(call(base, "POST", "/guide", {"crop": crop})); assert st == 400 and "error" in r
     finally:
         srv.shutdown(); srv.server_close()

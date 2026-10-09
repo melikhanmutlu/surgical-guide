@@ -89,7 +89,7 @@
   const S = {
     vol: null, red: null, labels: null, comps: [], selected: new Set(), mask: null,
     anchor: null,             // {p:Vector3, n:Vector3, axis:Vector3}
-    g: { rot: 0, L: 36, W: 22, wrap: 6, wall: 2.5, clear: 0.3, bridge: 4, side: 1 },
+    g: { rot: 0, L: 36, W: 22, wrap: 6, wall: 2.5, clear: 0.3, bridge: 4, side: 1, split: 0, flange: 3 },
     planes: [], screws: [], sel: null, explode: 0, mode: 'orbit', result: null,
     lesion: { from: -6, to: 6, margin: 3, ok: false }, compNames: null, segMethod: 'Eşik', crit: 0, qc: [],
   };
@@ -298,9 +298,11 @@
   async function rebuildResection(opts = {}) {
     const r = S.red, nxy = r.nx * r.ny;
     let resMask = null, box = null, best = null;
-    if (S.anchor && S.planes.length >= 2) {
-      const pl = planesWorld().sort((a, b) => a.off - b.off), A = pl[0], B = pl[pl.length - 1];
-      const R = 70, ap = S.anchor.p, c = G.indexOf(r, [ap.x, ap.y, ap.z]);
+    const E = resEnds();
+    if (E) {
+      const { A, B } = E;
+      // a condylar resection runs from the cut to the condyle: search a ball around that span, keep the piece at the condyle
+      const ap = E.condyle ? A.p.clone().lerp(B.p, 0.5) : S.anchor.p, R = E.condyle ? A.p.distanceTo(B.p) / 2 + 35 : 70, c = G.indexOf(r, [ap.x, ap.y, ap.z]);
       const rad = r.sp.map(s => Math.ceil(R / s));
       const lo = c.map((x, a) => Math.max(0, Math.floor(x - rad[a]))), hi = c.map((x, a) => Math.min([r.nx, r.ny, r.nz][a] - 1, Math.ceil(x + rad[a])));
       const cand = new Uint8Array(S.mask.length), ax = r.axes, sp = r.sp, o = r.origin;
@@ -311,13 +313,14 @@
         const y = o[1] + ax[0][1] * i * sp[0] + ax[1][1] * j * sp[1] + ax[2][1] * k * sp[2];
         const z = o[2] + ax[0][2] * i * sp[0] + ax[1][2] * j * sp[1] + ax[2][2] * k * sp[2];
         if ((x - ap.x) ** 2 + (y - ap.y) ** 2 + (z - ap.z) ** 2 > R * R) continue;
-        if (x * A.N.x + y * A.N.y + z * A.N.z > aT && x * B.N.x + y * B.N.y + z * B.N.z < bT) cand[v] = 1;
+        if (x * A.N.x + y * A.N.y + z * A.N.z > aT && (E.condyle || x * B.N.x + y * B.N.y + z * B.N.z < bT)) cand[v] = 1;
       }
       const { labels, comps } = G.components(cand, r.nx, r.ny, r.nz, 1);
       if (comps.length) {
         // the piece nearest the anchor
         let bd = Infinity;
-        comps.forEach(cm => { const d = V(...G.worldOf(r, ...cm.centroid)).distanceTo(ap); if (d < bd) { bd = d; best = cm; } });
+        const near = E.condyle ? B.p : ap;
+        comps.forEach(cm => { const d = V(...G.worldOf(r, ...cm.centroid)).distanceTo(near); if (d < bd) { bd = d; best = cm; } });
         resMask = new Uint8Array(cand.length); box = [Infinity, Infinity, Infinity, -1, -1, -1];
         for (let v = 0; v < cand.length; v++) if (labels[v] === best.label) {
           resMask[v] = 1; const i = v % r.nx, j = ((v / r.nx) | 0) % r.ny, k = (v / nxy) | 0;
@@ -347,6 +350,21 @@
     } else setPart('resected', null, null);
     S.resMask = resMask;
     S.resectedVolume = best ? best.size * r.sp[0] * r.sp[1] * r.sp[2] : 0;
+  }
+
+  // the two ends of the defect: the outermost cuts, or (condylar resection) the cut farthest from the condyle and the condyle
+  function resEnds() {
+    if (!S.anchor) return null;
+    const pl = planesWorld(), side = S.lesion.condyle, ref = side && window.Ref && Ref.get(), cond = ref && ref.cond[side];
+    if (side) {
+      if (!pl.length || !cond) return null;
+      const c = V(...cond), A = pl.reduce((a, b) => (b.p.distanceTo(c) > a.p.distanceTo(c) ? b : a)), dir = c.clone().sub(A.p).normalize();
+      const N = A.N.clone(); if (N.dot(dir) < 0) N.negate();
+      return { A: Object.assign({}, A, { N }), B: { p: c, N: dir, w: 0, off: A.off, virtual: true }, condyle: side };
+    }
+    if (pl.length < 2) return null;
+    pl.sort((a, b) => a.off - b.off);
+    return { A: pl[0], B: pl[pl.length - 1], condyle: null };
   }
 
   // ---------- anchor frame ----------
@@ -459,6 +477,7 @@
   $('lesCtl').innerHTML = lFields.map(([k, t, mn, mx, st]) => `<div class="ctl"><div class="ctl-row"><label for="l_${k}">${t}</label><output id="lo_${k}"></output></div><input type="range" id="l_${k}" min="${mn}" max="${mx}" step="${st}"></div>`).join('');
   function syncLesion() {
     lFields.forEach(([k, , , , , unit]) => { $('l_' + k).value = S.lesion[k]; $('lo_' + k).textContent = `${fmt(S.lesion[k])} ${unit}`; });
+    $('resType').value = S.lesion.condyle || ''; $('resTypeHint').hidden = !S.lesion.condyle;
     $('lesStatus').textContent = !S.anchor ? '' : S.lesion.ok ? `Sınır onaylandı${S.lesion.by ? ' · ' + S.lesion.by : ''}.` : 'Sınır cerrah onayı bekliyor (İnceleme ve onay adımında).';
   }
   lFields.forEach(([k]) => $('l_' + k).addEventListener('input', e => { S.lesion[k] = +e.target.value; unapprove(S.lesion); syncLesion(); updateLesionPart(); renderAppr(); render(); emit('parts'); emit('changed'); }));
@@ -480,7 +499,7 @@
     T.bone = performance.now() - t0; await sleep();
     const O = G.exterior(B, nx, ny, nz), D = G.edt(B, nx, ny, nz); T.edt = performance.now() - t0;
     await sleep();
-    const c = g.clear, w = g.wall, Gm = new Uint8Array(N);
+    const c = g.clear, w = g.wall, Gm = new Uint8Array(N), gap = splitGap(g, pls);
     let undercutCols = 0, contact = 0;
     const colTopBone = new Float32Array(nx * ny).fill(-Infinity);
     for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) if (B[i + nx * (j + ny * k)]) colTopBone[i + nx * j] = lo[2] + k * h;
@@ -494,6 +513,7 @@
       const inBridge = edge && d > c + w - 0.5 && d <= c + w + 2.5;
       if (!inShell && !inBridge) continue;
       const q = world(i, j, k);
+      if (gap && q.clone().sub(gap.A.p).dot(gap.A.N) > gap.A.w / 2 + g.flange && q.clone().sub(gap.B.p).dot(gap.B.N) < -gap.B.w / 2 - g.flange) continue;
       let cut = false;
       if (d <= c + w + 0.05) for (const pw of pls) if (Math.abs(q.clone().sub(pw.p).dot(pw.N)) <= pw.w / 2) { cut = true; break; }
       if (cut) continue;
@@ -527,6 +547,10 @@
       }
       screwInfo.push({ s, ok: true, inBone: Math.min(inBone, s.sc.len), crossesPlane, exitAt });
     }
+    if (gap) for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      const id = i + nx * (j + ny * k); if (!Gm[id]) continue;
+      const q = world(i, j, k); if (q.clone().sub(gap.A.p).dot(gap.A.N) > gap.A.w / 2 + g.flange && q.clone().sub(gap.B.p).dot(gap.B.N) < -gap.B.w / 2 - g.flange) Gm[id] = 0;
+    }
     T.screws = performance.now() - t0; await sleep();
     // drop specks left by slots and holes; count real pieces
     const cc = G.components(Gm, nx, ny, nz, 1), big = cc.comps.length ? cc.comps[0].size * 0.01 : 0;
@@ -538,6 +562,13 @@
     const seat = window.Seat && !ctx.fast ? Seat.analyze({ Gm, B, D, nx, ny, nz, h, lo, clear: c }) : null;
     return { mesh, result: { pieces: comps.length, contact: contact * h * h, undercut: undercutCols * h * h, volume: vol * h * h * h, screwInfo, pls, seat, ms: performance.now() - t0, T },
       grid: { Gm, B, nx, ny, nz, h, lo, P: P.clone(), u: u.clone(), v: v.clone(), n: n.clone() } };
+  }
+  // two separate guides: nothing between the outermost cuts except a capture flange beyond each slot
+  function splitGap(g, pls) {
+    if (!g.split || pls.length < 2) return null;
+    const pl = pls.slice().sort((a, b) => a.off - b.off), A = pl[0], B = pl[pl.length - 1], dir = B.p.clone().sub(A.p).normalize();
+    const NA = A.N.clone(), NB = B.N.clone(); if (NA.dot(dir) < 0) NA.negate(); if (NB.dot(dir) < 0) NB.negate();
+    return { A: { p: A.p, N: NA, w: A.w }, B: { p: B.p, N: NB, w: B.w } };
   }
   // every edit bumps ver; a built guide is shown only if it is at least as new as the one on screen
   const live = { ver: 0, shown: 0, running: false, dirty: false, planes: false, resAt: 0 };
@@ -640,7 +671,9 @@
   function renderChecks() {
     const R = S.result, out = [];
     if (!R) { $('checks').innerHTML = ''; return; }
-    if (R.pieces > 1) out.push(['crit', 'Kritik', `Guide ${R.pieces} parçaya bölünüyor; köprüyü genişletin ya da kesileri taşıyın.`, 'guide']);
+    const want = S.g.split && S.planes.length >= 2 ? 2 : 1;
+    if (R.pieces > want) out.push(['crit', 'Kritik', `Guide ${R.pieces} parçaya bölünüyor (beklenen ${want}); ${want === 1 ? 'köprüyü genişletin ya da kesileri taşıyın' : 'her guide\'ın kendi vidası ve yeterli boyu olmalı'}.`, 'guide']);
+    if (want === 2) { const g = splitGap(S.g, R.pls), cnt = [0, 0]; if (g) R.screwInfo.forEach(si => { if (si.ok) cnt[si.s.entry.clone().sub(g.A.p).dot(g.A.N) < 0 ? 0 : 1]++; }); if (g && (cnt[0] < 1 || cnt[1] < 1)) out.push(['crit', 'Kritik', `İki guide düzeninde her guide en az bir vidayla sabitlenmeli (şu an ${cnt[0]} + ${cnt[1]}).`, 'guide']); }
     const st = R.seat;
     if (st && st.ok) {
       if (!st.free) out.push(['crit', 'Kritik', `Guide hiçbir yönde takılamıyor; en iyi yönde bile ${fmt(st.best.block, 0)} mm² kemik guide'ın üstünde kalıyor. Sarma derinliğini azaltın ya da guide'ı taşıyın.`, 'guide']);
@@ -971,14 +1004,22 @@
   }
 
   // ---------- controls wiring ----------
-  const gFields = [['rot', 'Guide ekseni dönüşü', -90, 90, 1, '°'], ['L', 'Uzunluk', 16, 70, 1, 'mm'], ['W', 'Genişlik', 10, 40, 1, 'mm'], ['wrap', 'Sarma derinliği', 0, 20, 0.5, 'mm'], ['wall', 'Duvar kalınlığı', 1.5, 5, 0.1, 'mm'], ['clear', 'Kemik boşluğu', 0, 1, 0.05, 'mm'], ['bridge', 'Köprü genişliği', 2, 10, 0.5, 'mm']];
-  $('gCtl').innerHTML = gFields.map(([k, t, mn, mx, st]) => `<div class="ctl"><div class="ctl-row"><label for="g_${k}">${t}</label><output id="go_${k}"></output></div><input type="range" id="g_${k}" min="${mn}" max="${mx}" step="${st}"></div>`).join('');
+  const gFields = [['rot', 'Guide ekseni dönüşü', -90, 90, 1, '°'], ['L', 'Uzunluk', 16, 70, 1, 'mm'], ['W', 'Genişlik', 10, 40, 1, 'mm'], ['wrap', 'Sarma derinliği', 0, 20, 0.5, 'mm'], ['wall', 'Duvar kalınlığı', 1.5, 5, 0.1, 'mm'], ['clear', 'Kemik boşluğu', 0, 1, 0.05, 'mm'], ['bridge', 'Köprü genişliği', 2, 10, 0.5, 'mm'], ['flange', 'Yakalama kenarı (kesi ötesinde)', 2, 8, 0.5, 'mm']];
+  $('gCtl').innerHTML = gFields.map(([k, t, mn, mx, st]) => `<div class="ctl" id="gc_${k}"><div class="ctl-row"><label for="g_${k}">${t}</label><output id="go_${k}"></output></div><input type="range" id="g_${k}" min="${mn}" max="${mx}" step="${st}"></div>`).join('');
   function syncGuideInputs() {
     gFields.forEach(([k, , , , st, unit]) => { $('g_' + k).value = S.g[k]; $('go_' + k).textContent = `${fmt(S.g[k], st < 1 ? (st < 0.1 ? 2 : 1) : 0)} ${unit}`; });
-    $('g_side').value = String(S.g.side);
+    $('g_side').value = String(S.g.side); $('g_split').value = String(S.g.split ? 1 : 0);
+    $('gc_flange').hidden = !S.g.split; $('gc_bridge').hidden = !!S.g.split; $('g_side').closest('.ctl').hidden = !!S.g.split;
   }
   gFields.forEach(([k]) => $('g_' + k).addEventListener('input', e => { S.g[k] = +e.target.value; syncGuideInputs(); if (k === 'rot') { unapproveAll(); updateLesionPart(); } schedule(k === 'rot', true); }));
   $('g_side').addEventListener('change', e => { S.g.side = +e.target.value; schedule(false); });
+  $('g_split').addEventListener('change', e => { S.g.split = +e.target.value; syncGuideInputs(); unapproveAll(); schedule(false); });
+  $('resType').addEventListener('change', async e => {
+    const side = e.target.value || null;
+    if (side && window.Ref && !Ref.get()) await Ref.compute(false);
+    if (side && !(window.Ref && Ref.get() && Ref.get().cond[side])) { alertMsg('Kondil bulunamadı; Anatomi adımında kondili elle seçin.'); e.target.value = S.lesion.condyle || ''; return; }
+    S.lesion.condyle = side; unapprove(S.lesion); syncLesion(); schedule(true);
+  });
   syncGuideInputs();
 
   $('segMode').addEventListener('change', e => { const ai = e.target.value === 'ai'; $('aiBox').hidden = !ai; $('thrBox').hidden = ai; if (!ai && S.red) segment(false); });
@@ -1089,6 +1130,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
       crop: { nx, ny, nz, sp: vol.sp.slice(), origin: G.worldOf(vol, ...lo), axes: vol.axes.map(a => a.slice()) }, mask_b64: btoa(bin),
       frame: { p: arr(c.P), u: arr(c.u), v: arr(c.v), n: arr(c.n) }, g: clone(c.g), resolution: 0.2,
       planes: c.pls.map(pl => ({ p: arr(pl.p), N: arr(pl.N), w: pl.w })),
+      gap: (gp => gp && { A: { p: arr(gp.A.p), N: arr(gp.A.N), w: gp.A.w }, B: { p: arr(gp.B.p), N: arr(gp.B.N), w: gp.B.w }, flange: c.g.flange })(splitGap(c.g, c.pls)),
       screws: c.scs.filter(s => s.entry).map(s => ({ entry: arr(s.entry), dir: arr(s.dir), d: s.sc.d, D: s.sc.D, sleeveH: s.sc.sleeveH })),
     };
   }
@@ -1113,7 +1155,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     try {
       const r = await serverGuide(Object.assign({ vol: S.vol, red: S.red, F: S.maskF, thr: segThr(), g: S.g, P: S.anchor.p, pls: planesWorld(), scs: screwsWorld() }, frameAxes()), ac.signal);
       S.prod = Object.assign(r, { key: prodKey() });
-      $('prodMsg').textContent = `Üretim STL'i hazır: ${r.watertight ? 'su geçirmez' : 'SU GEÇİRMEZ DEĞİL'}, ${r.bodies} parça${r.bodies > 1 ? ' (BİRDEN FAZLA PARÇA, guide\'ı kontrol edin)' : ''}, ${fmt(r.volume / 1000, 2)} cm³, ${r.faces} üçgen. Pakete guide_uretim.stl olarak eklenir.`;
+      $('prodMsg').textContent = `Üretim STL'i hazır: ${r.watertight ? 'su geçirmez' : 'SU GEÇİRMEZ DEĞİL'}, ${r.bodies} parça${r.bodies > (S.g.split ? 2 : 1) ? ' (BEKLENENDEN FAZLA PARÇA, guide\'ı kontrol edin)' : ''}, ${fmt(r.volume / 1000, 2)} cm³, ${r.faces} üçgen. Pakete guide_uretim.stl olarak eklenir.`;
       if (S.fib && S.fib.guide && window.Fibula && !ac.signal.aborted) try { await Fibula.production(ac.signal); } catch (e) { $('prodMsg').textContent += ` Fibula guide'ı: ${e.message}`; }
     } catch (e) { S.prod = null; $('prodMsg').textContent = e.message; }
     busy(false);
@@ -1158,7 +1200,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
         renderComps();
       }
       S.anchor = plan.anchor ? { p: V(...plan.anchor.p), n: V(...plan.anchor.n), axis: V(...plan.anchor.axis) } : null;
-      Object.assign(S.g, plan.g || {}); S.lesion = Object.assign({ from: -6, to: 6, margin: 3, ok: false }, clone(plan.lesion || {}));
+      Object.assign(S.g, { split: 0, flange: 3 }, plan.g || {}); S.lesion = Object.assign({ from: -6, to: 6, margin: 3, ok: false }, clone(plan.lesion || {}));
       S.planes = clone(plan.planes || []); S.screws = clone(plan.screws || []);
       $('surgeon').value = plan.surgeon || '';
       if (S.sel && !(S.sel[0] === 'p' ? S.planes : S.screws)[+S.sel.slice(1)]) S.sel = null;
@@ -1186,7 +1228,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   }
   function serverUrl() { return ($('aiUrl').value || '').trim().replace(/\/+$/, ''); }
   function select(sel) { S.sel = sel; emit('select', sel); renderElements(); rebuildElementParts(S.result ? S.result.pls : [], S.result ? S.result.screwInfo : []); applyExplode(); render(); }
-  window.Studio = { pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr };
+  window.Studio = { resEnds, splitGap, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr };
   bus.addEventListener('planeDragged', () => { renderElements(); schedule(true, true); });
   emit('ready');
 
