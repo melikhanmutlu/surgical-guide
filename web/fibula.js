@@ -6,7 +6,7 @@
 window.Fibula = (function () {
   const St = window.Studio; if (!St) return null;
   const { S, V, G, fmt, bus } = St, $ = id => document.getElementById(id);
-  const MIN_LEN = 20, DEV_WARN = 3, ANGLE_WARN = 35, PROX_KEEP = 60, DISTAL_MIN = 60, THR = 250;
+  const MIN_LEN = 20, DEV_WARN = 3, ANGLE_WARN = 35, PROX_KEEP = 60, DISTAL_MIN = 60, THR = 250, DBL_GAP = 15;
   const GRAFT = [0xe2a33c, 0xc9822a], FGUIDE = St.COLORS.fguide, BONE = St.COLORS.bone;
   const r2d = THREE.MathUtils.radToDeg, deg = THREE.MathUtils.degToRad;
   St.renderer.localClippingEnabled = true;
@@ -20,7 +20,9 @@ window.Fibula = (function () {
   let pending = null;      // stored plan waiting for its DICOM series
   let view = 'm', last = null, grafts = null, guideTimer = null, guideKey = '', building = false;
   const msg = t => { $('fibMsg').textContent = t || ''; $('fibMsg').hidden = !t; };
-  const defaultPlan = () => ({ source: null, cand: null, n: 2, knots: [0.5], yaw: [0, 0, 0], pitch: [0, 0, 0], roll: [0, 0], kerf: 1.0, distal: 70, ok: false });
+  // vOff: graft shift towards the occlusal plane; dbl: double barrel (a second strut stacked dblH mm above);
+  // fg / fsc: fibula guide body and screw edits (null = automatic)
+  const defaultPlan = () => ({ source: null, cand: null, n: 2, knots: [0.5], yaw: [0, 0, 0], pitch: [0, 0, 0], roll: [0, 0], kerf: 1.0, distal: 70, vOff: 0, dbl: 0, dblH: null, fg: null, fsc: null, ok: false });
 
   // ---------- small linear algebra ----------
   function eig3(A) {          // Jacobi; returns [{val, vec:[3]}] sorted by value, descending
@@ -115,11 +117,13 @@ window.Fibula = (function () {
     const dir = B.p.clone().sub(A.p).normalize(), len = B.p.distanceTo(A.p);
     const NA = A.N.clone(), NB = B.N.clone(); if (NA.dot(dir) < 0) NA.negate(); if (NB.dot(dir) < 0) NB.negate();
     const bw = 1.5, nb = Math.ceil(len / bw) + 2, acc = Array.from({ length: nb }, () => [0, 0, 0, 0]), ea = [0, 0, 0, 0], eb = [0, 0, 0, 0];
+    // occlusal direction: patient superior (LPS +z) across the defect line; crest = highest resected bone per bin
+    const vup = V(0, 0, 1).sub(dir.clone().multiplyScalar(dir.z)).normalize(), crest = new Float64Array(nb).fill(-Infinity);
     for (let k = 0; k < r.nz; k++) for (let j = 0; j < r.ny; j++) for (let i = 0; i < r.nx; i++) {
       if (!S.resMask[i + r.nx * (j + r.ny * k)]) continue;
       const q = V(...G.worldOf(r, i, j, k)), t = q.clone().sub(A.p).dot(dir), b = Math.min(nb - 1, Math.max(0, Math.floor(t / bw)));
       const add = x => { x[0] += q.x; x[1] += q.y; x[2] += q.z; x[3]++; };
-      add(acc[b]);
+      add(acc[b]); const hq = q.dot(vup); if (hq > crest[b]) crest[b] = hq;
       if (q.clone().sub(A.p).dot(NA) < A.w / 2 + 3) add(ea);
       if (q.clone().sub(B.p).dot(NB) > -B.w / 2 - 3) add(eb);
     }
@@ -129,9 +133,15 @@ window.Fibula = (function () {
     PA.sub(NA.clone().multiplyScalar(PA.clone().sub(A.p).dot(NA))); PB.sub(NB.clone().multiplyScalar(PB.clone().sub(B.p).dot(NB)));
     let mid = acc.filter(x => x[3] > 4).map(cen).filter(q => q.clone().sub(PA).dot(NA) > 3 && q.clone().sub(PB).dot(NB) < -3);
     mid = mid.map((q, i) => (i > 0 && i < mid.length - 1 ? q.clone().add(mid[i - 1]).add(mid[i + 1]).multiplyScalar(1 / 3) : q));
+    // vertical position: the whole line moves along vup; its ends stay in their cut planes
+    const vo = (S.fib && S.fib.plan && S.fib.plan.vOff) || 0, inPlane = N => { const w = vup.clone().sub(N.clone().multiplyScalar(vup.dot(N))); return w.multiplyScalar(1 / Math.max(w.dot(vup), 0.3)); };
+    if (vo) { PA.addScaledVector(inPlane(NA), vo); PB.addScaledVector(inPlane(NB), vo); mid.forEach(q => q.addScaledVector(vup, vo)); }
     const pts = [PA, ...mid, PB], s = [0];
     for (let i = 1; i < pts.length; i++) s.push(s[i - 1] + pts[i].distanceTo(pts[i - 1]));
-    return { pts, s, L: s[s.length - 1], NA, NB, up: S.anchor.n.clone() };
+    for (let b = 1; b < nb; b++) if (crest[b] === -Infinity) crest[b] = crest[b - 1];
+    for (let b = nb - 2; b >= 0; b--) if (crest[b] === -Infinity) crest[b] = crest[b + 1];
+    const crestAt = q => crest[Math.min(nb - 1, Math.max(0, Math.floor(q.clone().sub(A.p).dot(dir) / bw)))];
+    return { pts, s, L: s[s.length - 1], NA, NB, up: S.anchor.n.clone(), vup, crestAt, inPlane, A, B };
   }
   function at(D, x) {
     const s = D.s; x = Math.min(Math.max(x, 0), D.L);
@@ -166,13 +176,41 @@ window.Fibula = (function () {
       const loc = v => V(v.dot(x), v.dot(b), v.dot(z)), n0 = loc(normals[i]), n1 = loc(normals[i + 1]);
       if (prevEnd) cursor += P0.kerf + 1 + FR * (tilt(prevEnd) + tilt(n0));
       const L = P[i + 1].distanceTo(P[i]);
-      segs.push({ i, L, s0: cursor, s1: cursor + L, x, b, z, n0, n1, P0: P[i], P1: P[i + 1],
+      segs.push({ i, L, s0: cursor, s1: cursor + L, x, b, z, n0, n1, P0: P[i], P1: P[i + 1], N0: normals[i], N1: normals[i + 1], barrel: 0,
         a0: r2d(Math.acos(Math.min(1, Math.abs(n0.x)))), a1: r2d(Math.acos(Math.min(1, Math.abs(n1.x)))) });
       cursor += L; prevEnd = n1;
     }
+    // double barrel: one straight strut dblH above the lower one, cut to the same mandible planes; a short piece
+    // (DBL_GAP) is taken out between the barrels on the fibula so the graft can fold on its periosteum
+    if (P0.dbl) {
+      const h = dblH(), U0 = P[0].clone().addScaledVector(D.inPlane(D.NA), h), U1 = P[n].clone().addScaledVector(D.inPlane(D.NB), h);
+      const x = U1.clone().sub(U0).normalize(), b = D.up.clone().sub(x.clone().multiplyScalar(D.up.dot(x))).normalize(), z = V().crossVectors(x, b);
+      const loc = v => V(v.dot(x), v.dot(b), v.dot(z)), n0 = loc(D.NA), n1 = loc(D.NB), L = U0.distanceTo(U1);
+      cursor += P0.kerf + 1 + FR * (tilt(prevEnd) + tilt(n0)) + DBL_GAP;
+      segs.push({ i: n, L, s0: cursor, s1: cursor + L, x, b, z, n0, n1, P0: U0, P1: U1, N0: D.NA, N1: D.NB, barrel: 1,
+        a0: r2d(Math.acos(Math.min(1, Math.abs(n0.x)))), a1: r2d(Math.acos(Math.min(1, Math.abs(n1.x)))) });
+      cursor += L;
+    }
+    // fibula -> mandible transform of each segment (the graft meshes and graftBone use it)
+    const [fa, fe2, fe3] = F.c.FA, FT = new THREE.Matrix4().makeBasis(fa, fe2, fe3).transpose(), FC = F.c.FC;
+    segs.forEach(g => {
+      const o = offAt((g.s0 + g.s1) / 2);
+      g.M = new THREE.Matrix4().makeTranslation(g.P0.x, g.P0.y, g.P0.z).multiply(new THREE.Matrix4().makeBasis(g.x, g.b, g.z))
+        .multiply(new THREE.Matrix4().makeTranslation(-g.s0, -o[0], -o[1])).multiply(FT).multiply(new THREE.Matrix4().makeTranslation(-FC.x, -FC.y, -FC.z));
+      g.Minv = g.M.clone().invert();
+      // graft top relative to the original alveolar crest at the segment middle (negative = below the crest)
+      const m = g.P0.clone().lerp(g.P1, 0.5); g.crest = m.dot(D.vup) + FR - D.crestAt(m);
+    });
     return { k, P, normals, segs, dev: deviation(D, k), proxLeft: F.c.smax - cursor, used: cursor - (F.c.smin + P0.distal), D };
   }
   const plan = () => S.fib.plan;
+  const dblH = () => plan().dblH || Math.round((2 * F.c.FR + 1) * 2) / 2;
+  // is world point q (mandible side) inside graft segment i?
+  function graftBone(i, q) {
+    const g = last && last.segs[i]; if (!g) return false;
+    if (q.clone().sub(g.P0).dot(g.N0) < 0 || q.clone().sub(g.P1).dot(g.N1) > 0) return false;
+    return fibBone(q.clone().applyMatrix4(g.Minv));
+  }
   // approval is tied to what the surgeon decided (fibula parameters + mandible cuts), not to derived numbers
   const r3 = x => Math.round(x * 1000) / 1000;
   const sig = () => { const { ok, by, at, sig: _s, ...p } = plan(); return JSON.stringify([p, S.planes.map(q => [q.off, q.yaw, q.pitch, q.w]), S.anchor ? [S.anchor.p, S.anchor.n].map(v => [v.x, v.y, v.z].map(r3)) : null,
@@ -198,13 +236,10 @@ window.Fibula = (function () {
     while (grafts.children.length) { const m = grafts.children.pop(); m.material.dispose(); }
     for (let i = leg.children.length - 1; i >= 0; i--) { const o = leg.children[i]; if (!o.userData.keep && !o.userData.guide) { leg.remove(o); o.material.dispose(); if (o.geometry !== F.c.geo) o.geometry.dispose(); } }
     if (!c) { St.render(); return; }
-    const [a, e2, e3] = F.c.FA, FT = new THREE.Matrix4().makeBasis(a, e2, e3).transpose(), FC = F.c.FC;
     c.segs.forEach((g, i) => {
       const o = offAt((g.s0 + g.s1) / 2);
-      const M = new THREE.Matrix4().makeTranslation(g.P0.x, g.P0.y, g.P0.z).multiply(new THREE.Matrix4().makeBasis(g.x, g.b, g.z))
-        .multiply(new THREE.Matrix4().makeTranslation(-g.s0, -o[0], -o[1])).multiply(FT).multiply(new THREE.Matrix4().makeTranslation(-FC.x, -FC.y, -FC.z));
-      const m = new THREE.Mesh(F.c.geo, mat(GRAFT[i % 2], { clippingPlanes: [keepAtLeast(c.normals[i], g.P0), keepAtMost(c.normals[i + 1], g.P1)] }));
-      m.matrixAutoUpdate = false; m.matrix.copy(M); m.matrixWorldNeedsUpdate = true; grafts.add(m);
+      const m = new THREE.Mesh(F.c.geo, mat(GRAFT[i % 2], { clippingPlanes: [keepAtLeast(g.N0, g.P0), keepAtMost(g.N1, g.P1)] }));
+      m.matrixAutoUpdate = false; m.matrix.copy(g.M); m.matrixWorldNeedsUpdate = true; m.userData.seg = i; grafts.add(m);
       // fibula side: the same segment in the leg, plus the cut discs
       const w0 = dirFib(g.n0), w1 = dirFib(g.n1), p0 = toFib(g.s0, o[0], o[1]), p1 = toFib(g.s1, o[0], o[1]);
       onLeg(new THREE.Mesh(F.c.geo, mat(GRAFT[i % 2], { clippingPlanes: [keepAtLeast(w0, p0), keepAtMost(w1, p1)] })));
@@ -242,7 +277,7 @@ window.Fibula = (function () {
     for (let t = 0; t < FR + 30; t += 0.2) { const q = top.clone().add(n.clone().multiplyScalar(-t)); if (fibBone(q)) { Pg = q; break; } }
     if (!Pg) return null;
     const v = V().crossVectors(n, u).normalize();
-    const g = { rot: 0, L: Math.round(sB - sA + 16), W: Math.round(2 * (FR + 2.8) + 2), wrap: Math.round(FR * 0.8 * 2) / 2, wall: 2.5, clear: 0.3, bridge: 4, side: 1 };
+    const g = guideBody(c);
     const pls = [];
     c.segs.forEach(sg => {
       const o = offAt((sg.s0 + sg.s1) / 2);
@@ -251,13 +286,30 @@ window.Fibula = (function () {
         pls.push({ p: toFib(s, o[0], o[1]).add(N.clone().multiplyScalar(out * kerf / 2)), N, w: kerf });
       });
     });
-    const scs = c.segs.map(sg => {
-      const s = (sg.s0 + sg.s1) / 2, o = offAt(s), sc = { d: 2.0, D: 5, sleeveH: 5, len: Math.round(2 * FR) }, dir = n.clone().negate();
-      const t0 = toFib(s, o[0], o[1]).add(n.clone().multiplyScalar(FR + 15)); let entry = null;
+    // screws: position along the segment and angle around the fibula axis are editable (fsc)
+    const scs = guideScrews(c).map(f => {
+      const sg = c.segs[f.seg], half = Math.max(0, sg.L / 2 - 3), s = (sg.s0 + sg.s1) / 2 + Math.max(-half, Math.min(half, f.off)), o = offAt(s);
+      const sc = { d: f.d, D: f.D, sleeveH: f.sleeveH, len: f.len }, out = n.clone().applyAxisAngle(u, deg(f.ang)), dir = out.clone().negate();
+      const t0 = toFib(s, o[0], o[1]).add(out.clone().multiplyScalar(FR + 15)); let entry = null;
       for (let t = 0; t < FR + 30; t += 0.2) { const q = t0.clone().add(dir.clone().multiplyScalar(t)); if (fibBone(q)) { entry = q; break; } }
       return { sc, dir, entry };
     });
     return { g, P: Pg, u: u.clone(), v, n, pls, scs, bone: fibBone };
+  }
+  // fibula guide body: automatic values unless the plan overrides them (fg); the material profile's fit and the
+  // periosteum allowance follow the mandible guide
+  function guideAuto(c) {
+    const FR = F.c.FR, sA = c.segs[0].s0, sB = c.segs[c.segs.length - 1].s1;
+    return { span: sB - sA, Lm: 8, W: Math.round(2 * (FR + 2.8) + 2), wrap: Math.round(FR * 0.8 * 2) / 2, wall: 2.5, clear: S.g.clear };
+  }
+  function guideBody(c) {
+    const a = guideAuto(c), e = Object.assign({}, a, plan().fg || {});
+    return { rot: 0, L: Math.round(a.span + 2 * e.Lm), W: e.W, wrap: e.wrap, wall: e.wall, clear: e.clear, bridge: 4, side: 1, peri: S.g.peri || 0, fit: S.g.fit || 0 };
+  }
+  const screwDefault = (seg) => ({ seg, off: 0, ang: 0, d: 2.0, D: 5, sleeveH: 5, len: Math.round(2 * F.c.FR) });
+  function guideScrews(c) {
+    const list = plan().fsc || c.segs.map((_, i) => screwDefault(i));
+    return list.map(f => Object.assign(screwDefault(0), f, { seg: Math.min(c.segs.length - 1, Math.max(0, f.seg | 0)) }));
   }
   function scheduleGuide() {
     clearTimeout(guideTimer);
@@ -274,9 +326,9 @@ window.Fibula = (function () {
       const out = await St.buildGuide(ctx);
       leg.children.filter(o => o.userData.guide).forEach(o => { leg.remove(o); St.mat && o.material.dispose(); o.geometry.dispose(); });
       out.mesh.material = mat(FGUIDE); out.mesh.userData.guide = true; onLeg(out.mesh);
-      S.fib.guide = { mesh: out.mesh, result: out.result, ctx, key }; guideKey = key;
+      S.fib.guide = { mesh: out.mesh, result: out.result, ctx, key, grid: out.grid }; guideKey = key;
     } finally { building = false; St.busy(false); }
-    renderStep(); St.updatePanels(); St.render();
+    renderStep(); St.updatePanels(); St.render(); St.emit('fibGuide');
   }
 
   // ---------- checks, UI ----------
@@ -314,6 +366,8 @@ window.Fibula = (function () {
     $('fibYawO').textContent = fmt(P0.yaw[jv] || 0, 0) + '°'; $('fibPitchO').textContent = fmt(P0.pitch[jv] || 0, 0) + '°';
     $('fibKerf').value = P0.kerf; $('fibKerfO').textContent = fmt(P0.kerf) + ' mm';
     $('fibDistal').value = P0.distal; $('fibDistalO').textContent = fmt(P0.distal, 0) + ' mm';
+    $('fibVOff').value = P0.vOff || 0; $('fibVOffO').textContent = fmt(P0.vOff || 0) + ' mm';
+    $('fibDbl').checked = !!P0.dbl; $('fibDblHBox').hidden = !P0.dbl; $('fibDblH').value = dblH(); $('fibDblHO').textContent = fmt(dblH()) + ' mm';
     P0.knots.forEach((_, i) => {
       const el = $('fk' + i);
       el.addEventListener('input', () => { const lo = (i ? P0.knots[i - 1] : 0) + 0.08, hi = (i < P0.knots.length - 1 ? P0.knots[i + 1] : 1) - 0.08; P0.knots[i] = Math.min(hi, Math.max(lo, +el.value)); edited(true); });
@@ -324,7 +378,7 @@ window.Fibula = (function () {
   function renderStep() {
     if (!active()) { $('tag6').hidden = true; return; }
     const c = last, R = S.fib.guide && S.fib.guide.result;
-    $('fibRows').innerHTML = c ? c.segs.map(g => `<tr><td>${g.i + 1}</td><td>${fmt(g.L)} mm</td><td>${fmt(g.s0 - F.c.smin, 0)} mm</td><td>${fmt(g.a0, 0)}° / ${fmt(g.a1, 0)}°</td></tr>`).join('') : '<tr><td colspan="4">Defekt yok</td></tr>';
+    $('fibRows').innerHTML = c ? c.segs.map(g => `<tr><td>${g.i + 1}${g.barrel ? ' (üst)' : ''}</td><td>${fmt(g.L)} mm</td><td>${fmt(g.s0 - F.c.smin, 0)} mm</td><td>${fmt(g.a0, 0)}° / ${fmt(g.a1, 0)}°</td><td>${fmt(g.crest)} mm</td></tr>`).join('') : '<tr><td colspan="5">Defekt yok</td></tr>';
     $('fibSum').innerHTML = c ? `<dt>Defekt boyu (hat boyunca)</dt><dd>${fmt(c.D.L)} mm</dd><dt>Greftlerin hattan sapması</dt><dd>${fmt(c.dev, 2)} mm</dd><dt>Kullanılan fibula</dt><dd>${fmt(c.used)} mm</dd><dt>Proksimalde kalan</dt><dd>${fmt(c.proxLeft, 0)} mm</dd><dt>Fibula guide'ı</dt><dd>${R ? `${fmt(S.fib.guide.ctx.g.L, 0)} mm, temas ${fmt(R.contact, 0)} mm²` : building ? 'üretiliyor' : '–'}</dd>` : '';
     const ck = checks(); $('fibChecks').innerHTML = (ck.length ? ck : [['ok', 'Uygun', 'Fibula kontrolleri geçti.']]).map(([k, t, m]) => `<li class="${k}"><b>${t}</b><span>${m}</span></li>`).join('');
     const crit = ck.some(x => x[0] === 'crit'), ok = approved();
@@ -421,7 +475,8 @@ window.Fibula = (function () {
   function summary() {
     const P0 = plan(), c = last;
     return { fibula_serisi: F.label, segment_sayisi: P0.n, testere_payi_mm: P0.kerf, distal_korunan_mm: P0.distal,
-      segmentler: c ? c.segs.map(g => ({ no: g.i + 1, boy_mm: +g.L.toFixed(1), distal_uctan_mm: +(g.s0 - F.c.smin).toFixed(1), kesi_acilari_deg: [+g.a0.toFixed(1), +g.a1.toFixed(1)], rotasyon_deg: P0.roll[g.i] })) : [],
+      segmentler: c ? c.segs.map(g => ({ no: g.i + 1, kat: g.barrel ? 'üst' : 'alt', boy_mm: +g.L.toFixed(1), distal_uctan_mm: +(g.s0 - F.c.smin).toFixed(1), kesi_acilari_deg: [+g.a0.toFixed(1), +g.a1.toFixed(1)], rotasyon_deg: P0.roll[g.i] || 0, kret_farki_mm: +g.crest.toFixed(1) })) : [],
+      dikey_kayma_mm: P0.vOff || 0, cift_namlu: P0.dbl ? { namlu_arasi_mm: dblH() } : null,
       sapma_mm: c ? +c.dev.toFixed(2) : null, proksimalde_kalan_mm: c ? +c.proxLeft.toFixed(0) : null, onay: approved() ? { cerrah: P0.by, zaman: P0.at } : null };
   }
   function reportHTML() {
@@ -449,7 +504,8 @@ window.Fibula = (function () {
     $(id).addEventListener('input', e => { const j = +$('fibJoint').value; plan()[key][j] = +e.target.value; $(id + 'O').textContent = fmt(+e.target.value, 0) + '°'; edited(true); });
     $(id).addEventListener('change', () => edited(false, true));
   });
-  [['fibKerf', 'kerf', v => fmt(v) + ' mm'], ['fibDistal', 'distal', v => fmt(v, 0) + ' mm']].forEach(([id, key, f]) => {
+  $('fibDbl').addEventListener('change', e => { if (!active()) return; plan().dbl = e.target.checked ? 1 : 0; edited(false, true); });
+  [['fibKerf', 'kerf', v => fmt(v) + ' mm'], ['fibDistal', 'distal', v => fmt(v, 0) + ' mm'], ['fibVOff', 'vOff', v => fmt(v) + ' mm'], ['fibDblH', 'dblH', v => fmt(v) + ' mm']].forEach(([id, key, f]) => {
     $(id).addEventListener('input', e => { plan()[key] = +e.target.value; $(id + 'O').textContent = f(+e.target.value); edited(true); });
     $(id).addEventListener('change', () => edited(false, true));
   });
@@ -465,5 +521,9 @@ window.Fibula = (function () {
   bus.addEventListener('parts', () => { if (active() && !S.restoring) update(); });
   bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring) && S.fib) unload(); });
 
-  return { summary: () => (active() ? summary() : null), view: () => view, active, approved, checks, apply, exportFiles, reportHTML, production, setView, state: () => ({ F, last, view }) };
+  // fibula guide edits from the guide panel: drop the cached key so the guide is rebuilt
+  function guideEdited() { guideKey = ''; scheduleGuide(); renderStep(); St.emit('changed'); }
+  const guideInfo = () => (active() && last ? { auto: guideAuto(last), body: guideBody(last), screws: guideScrews(last), segs: last.segs, FR: F.c.FR } : null);
+  return { summary: () => (active() ? summary() : null), view: () => view, active, approved, checks, apply, exportFiles, reportHTML, production, setView, state: () => ({ F, last, view }),
+    graftBone, fibBone: q => (F && F.c ? fibBone(q) : false), guideInfo, guideEdited, plan: () => (active() ? plan() : null), building: () => building };
 })();

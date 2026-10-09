@@ -31,11 +31,11 @@ window.Seat = (() => {
 
     // ----- 1) insertion directions -----
     const cell = 2 * h, tol = clear + h;
-    function blocked(d) {
+    function blocked(d, pts) {
       const [a, b] = basis(d), top = new Map();
       for (const p of gPts) { const key = Math.round(dot(p, a) / cell) * 100003 + Math.round(dot(p, b) / cell), t = dot(p, d); const m = top.get(key); if (m === undefined || t < m) top.set(key, t); }
       let n = 0;
-      for (const p of bPts) { const key = Math.round(dot(p, a) / cell) * 100003 + Math.round(dot(p, b) / cell), m = top.get(key); if (m !== undefined && dot(p, d) > m + tol) n++; }
+      for (const p of bPts) { const key = Math.round(dot(p, a) / cell) * 100003 + Math.round(dot(p, b) / cell), m = top.get(key); if (m !== undefined && dot(p, d) > m + tol) { n++; if (pts && pts.length < 4000) pts.push(p); } }
       return n * cell * cell;   // mm² of bone overhanging the guide along d
     }
     const dirs = [];
@@ -45,6 +45,8 @@ window.Seat = (() => {
       dirs.push({ tilt, az, d, block: blocked(d) });
     }
     const free = dirs.filter(x => x.block < 2), best = free.length ? free[0] : dirs.reduce((a, b) => (b.block < a.block ? b : a));
+    // bone that overhangs the guide along the best direction (local grid coordinates), for the 3D view
+    const blockPts = []; if (best.block > 0) blocked(best.d, blockPts);
 
     // ----- 2) stability against slides and rotations (before pins are placed) -----
     const c = contacts.reduce((s, q) => [s[0] + q.r[0], s[1] + q.r[1], s[2] + q.r[2]], [0, 0, 0]).map(x => x / contacts.length);
@@ -56,7 +58,7 @@ window.Seat = (() => {
       const ww = w.map(x => x * sg); rots.push({ axis: name, sign: sg, r: resisted(r => cross(ww, [r[0] - c[0], r[1] - c[1], r[2] - c[2]])) });
     }));
     const worstSlide = slides.reduce((a, b) => (b.r < a.r ? b : a)), worstRot = rots.reduce((a, b) => (b.r < a.r ? b : a));
-    return { ok: true, area, dirs, free: free.length, best, slides, rots, worstSlide, worstRot, ms: performance.now() - t0 };
+    return { ok: true, area, dirs, free: free.length, best, blockPts, slides, rots, worstSlide, worstRot, ms: performance.now() - t0 };
   }
   return { analyze };
 })();

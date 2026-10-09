@@ -136,7 +136,7 @@ button.primary { background: var(--accent); color: var(--accent-ink); border-col
 button.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
 button:disabled { opacity: .45; cursor: not-allowed; }
 select { width: 100%; padding: 0 6px; }
-input[type=url], input[type=text], input[type=number] { font: 13px var(--font-body); color: var(--fg); background: var(--panel); border: 1px solid var(--control); border-radius: var(--r); padding: 0 9px; height: 30px; width: 100%; box-sizing: border-box; }
+input[type=url], input[type=text], input[type=number], input[type=date] { font: 13px var(--font-body); color: var(--fg); background: var(--panel); border: 1px solid var(--control); border-radius: var(--r); padding: 0 9px; height: 30px; width: 100%; box-sizing: border-box; }
 input::placeholder { color: var(--faint); }
 input[type=checkbox] { accent-color: var(--accent); }
 .filebtn input { position: absolute; width: 1px; height: 1px; opacity: 0; }
@@ -311,6 +311,19 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
 /* scene list */
 .parts li { display: grid; grid-template-columns: 1fr 90px auto; }
 .parts input[type=range] { margin: 0; }
+/* two-stage approval blocks */
+.audit-b { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+.audit-b textarea { font: inherit; resize: vertical; border: 1px solid var(--line-strong); border-radius: 6px; padding: 5px 7px; background: var(--panel); color: var(--fg); }
+.aulog { list-style: none; padding: 0; margin: 4px 0 0; display: flex; flex-direction: column; gap: 6px; }
+.aulog li { font-size: 12.5px; border-left: 2px solid var(--line-strong); padding-left: 8px; }
+.aulog small { display: block; font: 11px var(--font-mono); color: var(--faint); }
+/* slice cell mode menu (standard, panoramic, perpendicular to cut) */
+.cellmode { position: absolute; top: 6px; right: 6px; z-index: 2; font: 11.5px var(--font-body); background: rgba(0, 0, 0, .55); color: #dfe6e3; border: 1px solid #3a424a; border-radius: 5px; padding: 2px 4px; height: auto; width: auto; }
+/* guide fit colour legend over the 3D view */
+.fitlegend { position: absolute; left: 14px; bottom: 64px; background: var(--glass); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: var(--shadow); width: 220px; z-index: 3; }
+.fitlegend b { display: block; font-weight: 600; margin-bottom: 5px; }
+.fitlegend i { display: block; height: 10px; border-radius: 3px; }
+.fitlegend span { display: flex; justify-content: space-between; color: var(--muted); margin-top: 3px; } .fitlegend em { font-style: normal; font-family: var(--font-mono); font-size: 11px; }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
@@ -378,6 +391,7 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
         <div class="body">
           <div class="ctl"><label for="caseName" class="lbl2">Vaka adı</label><input id="caseName" type="text" placeholder="Protokol no ya da kısa ad" autocomplete="off"></div>
           <p class="hint">Hasta adı ve kimlik bilgisi yazmayın. Kayıtta yalnız plan tutulur, görüntü tutulmaz.</p>
+          <div class="ctl"><label for="surgDate" class="lbl2">Planlanan ameliyat tarihi</label><input id="surgDate" type="date"></div>
           <details class="sub-d"><summary>Kayıtlı vakalar</summary>
             <div class="btns"><button id="caseNew"><svg class="i"><use href="#i-plus"/></svg>Yeni vaka</button><button id="caseRefresh">Listeyi yenile</button></div>
             <ul class="appr" id="caseList" aria-label="Kayıtlı vakalar"></ul>
@@ -390,6 +404,7 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
           </div>
           <p class="err" id="caseMsg" hidden></p>
           <dl class="kv" id="caseInfo"></dl>
+          <dl class="kv" id="dateInfo"></dl>
           <ul class="checks" id="qc" aria-label="Görüntü kalite kontrolü"></ul>
           <h3 class="sub">Fibula (bacak) BT'si</h3>
           <div class="btns">
@@ -456,9 +471,16 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
             </div>
             <div class="ctl"><div class="ctl-row"><label for="fibKerf">Testere payı</label><output id="fibKerfO"></output></div><input type="range" id="fibKerf" min="0.5" max="2" step="0.1"></div>
             <div class="ctl"><div class="ctl-row"><label for="fibDistal">Distal korunan fibula</label><output id="fibDistalO"></output></div><input type="range" id="fibDistal" min="40" max="140" step="1"></div>
-            <div class="tbl"><table><thead><tr><th>Segment</th><th>Boy</th><th>Distalden</th><th>Uç açıları</th></tr></thead><tbody id="fibRows"></tbody></table></div>
+            <div class="ctl"><div class="ctl-row"><label for="fibVOff">Greft dikey konumu</label><output id="fibVOffO"></output></div><input type="range" id="fibVOff" min="-12" max="12" step="0.5"></div>
+            <label class="chk"><input type="checkbox" id="fibDbl"> Çift namlu (iki kat fibula)</label>
+            <div class="ctl" id="fibDblHBox" hidden><div class="ctl-row"><label for="fibDblH">Namlular arası mesafe</label><output id="fibDblHO"></output></div><input type="range" id="fibDblH" min="8" max="30" step="0.5"></div>
+            <p class="hint">Dikey konum greftleri yukarı (oklüzal düzleme) ya da aşağı (alt kenara) kaydırır. Kret sütunu greft üst yüzeyinin rezeke kemiğin alveol kretine göre yüksekliğidir; eksi değer kretin altıdır.</p>
+            <div class="tbl"><table><thead><tr><th>Segment</th><th>Boy</th><th>Distalden</th><th>Uç açıları</th><th>Kret</th></tr></thead><tbody id="fibRows"></tbody></table></div>
             <dl class="kv" id="fibSum"></dl>
             <ul class="checks" id="fibChecks"></ul>
+            <div id="osteoBox" class="col"></div>
+            <div id="fgBox" class="col"></div>
+            <div id="implBox" class="col"></div>
             <div id="vesBox" class="col"></div>
             <div class="btns"><button id="fibView"><svg class="i"><use href="#i-eye"/></svg>Fibulayı göster</button><button id="fibApprove" hidden>Fibula planını onayla</button></div>
             <p class="hint" id="fibStatus"></p>
@@ -471,10 +493,12 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
       <details class="step" id="st5" name="flow">
         <summary><span class="n">5</span>Guide'lar<span class="tag" id="tag5g"></span><svg class="chev"><use href="#i-chev"/></svg></summary>
         <div class="body">
+          <div id="mfgBox" class="col"></div>
           <div id="guideList" class="col"></div>
           <div class="ctl"><label for="g_split" class="lbl2">Guide düzeni</label><select id="g_split"><option value="0">Tek guide, köprülü</option><option value="1">İki guide</option></select></div>
           <div id="gCtl" class="col"></div>
           <div class="ctl"><label for="g_side" class="lbl2">Köprü kenarı</label><select id="g_side"><option value="1">Bir kenar (+)</option><option value="-1">Diğer kenar (−)</option></select></div>
+          <div id="fitBox" class="col"></div>
           <div id="plateBox" class="col"></div>
           <div class="stepwarn" data-for="guide"></div>
           <div class="nav"><button class="primary next" data-next="st6">Vidalar<svg class="i"><use href="#i-next"/></svg></button></div>
@@ -499,6 +523,7 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
           <p class="hint">Bir satıra tıklayınca ilgili öğe açılır ve 3B görünümde gösterilir.</p>
           <ul class="review" id="appr"></ul>
           <p class="hint" id="apprMsg"></p>
+          <div id="auditBox" class="col"></div>
           <div class="nav"><button class="primary next" data-next="st8">Teslim<svg class="i"><use href="#i-next"/></svg></button></div>
         </div>
       </details>
@@ -510,9 +535,11 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
             <li><div><b>Üretim STL'i</b><p class="hint" id="prodMsg">Su geçirmez üretim STL'i hastane sunucusunda Manifold ile üretilir.</p></div><button id="expSrv" title="Hastane sunucusunda yüzey tabanlı (Manifold) boolean ile su geçirmez STL"><svg class="i"><use href="#i-server"/></svg>Üret</button></li>
             <li><div><b>Üretim paketi</b><p class="hint">STL'ler, plan ve rapor tek .zip dosyasında.</p></div><button class="primary" id="expZip"><svg class="i"><use href="#i-download"/></svg>İndir</button></li>
             <li><div><b>Tek tek STL</b><p class="hint" id="oneMsg">Kemik modelleri her zaman indirilebilir; guide plan onaylanınca.</p></div><span class="btns" id="oneStl"><button data-one="full" title="Rezeksiyon öncesi, kesilmemiş kemik">Tam kemik</button><button data-one="bone" title="Rezeksiyondan sonra kalan kemik">Kalan kemik</button><button data-one="res" title="Rezeke edilecek parça">Rezeke parça</button><button data-one="guide" title="Üretim STL'i alındıysa o, yoksa önizleme">Guide</button></span></li>
+            <li><div><b>Ek dosyalar</b><p class="hint" title="3MF: guide'lar ve modeller. DICOM SEG: kalan kemik ve rezeke parça, kaynak BT ile aynı koordinatta (yalnız DICOM vaka). Navigasyon: nokta, düzlem, vida ve implant eksenleri (LPS mm).">3MF, DICOM SEG ve navigasyon. Pakette de vardır.</p><p class="hint" id="xMsg"></p></div><span class="btns"><button id="x3mf"><svg class="i"><use href="#i-download"/></svg>3MF</button><button id="xSeg">DICOM SEG</button><button id="xNav">Navigasyon</button></span></li>
             <li><div><b>Cerrahi rapor</b><p class="hint">Görüntüler, kesim tablosu, montaj sırası ve imza alanı.</p></div><span class="btns"><button id="expPdf"><svg class="i"><use href="#i-download"/></svg>PDF</button><button id="expRep">HTML</button></span></li>
           </ol>
           <p class="hint" id="expMsg"></p>
+          <div id="postBox" class="postbox"></div>
         </div>
       </details>
       <div class="body foot"><p class="note">Araştırma prototipi, klinik kullanım için değildir. Guide tarayıcıda 0,4 mm çözünürlükte üretilir.</p></div>
@@ -601,7 +628,7 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
       <tr><td><kbd>1</kbd>–<kbd>5</kbd></td><td>Hazır görünüm: ön, sağ, sol, üst, alt</td></tr>
       <tr><td><kbd>?</kbd></td><td>Bu pencere</td></tr>
     </table>
-    <p class="hint">Kesitlerde: tekerlek kesit değiştirir, Ctrl+tekerlek yakınlaştırır, sağ tuşla kaydırılır, kesi çizgisi sürüklenir, çift tıklama görünümü büyütür.</p>
+    <p class="hint">Kesitlerde: tekerlek kesit değiştirir, Ctrl+tekerlek yakınlaştırır, sağ tuşla kaydırılır, Shift+sürükleme pencere ve seviyeyi değiştirir, kesi çizgisi sürüklenir, çift tıklama görünümü büyütür. Sağ üstteki menüden kesit panoramik ya da seçili kesiye dik görünüme çevrilir.</p>
   </form>
 </dialog>
 
@@ -620,3 +647,13 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
 <script src="ref.js"></script>
 <script src="plate.js"></script>
 <script src="ves.js"></script>
+<script src="fguide.js"></script>
+<script src="osteo.js"></script>
+<script src="implant.js"></script>
+<script src="mfg.js"></script>
+<script src="fit.js"></script>
+<script src="audit.js"></script>
+<script src="dates.js"></script>
+<script src="export.js"></script>
+<script src="reformat.js"></script>
+<script src="postop.js"></script>

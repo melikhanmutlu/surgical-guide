@@ -99,7 +99,7 @@
   const NAMES = {
     p: { off: 'konum', yaw: 'yatay açı', pitch: 'dikey açı', w: 'yuva genişliği' },
     s: { u: 'konum', v: 'yanal konum', tiltU: 'eğim', tiltV: 'yanal eğim', d: 'matkap çapı', D: 'kovan çapı', sleeveH: 'kovan yüksekliği', len: 'vida boyu' },
-    g: { rot: 'guide dönüşü', L: 'guide uzunluğu', W: 'guide genişliği', wrap: 'sarma derinliği', wall: 'duvar kalınlığı', clear: 'oturma aralığı', bridge: 'köprü genişliği', side: 'köprü tarafı', split: 'guide düzeni', flange: 'yakalama kenarı' },
+    g: { rot: 'guide dönüşü', L: 'guide uzunluğu', W: 'guide genişliği', wrap: 'sarma derinliği', wall: 'duvar kalınlığı', clear: 'oturma aralığı', bridge: 'köprü genişliği', side: 'köprü tarafı', split: 'guide düzeni', flange: 'yakalama kenarı', peri: 'periost payı', fit: 'kovan geçme payı' },
     l: { from: 'lezyon başlangıcı', to: 'lezyon bitişi', margin: 'güvenlik payı', condyle: 'kondil dahil rezeksiyon' },
   };
   const num = (x, k) => x == null ? 'yok' : typeof x === 'string' ? ({ R: 'sağ', L: 'sol' }[x] || x) : St.fmt(x, Number.isInteger(x) && !/off|from|to|u$|v$/.test(k) ? 0 : 1);
