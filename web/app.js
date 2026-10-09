@@ -89,7 +89,7 @@
   const S = {
     vol: null, red: null, labels: null, comps: [], selected: new Set(), mask: null,
     anchor: null,             // {p:Vector3, n:Vector3, axis:Vector3}
-    g: { rot: 0, L: 36, W: 22, wrap: 6, wall: 2.5, clear: 0.3, bridge: 4, side: 1, split: 0, flange: 3 },
+    g: { rot: 0, L: 36, W: 22, wrap: 6, wall: 2.5, clear: 0.3, bridge: 4, side: 1, split: 0, flange: 3, peri: 0, fit: 0 },
     planes: [], screws: [], sel: null, explode: 0, mode: 'orbit', result: null,
     lesion: { from: -6, to: 6, margin: 3, ok: false }, compNames: null, segMethod: 'Eşik', crit: 0, qc: [],
   };
@@ -142,7 +142,7 @@
         if ((ds.intString('x00280008') || 1) > 1) { multi++; skipped++; continue; }
         const ipp = (ds.string('x00200032') || '').split('\\').map(Number), iop = (ds.string('x00200037') || '').split('\\').map(Number);
         if (ipp.length !== 3 || iop.length !== 6) { skipped++; continue; }
-        slices.push({ ds, ipp, iop, series: ds.string('x0020000e') || '' });
+        slices.push({ ds, ipp, iop, series: ds.string('x0020000e') || '', sop: dstr(ds, 'x00080018') });
       } catch (e) { skipped++; }
       if (slices.length % 40 === 0) await sleep();
     }
@@ -159,7 +159,10 @@
     const meta = { dzList, modality: (ds0.string('x00080060') || '').trim(), series: Object.keys(bySeries).length,
       thickness: parseFloat(ds0.string('x00180050')) || null, kernel: (ds0.string('x00181210') || '').trim(),
       tilt: ser.length > 1 ? THREE.MathUtils.radToDeg(span.angleTo(nrm)) : 0, bits: ds0.uint16('x00280101') || 16,
-      ts: (ds0.string('x00020010') || '1.2.840.10008.1.2.1').replace(/\0/g, '').trim() };
+      ts: (ds0.string('x00020010') || '1.2.840.10008.1.2.1').replace(/\0/g, '').trim(),
+      // dates for the CT age check; UIDs so a DICOM SEG can reference this series (no patient name or ID is kept)
+      studyDate: dstr(ds0, 'x00080020'), seriesDate: dstr(ds0, 'x00080021'), acqDate: dstr(ds0, 'x00080022'),
+      uids: { study: dstr(ds0, 'x0020000d'), series: dstr(ds0, 'x0020000e'), frame: dstr(ds0, 'x00200052'), sopClass: dstr(ds0, 'x00080016'), sops: ser.map(s => s.sop) } };
     const fp = await sha256(`${ser[0].series}|${cols}x${rows}x${ser.length}`);
     const source = { type: 'dicom', name: (ds0.string('x0008103e') || 'DICOM').trim(), fp, slices: ser.length };
     const hu = new Int16Array(rows * cols * ser.length), ts0 = (ds0.string('x00020010') || '1.2.840.10008.1.2.1').replace(/\0/g, '').trim();
@@ -182,6 +185,7 @@
     return { source, vol: { hu, nx: cols, ny: rows, nz: ser.length, sp: [ps[1], ps[0], dz], origin: ser[0].ipp,
       axes: [[r.x, r.y, r.z], [c.x, c.y, c.z], [nrm.x, nrm.y, nrm.z]], meta }, label: `${files[0].webkitRelativePath ? files[0].webkitRelativePath.split('/')[0] : 'DICOM'} · ${ser.length} kesit${skipped ? `, ${skipped} dosya atlandı` : ''}` };
   }
+  const dstr = (ds, tag) => (ds.string(tag) || '').replace(/\0/g, '').trim();
   async function sha256(t) {
     try { const h = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t)); return [...new Uint8Array(h)].slice(0, 12).map(b => b.toString(16).padStart(2, '0')).join(''); }
     catch (e) { let h = 2166136261; for (const ch of t) h = Math.imul(h ^ ch.charCodeAt(0), 16777619); return 'f' + (h >>> 0).toString(16); }
@@ -499,7 +503,8 @@
     T.bone = performance.now() - t0; await sleep();
     const O = G.exterior(B, nx, ny, nz), D = G.edt(B, nx, ny, nz); T.edt = performance.now() - t0;
     await sleep();
-    const c = g.clear, w = g.wall, Gm = new Uint8Array(N), gap = splitGap(g, pls);
+    // periosteum allowance (soft tissue left on the bone) adds to the clearance
+    const c = g.clear + (g.peri || 0), w = g.wall, Gm = new Uint8Array(N), gap = splitGap(g, pls);
     let undercutCols = 0, contact = 0;
     const colTopBone = new Float32Array(nx * ny).fill(-Infinity);
     for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) if (B[i + nx * (j + ny * k)]) colTopBone[i + nx * j] = lo[2] + k * h;
@@ -525,7 +530,8 @@
     const screwInfo = [];
     for (const s of scs) {
       if (!s.entry) { screwInfo.push({ s, ok: false }); continue; }
-      const out = s.dir.clone().negate(), R = s.sc.D / 2, r = s.sc.d / 2, top = c + w + s.sc.sleeveH;
+      // the hole is the drill plus the material profile's sleeve fit
+      const out = s.dir.clone().negate(), R = s.sc.D / 2, r = (s.sc.d + (g.fit || 0)) / 2, top = c + w + s.sc.sleeveH;
       const e0 = s.entry.clone().sub(P), el = [e0.dot(u), e0.dot(v), e0.dot(n)], ol = [out.dot(u), out.dot(v), out.dot(n)];
       // only the grid cells within R of the drill axis (the hole runs through the whole grid)
       const rng = [0, 1, 2].map(a => { const p1 = el[a] - ol[a] * 400, p2 = el[a] + ol[a] * 400; return [Math.max(0, Math.floor((Math.min(p1, p2) - R - lo[a]) / h) - 1), Math.min([nx, ny, nz][a] - 1, Math.ceil((Math.max(p1, p2) + R - lo[a]) / h) + 1)]; });
@@ -720,6 +726,7 @@
     S.planes.forEach((o, i) => { if (!o.ok) p.push(`Kesi ${i + 1}`); });
     S.screws.forEach((o, i) => { if (!o.ok) p.push(`Vida ${i + 1}`); });
     if (window.Fibula && Fibula.active() && !Fibula.approved()) p.push('Fibula planı');
+    (window.PendingHooks || []).forEach(f => { try { f().forEach(x => p.push(x)); } catch (e) { /* optional gate */ } });
     return p;
   }
   const initials = n => (n || '').split(/\s+/).filter(w => w && !/^(dr|prof|doç|doc|op|uzm)\.?$/i.test(w)).map(w => w[0].toLocaleUpperCase('tr-TR')).slice(0, 2).join('') || '?';
@@ -1004,7 +1011,7 @@
   }
 
   // ---------- controls wiring ----------
-  const gFields = [['rot', 'Guide ekseni dönüşü', -90, 90, 1, '°'], ['L', 'Uzunluk', 16, 70, 1, 'mm'], ['W', 'Genişlik', 10, 40, 1, 'mm'], ['wrap', 'Sarma derinliği', 0, 20, 0.5, 'mm'], ['wall', 'Duvar kalınlığı', 1.5, 5, 0.1, 'mm'], ['clear', 'Kemik boşluğu', 0, 1, 0.05, 'mm'], ['bridge', 'Köprü genişliği', 2, 10, 0.5, 'mm'], ['flange', 'Yakalama kenarı (kesi ötesinde)', 2, 8, 0.5, 'mm']];
+  const gFields = [['rot', 'Guide ekseni dönüşü', -90, 90, 1, '°'], ['L', 'Uzunluk', 16, 70, 1, 'mm'], ['W', 'Genişlik', 10, 40, 1, 'mm'], ['wrap', 'Sarma derinliği', 0, 20, 0.5, 'mm'], ['wall', 'Duvar kalınlığı', 1.5, 5, 0.1, 'mm'], ['clear', 'Kemik boşluğu', 0, 1, 0.05, 'mm'], ['bridge', 'Köprü genişliği', 2, 10, 0.5, 'mm'], ['flange', 'Yakalama kenarı (kesi ötesinde)', 2, 8, 0.5, 'mm'], ['peri', 'Periost payı (boşluğa eklenir)', 0, 1, 0.05, 'mm']];
   $('gCtl').innerHTML = gFields.map(([k, t, mn, mx, st]) => `<div class="ctl" id="gc_${k}"><div class="ctl-row"><label for="g_${k}">${t}</label><output id="go_${k}"></output></div><input type="range" id="g_${k}" min="${mn}" max="${mx}" step="${st}"></div>`).join('');
   function syncGuideInputs() {
     gFields.forEach(([k, , , , st, unit]) => { $('g_' + k).value = S.g[k]; $('go_' + k).textContent = `${fmt(S.g[k], st < 1 ? (st < 0.1 ? 2 : 1) : 0)} ${unit}`; });
@@ -1128,10 +1135,10 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     let bin = ''; for (let i = 0; i < mask.length; i += 0x8000) bin += String.fromCharCode.apply(null, mask.subarray(i, i + 0x8000));
     return {
       crop: { nx, ny, nz, sp: vol.sp.slice(), origin: G.worldOf(vol, ...lo), axes: vol.axes.map(a => a.slice()) }, mask_b64: btoa(bin),
-      frame: { p: arr(c.P), u: arr(c.u), v: arr(c.v), n: arr(c.n) }, g: clone(c.g), resolution: 0.2,
+      frame: { p: arr(c.P), u: arr(c.u), v: arr(c.v), n: arr(c.n) }, g: Object.assign(clone(c.g), { clear: c.g.clear + (c.g.peri || 0) }), resolution: 0.2,
       planes: c.pls.map(pl => ({ p: arr(pl.p), N: arr(pl.N), w: pl.w })),
       gap: (gp => gp && { A: { p: arr(gp.A.p), N: arr(gp.A.N), w: gp.A.w }, B: { p: arr(gp.B.p), N: arr(gp.B.N), w: gp.B.w }, flange: c.g.flange })(splitGap(c.g, c.pls)),
-      screws: c.scs.filter(s => s.entry).map(s => ({ entry: arr(s.entry), dir: arr(s.dir), d: s.sc.d, D: s.sc.D, sleeveH: s.sc.sleeveH })),
+      screws: c.scs.filter(s => s.entry).map(s => ({ entry: arr(s.entry), dir: arr(s.dir), d: s.sc.d + (c.g.fit || 0), D: s.sc.D, sleeveH: s.sc.sleeveH })),
     };
   }
   async function serverGuide(c, outer) {
@@ -1201,7 +1208,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
         renderComps();
       }
       S.anchor = plan.anchor ? { p: V(...plan.anchor.p), n: V(...plan.anchor.n), axis: V(...plan.anchor.axis) } : null;
-      Object.assign(S.g, { split: 0, flange: 3 }, plan.g || {}); S.lesion = Object.assign({ from: -6, to: 6, margin: 3, ok: false }, clone(plan.lesion || {}));
+      Object.assign(S.g, { split: 0, flange: 3, peri: 0, fit: 0 }, plan.g || {}); S.lesion = Object.assign({ from: -6, to: 6, margin: 3, ok: false }, clone(plan.lesion || {}));
       S.planes = clone(plan.planes || []); S.screws = clone(plan.screws || []);
       $('surgeon').value = plan.surgeon || '';
       if (S.sel && !(S.sel[0] === 'p' ? S.planes : S.screws)[+S.sel.slice(1)]) S.sel = null;
@@ -1229,7 +1236,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   }
   function serverUrl() { return ($('aiUrl').value || '').trim().replace(/\/+$/, ''); }
   function select(sel) { S.sel = sel; emit('select', sel); renderElements(); rebuildElementParts(S.result ? S.result.pls : [], S.result ? S.result.screwInfo : []); applyExplode(); render(); }
-  window.Studio = { renderParts, resEnds, splitGap, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr };
+  window.Studio = { renderParts, resEnds, splitGap, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr };
   bus.addEventListener('planeDragged', () => { renderElements(); schedule(true, true); });
   emit('ready');
 
