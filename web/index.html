@@ -264,6 +264,14 @@ button.link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2p
 #measLabels .mk { pointer-events: none; }
 #toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 60; max-width: min(560px, calc(100vw - 32px)); padding: 10px 14px; border-radius: 10px; background: var(--panel); color: var(--crit); border: 1px solid var(--crit); box-shadow: var(--shadow); font: 500 13px var(--font-body); cursor: pointer; }
 #toast[hidden] { display: none; }
+#serDlg { border: 1px solid var(--line-strong); border-radius: 12px; background: var(--panel); color: var(--fg); box-shadow: var(--shadow); padding: 18px; width: min(520px, calc(100vw - 32px)); }
+#serDlg::backdrop { background: rgba(0, 0, 0, .35); }
+#serDlg h2 { font: 600 16px var(--font-body); margin: 0 0 6px; }
+.serlist { display: grid; gap: 6px; margin: 12px 0; max-height: 50vh; overflow: auto; }
+.seropt { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r); cursor: pointer; }
+.seropt:has(input:checked) { border-color: var(--accent); background: var(--hover); }
+.seropt span { display: grid; gap: 2px; } .seropt small { color: var(--muted); font: 12px var(--font-mono); } .seropt em { color: var(--warn); font-style: normal; font-size: 12px; }
+#serDlg .btns { justify-content: flex-end; }
 /* scene overlays share the 3D cell: in 2×2 the bar sits in the 3D quarter, the badge stays left of the cube, narrow stages get a compact bar */
 .views[data-mode="quad"][data-max=""] ~ .hud { right: 50%; bottom: calc(50% + 14px); max-width: calc(50% - 28px); }
 #modeBadge { max-width: calc(100% - 150px); }
@@ -330,6 +338,7 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
 <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/TransformControls.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/dicom-parser@1.8.21/dist/dicomParser.min.js"></script>
 <script src="codecs.js"></script>
+<script src="unzip.js"></script>
 
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <symbol id="i-left" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M6 2.5v11"/></symbol>
@@ -412,7 +421,7 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
             <button id="fibSample"><svg class="i"><use href="#i-flask"/></svg>Örnek</button>
           </div>
           <p class="hint" id="fibMsg" hidden></p>
-          <p class="hint">Dosyalar tarayıcıdan çıkmaz; mandibula serisini modele sürükleyip bırakabilirsiniz. Sıkıştırılmamış, RLE, JPEG, JPEG-LS ve JPEG 2000 BT okunur. <button class="link" id="sampleL">Bacak örneğini mandibula yerine aç</button></p>
+          <p class="hint">Dosyalar tarayıcıdan çıkmaz; mandibula serisini modele sürükleyip bırakabilirsiniz. Klasör, dosyalar ya da .zip seçebilirsiniz. Sıkıştırılmamış, RLE, JPEG, JPEG-LS ve JPEG 2000 BT okunur. <button class="link" id="sampleL">Bacak örneğini mandibula yerine aç</button></p>
           <div class="stepwarn" data-for="data"></div>
           <div class="nav"><button class="primary next" data-next="st2">Anatomi<svg class="i"><use href="#i-next"/></svg></button></div>
         </div>

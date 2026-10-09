@@ -129,6 +129,15 @@
   // DICOM files -> { vol, label, source } or { error }
   async function readDicom(files) {
     if (!window.dicomParser) return { error: 'DICOM okuyucu yüklenemedi.' };
+    const zipName = files.length === 1 && /\.zip$/i.test(files[0].name) ? files[0].name.replace(/\.zip$/i, '') : null;
+    if (window.Unzip) {
+      try {
+        busy(true, 'Zip açılıyor…'); await sleep();
+        const x = await Unzip.expand(files, async (i, n, name) => { busy(true, `${name}: ${i}/${n} dosya açıldı…`); await sleep(); });
+        files = x.files;
+      } catch (e) { return { error: 'Zip açılamadı: ' + e.message }; }
+    }
+    if (!files.length) return { error: 'Dosya bulunamadı.' };
     busy(true, `${files.length} dosya okunuyor…`);
     const slices = [], unsup = {}; let skipped = 0, multi = 0;
     for (const f of files) {
@@ -142,13 +151,23 @@
         if ((ds.intString('x00280008') || 1) > 1) { multi++; skipped++; continue; }
         const ipp = (ds.string('x00200032') || '').split('\\').map(Number), iop = (ds.string('x00200037') || '').split('\\').map(Number);
         if (ipp.length !== 3 || iop.length !== 6) { skipped++; continue; }
-        slices.push({ ds, ipp, iop, series: ds.string('x0020000e') || '', sop: dstr(ds, 'x00080018') });
+        slices.push({ ds, ipp, iop, series: ds.string('x0020000e') || '', sop: dstr(ds, 'x00080018'), path: f.relPath || f.webkitRelativePath || f.name });
       } catch (e) { skipped++; }
       if (slices.length % 40 === 0) await sleep();
     }
     if (!slices.length) { const u = Object.keys(unsup); return { error: u.length ? `Bu aktarım sözdizimi desteklenmiyor: ${u.map(t => window.DicomCodecs ? DicomCodecs.name(t) : t).join(', ')}.` : multi ? 'Çok çerçeveli (enhanced) DICOM henüz desteklenmiyor; seriyi tek kesitli dosyalar olarak dışa aktarın.' : 'Görüntü içeren DICOM bulunamadı.' }; }
     const bySeries = {}; slices.forEach(s => (bySeries[s.series] = bySeries[s.series] || []).push(s));
-    const ser = Object.values(bySeries).sort((a, b) => b.length - a.length)[0];
+    const groups = Object.values(bySeries).sort((a, b) => b.length - a.length);
+    let ser = groups[0];
+    if (groups.length > 1) {
+      // a plan waiting for its series picks it by fingerprint; otherwise the user chooses
+      const want = S.pendingPlan && S.pendingPlan.source && S.pendingPlan.source.fp;
+      let hit = null;
+      if (want) for (const g of groups) { const d = g[0].ds; if (await sha256(`${g[0].series}|${d.uint16('x00280011')}x${d.uint16('x00280010')}x${g.length}`) === want) { hit = g; break; } }
+      ser = hit || await pickSeries(groups);
+      if (!ser) return { error: 'Seri seçilmedi.' };
+      busy(true, `${ser.length} kesit hazırlanıyor…`); await sleep();
+    }
     const r = V(...ser[0].iop.slice(0, 3)), c = V(...ser[0].iop.slice(3)), nrm = V().crossVectors(r, c);
     ser.sort((a, b) => V(...a.ipp).dot(nrm) - V(...b.ipp).dot(nrm));
     const ds0 = ser[0].ds, rows = ds0.uint16('x00280010'), cols = ds0.uint16('x00280011');
@@ -156,7 +175,7 @@
     const dz = ser.length > 1 ? Math.abs(V(...ser[1].ipp).dot(nrm) - V(...ser[0].ipp).dot(nrm)) : (parseFloat(ds0.string('x00180050')) || 1);
     const pos = ser.map(s => V(...s.ipp).dot(nrm)), dzList = pos.slice(1).map((p, i) => p - pos[i]);
     const span = V(...ser.at(-1).ipp).sub(V(...ser[0].ipp));
-    const meta = { dzList, modality: (ds0.string('x00080060') || '').trim(), series: Object.keys(bySeries).length,
+    const meta = { dzList, modality: (ds0.string('x00080060') || '').trim(), series: Object.keys(bySeries).length, picked: groups.length > 1,
       thickness: parseFloat(ds0.string('x00180050')) || null, kernel: (ds0.string('x00181210') || '').trim(),
       tilt: ser.length > 1 ? THREE.MathUtils.radToDeg(span.angleTo(nrm)) : 0, bits: ds0.uint16('x00280101') || 16,
       ts: (ds0.string('x00020010') || '1.2.840.10008.1.2.1').replace(/\0/g, '').trim(),
@@ -183,9 +202,30 @@
       if (k % 20 === 19) await sleep();
     }
     return { source, vol: { hu, nx: cols, ny: rows, nz: ser.length, sp: [ps[1], ps[0], dz], origin: ser[0].ipp,
-      axes: [[r.x, r.y, r.z], [c.x, c.y, c.z], [nrm.x, nrm.y, nrm.z]], meta }, label: `${files[0].webkitRelativePath ? files[0].webkitRelativePath.split('/')[0] : 'DICOM'} · ${ser.length} kesit${skipped ? `, ${skipped} dosya atlandı` : ''}` };
+      axes: [[r.x, r.y, r.z], [c.x, c.y, c.z], [nrm.x, nrm.y, nrm.z]], meta }, label: `${zipName || ((ser[0].path || '').includes('/') ? ser[0].path.split('/')[0] : 'DICOM')}${groups.length > 1 && source.name ? ' · ' + source.name : ''} · ${ser.length} kesit${skipped ? `, ${skipped} dosya atlandı` : ''}` };
   }
   const dstr = (ds, tag) => (ds.string(tag) || '').replace(/\0/g, '').trim();
+  // several series in one folder or zip: list them and let the user pick (largest preselected)
+  function pickSeries(groups) {
+    let dlg = $('serDlg');
+    if (!dlg) { dlg = document.createElement('dialog'); dlg.id = 'serDlg'; dlg.setAttribute('aria-labelledby', 'serTitle'); document.body.appendChild(dlg); }
+    const info = g => {
+      const d = g[0].ds, desc = dstr(d, 'x0008103e') || 'Açıklamasız seri', th = parseFloat(dstr(d, 'x00180050')), ps = dstr(d, 'x00280030').split('\\').map(Number);
+      const kern = dstr(d, 'x00181210'), type = dstr(d, 'x00080008'), mod = dstr(d, 'x00080060'), num = dstr(d, 'x00200011');
+      const parts = [`${g.length} kesit`, `${d.uint16('x00280011')}×${d.uint16('x00280010')}`];
+      if (ps[0]) parts.push(`piksel ${fmt(ps[0], 2)} mm`); if (th) parts.push(`kalınlık ${fmt(th, 2)} mm`); if (kern) parts.push(`kernel ${kern}`); if (mod && mod !== 'CT') parts.push(mod);
+      const warn = g.length < 20 ? 'çok az kesit (lokalizör olabilir)' : /LOCALIZER|SCOUT/i.test(type) ? 'lokalizör' : /DERIVED|SECONDARY/i.test(type) ? 'türetilmiş görüntü' : '';
+      return { desc: (num ? `#${num} ` : '') + desc, sub: parts.join(' · '), warn };
+    };
+    dlg.innerHTML = `<form method="dialog" class="serform"><h2 id="serTitle">Seri seçin</h2><p class="hint">Bu klasörde ${groups.length} seri var. Guide için ince kesitli (≤ 1 mm) kemik serisini seçin.</p>
+      <div class="serlist" role="radiogroup" aria-label="Seriler">${groups.map((g, i) => { const x = info(g); return `<label class="seropt"><input type="radio" name="ser" value="${i}" ${i ? '' : 'checked'}><span><b>${esc(x.desc)}</b><small>${esc(x.sub)}</small>${x.warn ? `<em>${esc(x.warn)}</em>` : ''}</span></label>`; }).join('')}</div>
+      <div class="btns"><button value="cancel" formnovalidate>Vazgeç</button><button class="primary" value="ok">Bu seriyi aç</button></div></form>`;
+    busy(false);
+    return new Promise(res => {
+      dlg.onclose = () => { const v = dlg.returnValue === 'ok' && dlg.querySelector('input[name=ser]:checked'); res(v ? groups[+v.value] : null); };
+      dlg.showModal();
+    });
+  }
   async function sha256(t) {
     try { const h = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t)); return [...new Uint8Array(h)].slice(0, 12).map(b => b.toString(16).padStart(2, '0')).join(''); }
     catch (e) { let h = 2166136261; for (const ch of t) h = Math.imul(h ^ ch.charCodeAt(0), 16777619); return 'f' + (h >>> 0).toString(16); }
@@ -239,7 +279,7 @@
     for (let i = 0; i < vol.hu.length; i += 7) { const v = vol.hu[i]; if (v < mn) mn = v; if (v > 2500) metal++; n++; }
     if (mn > -900) out.push(['warn', 'Uyarı', `En düşük değer ${mn} HU; HU kalibrasyonu (rescale) şüpheli.`]);
     if (metal / n > 1e-4) out.push(['warn', 'Uyarı', 'Metal artefaktı olabilir (> 2500 HU bölgeler); segmentasyonu kontrol edin.']);
-    if (m.series > 1) out.push(['info', 'Bilgi', `${m.series} seri bulundu; en çok kesitli seri kullanıldı.`]);
+    if (m.series > 1) out.push(['info', 'Bilgi', m.picked ? `${m.series} seri bulundu; seçilen seri kullanıldı.` : `${m.series} seri bulundu; en çok kesitli seri kullanıldı.`]);
     out.push(['info', 'Bilgi', `Kapsam ${fmt(vol.nz * dz, 0)} mm${m.kernel ? `, kernel ${m.kernel}` : ''}.`]);
     return out;
   }
@@ -1082,7 +1122,8 @@
   $('dicomDir').addEventListener('change', e => { if (e.target.files.length) loadDicom([...e.target.files]); });
   $('dicomFiles').addEventListener('change', e => { if (e.target.files.length) loadDicom([...e.target.files]); });
   stage.addEventListener('dragover', e => e.preventDefault());
-  stage.addEventListener('drop', e => { e.preventDefault(); if (e.dataTransfer.files.length) loadDicom([...e.dataTransfer.files]); });
+  // dropped folders are walked (dataTransfer.files does not enter them); a dropped zip is opened by readDicom
+  stage.addEventListener('drop', async e => { e.preventDefault(); const files = window.Unzip ? await Unzip.fromDrop(e.dataTransfer) : [...e.dataTransfer.files]; if (files.length) loadDicom(files); });
 
   // ---------- export: STL + report + plan, packed as .zip (STL alone is not an allowed download type) ----------
   function stlOf(mesh) {
