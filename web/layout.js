@@ -55,37 +55,22 @@
   $('tTheme').addEventListener('click', () => { root.dataset.theme = isDark() ? 'light' : 'dark'; store.set('gs.theme', root.dataset.theme); syncTheme(); });
   dark.addEventListener('change', syncTheme); syncTheme();
 
-  // ---------- inspector tabs ----------
-  const tabs = [...document.querySelectorAll('.tab')];
-  function openTab(id) {
-    tabs.forEach(t => { const on = t.dataset.tab === id; t.setAttribute('aria-selected', on); $(t.dataset.tab).hidden = !on; });
+  // ---------- inspector tabs (arrow keys move between tabs) ----------
+  const tabs = () => [...document.querySelectorAll('.tab')].filter(t => !t.hidden);
+  function openTab(id, show) {
+    if (!$(id)) return;
+    [...document.querySelectorAll('.tab')].forEach(t => { const on = t.dataset.tab === id; t.setAttribute('aria-selected', on); t.tabIndex = on ? 0 : -1; $(t.dataset.tab).hidden = !on; });
     store.set('gs.tab', id);
+    if (show && !right) setRight(true);
   }
-  tabs.forEach(t => t.addEventListener('click', () => openTab(t.dataset.tab)));
-  const savedTab = store.get('gs.tab'); if (savedTab && $(savedTab)) openTab(savedTab);
-
-  // ---------- status tags, derived from what the app renders ----------
-  const tag = (el, cls, text) => { el.className = 'tag' + (cls ? ' ' + cls : ''); el.textContent = text; el.hidden = !text; };
-  function sync() {
-    const qc = [...$('qc').children].map(li => li.className);
-    tag($('tag1'), qc.includes('crit') ? 'crit' : qc.includes('warn') ? 'warn' : qc.length ? 'ok' : '', qc.includes('crit') ? 'Kritik' : qc.includes('warn') ? 'Uyarı' : qc.length ? 'Uygun' : '');
-    const sel = $('comps').querySelectorAll('input:checked').length;
-    tag($('tag2'), '', sel ? `${sel} yapı` : '');
-    const les = $('lesStatus').textContent;
-    tag($('tag4'), les ? (/onaylandı/.test(les) ? 'ok' : 'warn') : '', les ? (/onaylandı/.test(les) ? 'Onaylı' : 'Bekliyor') : '');
-    const dots = $('elList').querySelectorAll('.dot'), ok = $('elList').querySelectorAll('.dot.ok').length;
-    tag($('tag5'), dots.length ? (ok === dots.length ? 'ok' : 'warn') : '', dots.length ? `${ok}/${dots.length} onaylı` : '');
-    const crit = $('checks').querySelectorAll('li.crit').length + $('qc').querySelectorAll('li.crit').length;
-    $('critCnt').hidden = !crit; $('critCnt').textContent = crit;
-    const pill = $('readyPill');
-    if (!$('appr').children.length) { pill.className = 'pill'; pill.textContent = 'Hazırlanıyor'; }
-    else if (crit) { pill.className = 'pill crit'; pill.textContent = 'Kritik uyarı'; }
-    else if (!$('expZip').disabled) { pill.className = 'pill ok'; pill.textContent = 'Onaylı plan'; }
-    else { pill.className = 'pill'; pill.textContent = 'Onay bekliyor'; }
-    const dd = $('caseInfo').querySelector('dd'); $('caseTitle').textContent = dd ? dd.textContent : '';
-  }
-  let pend = false;
-  const mo = new MutationObserver(() => { if (!pend) { pend = true; requestAnimationFrame(() => { pend = false; sync(); }); } });
-  ['qc', 'comps', 'lesStatus', 'elList', 'checks', 'appr', 'caseInfo', 'expMsg'].forEach(id => mo.observe($(id), { childList: true, subtree: true, characterData: true }));
-  apply(); sync();
+  document.querySelectorAll('.tab').forEach(t => {
+    t.addEventListener('click', () => openTab(t.dataset.tab, true));
+    t.addEventListener('keydown', e => {
+      const list = tabs(), i = list.indexOf(t);
+      const j = e.key === 'ArrowRight' ? (i + 1) % list.length : e.key === 'ArrowLeft' ? (i - 1 + list.length) % list.length : e.key === 'Home' ? 0 : e.key === 'End' ? list.length - 1 : -1;
+      if (j < 0) return; e.preventDefault(); openTab(list[j].dataset.tab); list[j].focus(); list[j].scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    });
+  });
+  const savedTab = store.get('gs.tab'); openTab(savedTab && $(savedTab) && !document.querySelector(`.tab[data-tab="${savedTab}"]`).hidden ? savedTab : 'pChk');
+  window.Layout = { openTab, setLeft, setRight };
 })();

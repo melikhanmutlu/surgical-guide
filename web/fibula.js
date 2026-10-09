@@ -7,7 +7,7 @@ window.Fibula = (function () {
   const St = window.Studio; if (!St) return null;
   const { S, V, G, fmt, bus } = St, $ = id => document.getElementById(id);
   const MIN_LEN = 20, DEV_WARN = 3, ANGLE_WARN = 35, PROX_KEEP = 60, DISTAL_MIN = 60, THR = 250;
-  const GRAFT = [0xe2a33c, 0xc9822a], FGUIDE = St.COLORS.guide, BONE = St.COLORS.bone;
+  const GRAFT = [0xe2a33c, 0xc9822a], FGUIDE = St.COLORS.fguide, BONE = St.COLORS.bone;
   const r2d = THREE.MathUtils.radToDeg, deg = THREE.MathUtils.degToRad;
   St.renderer.localClippingEnabled = true;
   St.scene.traverse(o => { if (o.isLight) o.layers.enableAll(); });
@@ -209,18 +209,25 @@ window.Fibula = (function () {
     });
     St.applyExplode(); St.render();
   }
+  // view: 'm' mandible, 'f' fibula, 's' both side by side (mandible left, fibula right)
+  function fitLeg(cam, ctl) {
+    const box = new THREE.Box3(); leg.children.filter(o => o.userData.disc || o.userData.guide).forEach(o => box.expandByObject(o));
+    if (box.isEmpty()) box.setFromObject(leg);
+    const ctr = box.getCenter(V()), r = Math.max(30, box.getSize(V()).length() / 2);
+    const dir = F.c.FA[1].clone().add(F.c.FA[2].clone().multiplyScalar(0.4)).normalize();
+    ctl.target.copy(ctr); cam.position.copy(ctr).add(dir.multiplyScalar(r / Math.sin(deg(cam.fov) / 2) * 1.1)); ctl.update();
+  }
   function setView(v) {
-    view = v; St.camera.layers.set(v === 'f' ? 1 : 0); if (St.syncGizmo) St.syncGizmo();
-    $('scM').setAttribute('aria-pressed', v === 'm'); $('scF').setAttribute('aria-pressed', v === 'f');
+    view = v;
+    St.setSplit(v === 's');
+    if (v !== 's') St.camera.layers.set(v === 'f' ? 1 : 0);
+    if (St.syncGizmo) St.syncGizmo();
+    $('scM').setAttribute('aria-pressed', v === 'm'); $('scF').setAttribute('aria-pressed', v === 'f'); $('scS').setAttribute('aria-pressed', v === 's');
     $('fibView').textContent = v === 'f' ? 'Mandibulayı göster' : 'Fibulayı göster';
-    if (v === 'f' && F && F.c) {
-      const box = new THREE.Box3(); leg.children.filter(o => o.userData.disc || o.userData.guide).forEach(o => box.expandByObject(o));
-      if (box.isEmpty()) box.setFromObject(leg);
-      const ctr = box.getCenter(V()), r = Math.max(30, box.getSize(V()).length() / 2), cam = St.camera;
-      const dir = F.c.FA[1].clone().add(F.c.FA[2].clone().multiplyScalar(0.4)).normalize();
-      St.controls.target.copy(ctr); cam.position.copy(ctr).add(dir.multiplyScalar(r / Math.sin(deg(cam.fov) / 2) * 1.1)); St.controls.update();
-    } else if (v === 'm' && St.parts.bone) St.fitTo(St.parts.bone.obj);
-    St.render();
+    if (v === 'f' && F && F.c) fitLeg(St.camera, St.controls);
+    else if (v === 's' && F && F.c) { fitLeg(St.camF, St.ctlF); if (St.parts.bone) St.fitTo(St.parts.bone.obj); }
+    else if (v === 'm' && St.parts.bone) St.fitTo(St.parts.bone.obj);
+    St.updateMarkers(); St.render();
   }
 
   // ---------- fibula guide ----------
@@ -377,13 +384,12 @@ window.Fibula = (function () {
     }
     if (St.parts.resected) { St.parts.resected.visible = false; St.parts.resected.obj.visible = false; }
     guideKey = ''; update(); syncUI(); setView('f'); St.emit('changed');
-    $('stepFib').open = true;
   }
   async function apply(p) {
     if (!p) { if (S.fib) unload(); return; }
     if (!F || !F.source || F.source.fp !== p.source.fp) {
       if (p.source && p.source.type === 'sample') { if (!(await load('sample'))) return; }
-      else { pending = p; msg(`Bu planın fibula serisi "${p.source ? p.source.name : '?'}". Fibula planını açmak için aynı seriyi yükleyin.`); $('stepFib').open = true; return; }
+      else { pending = p; msg(`Bu planın fibula serisi "${p.source ? p.source.name : '?'}". Fibula planını açmak için aynı seriyi ilk adımda yükleyin.`); if (window.UI) UI.openStep('st1'); return; }
       F.c = null;
     }
     let best = 0, bd = Infinity; F.cands.forEach((c, i) => { const d = c.C.distanceTo(V(...(p.cand || [0, 0, 0]))); if (d < bd) { bd = d; best = i; } });
@@ -421,10 +427,10 @@ window.Fibula = (function () {
     return `<h2>Fibula rekonstrüksiyonu</h2><p>${esc(F.label)} · ${s.segment_sayisi} segment · testere payı ${fmt(s.testere_payi_mm)} mm · distal korunan ${fmt(s.distal_korunan_mm, 0)} mm · proksimalde kalan ${s.proksimalde_kalan_mm ?? '–'} mm · ${approved() ? `onaylı (${esc(plan().by || '')})` : 'onay bekliyor'}</p>
 <table><tr><th>Segment</th><th>Boy</th><th>Distal uçtan</th><th>Uç açıları</th><th>Rotasyon</th></tr>${s.segmentler.map(g => `<tr><td>${g.no}</td><td>${fmt(g.boy_mm)} mm</td><td>${fmt(g.distal_uctan_mm)} mm</td><td>${fmt(g.kesi_acilari_deg[0])}° / ${fmt(g.kesi_acilari_deg[1])}°</td><td>${g.rotasyon_deg}°</td></tr>`).join('')}</table>`;
   }
-  async function production() {
+  async function production(signal) {
     if (!active() || !S.fib.guide) return;
     const x = S.fib.guide.ctx;
-    const r = await St.serverGuide({ vol: F.vol, red: F.red, F: F.c.Fm, thr: THR, g: x.g, P: x.P, u: x.u, v: x.v, n: x.n, pls: x.pls, scs: x.scs });
+    const r = await St.serverGuide({ vol: F.vol, red: F.red, F: F.c.Fm, thr: THR, g: x.g, P: x.P, u: x.u, v: x.v, n: x.n, pls: x.pls, scs: x.scs }, signal);
     S.fib.prod = Object.assign(r, { key: S.fib.guide.key });
     $('prodMsg').textContent += ` Fibula guide'ı: ${r.watertight ? 'su geçirmez' : 'SU GEÇİRMEZ DEĞİL'}, ${r.bodies} parça${r.bodies > 1 ? ' (BİRDEN FAZLA PARÇA)' : ''}.`;
   }
@@ -452,8 +458,9 @@ window.Fibula = (function () {
   $('fibView').addEventListener('click', () => setView(view === 'f' ? 'm' : 'f'));
   $('scM').addEventListener('click', () => setView('m'));
   $('scF').addEventListener('click', () => setView('f'));
+  $('scS').addEventListener('click', () => setView('s'));
   bus.addEventListener('parts', () => { if (active() && !S.restoring) update(); });
   bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring) && S.fib) unload(); });
 
-  return { active, approved, checks, apply, exportFiles, reportHTML, production, setView, state: () => ({ F, last, view }) };
+  return { view: () => view, active, approved, checks, apply, exportFiles, reportHTML, production, setView, state: () => ({ F, last, view }) };
 })();

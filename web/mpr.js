@@ -223,7 +223,8 @@
   // ---------- layout: 3D only, or 3D + three slices (double-click a view to enlarge it) ----------
   function layout() {
     const box = $('views'); box.dataset.mode = st.mode; box.dataset.max = st.max || '';
-    $('vm3d').setAttribute('aria-pressed', st.mode === '3d'); $('vmQuad').setAttribute('aria-pressed', st.mode === 'quad');
+    $('vm3d').setAttribute('aria-pressed', st.mode === '3d'); $('vmQuad').setAttribute('aria-pressed', st.mode === 'quad'); $('vmStrip').setAttribute('aria-pressed', st.mode === 'strip');
+    try { localStorage.setItem('gs.layout', st.mode); } catch (e) {}
     $('winBox').hidden = st.mode === '3d';
     cursor3d.visible = st.mode !== '3d' && !!S.vol;
     VIEWS.forEach(v => { v.cell.hidden = st.mode === '3d' || (st.max && st.max !== v.id); });
@@ -231,13 +232,15 @@
     requestAnimationFrame(() => { VIEWS.forEach(v => { v.imgKey = null; }); redraw(); St.render(); });
   }
   VIEWS.forEach(v => { v.cell = $('cell_' + v.id); v.canvas = v.cell.querySelector('canvas'); v.zoom = 1; v.pan = [0, 0]; bind(v); new ResizeObserver(redraw).observe(v.canvas); });
-  $('cell3d').addEventListener('dblclick', e => { if (st.mode === 'quad' && e.target.tagName === 'CANVAS') { st.max = st.max === '3d' ? null : '3d'; layout(); } });
+  try { const m = localStorage.getItem('gs.layout'); if (m === 'strip' || m === 'quad') { st.mode = m; requestAnimationFrame(layout); } } catch (e) {}
+  $('cell3d').addEventListener('dblclick', e => { if (st.mode !== '3d' && e.target.tagName === 'CANVAS') { st.max = st.max === '3d' ? null : '3d'; layout(); } });
   $('vm3d').addEventListener('click', () => { st.mode = '3d'; st.max = null; layout(); });
   $('vmQuad').addEventListener('click', () => { st.mode = 'quad'; st.max = null; layout(); });
+  $('vmStrip').addEventListener('click', () => { st.mode = 'strip'; st.max = null; layout(); });
   $('win').addEventListener('change', e => { st.win = WINDOWS[e.target.value]; redraw(); });
   document.addEventListener('keydown', e => {
     if (/INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName) && document.activeElement.type !== 'range') return;
-    if (e.key === 'k' || e.key === 'K') { st.mode = st.mode === '3d' ? 'quad' : '3d'; st.max = null; layout(); }
+    if (e.key === 'k' || e.key === 'K') { st.mode = { '3d': 'strip', strip: 'quad', quad: '3d' }[st.mode]; st.max = null; layout(); }
   });
 
   // ---------- follow the app ----------

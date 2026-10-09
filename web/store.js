@@ -90,7 +90,6 @@
   function renderCaseHead() {
     $('caseName').disabled = !!caseId;
     if (caseId) $('caseName').value = caseName;
-    const t = $('tag0'); t.className = 'tag ' + (caseId ? 'ok' : 'warn'); t.textContent = caseId ? 'Kayıtlı' : 'Kayıtsız';
     $('stBackend').textContent = backend ? backend.label : '–';
   }
   function updUndo() { $('undo').disabled = H.idx <= 0; $('redo').disabled = H.idx >= H.list.length - 1; renderHist(); }
