@@ -136,7 +136,7 @@ button.primary { background: var(--accent); color: var(--accent-ink); border-col
 button.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
 button:disabled { opacity: .45; cursor: not-allowed; }
 select { width: 100%; padding: 0 6px; }
-input[type=url], input[type=text], input[type=number] { font: 13px var(--font-body); color: var(--fg); background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--r); padding: 0 9px; height: 30px; width: 100%; box-sizing: border-box; }
+input[type=url], input[type=text], input[type=number], input[type=date] { font: 13px var(--font-body); color: var(--fg); background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--r); padding: 0 9px; height: 30px; width: 100%; box-sizing: border-box; }
 input::placeholder { color: var(--faint); }
 input[type=checkbox] { accent-color: var(--accent); }
 .filebtn input { position: absolute; width: 1px; height: 1px; opacity: 0; }
@@ -375,6 +375,7 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
         <div class="body">
           <div class="ctl"><label for="caseName" class="lbl2">Vaka adı</label><input id="caseName" type="text" placeholder="Protokol no ya da kısa ad" autocomplete="off"></div>
           <p class="hint">Hasta adı ve kimlik bilgisi yazmayın. Kayıtta yalnız plan tutulur, görüntü tutulmaz.</p>
+          <div class="ctl"><label for="surgDate" class="lbl2">Planlanan ameliyat tarihi</label><input id="surgDate" type="date"></div>
           <details class="sub-d"><summary>Kayıtlı vakalar</summary>
             <div class="btns"><button id="caseNew"><svg class="i"><use href="#i-plus"/></svg>Yeni vaka</button><button id="caseRefresh">Listeyi yenile</button></div>
             <ul class="appr" id="caseList" aria-label="Kayıtlı vakalar"></ul>
@@ -387,6 +388,7 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
           </div>
           <p class="err" id="caseMsg" hidden></p>
           <dl class="kv" id="caseInfo"></dl>
+          <dl class="kv" id="dateInfo"></dl>
           <ul class="checks" id="qc" aria-label="Görüntü kalite kontrolü"></ul>
           <h3 class="sub">Fibula (bacak) BT'si</h3>
           <div class="btns">
@@ -516,6 +518,7 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
           <ol class="deliver">
             <li><div><b>Üretim STL'i</b><p class="hint" id="prodMsg">Su geçirmez üretim STL'i hastane sunucusunda Manifold ile üretilir.</p></div><button id="expSrv" title="Hastane sunucusunda yüzey tabanlı (Manifold) boolean ile su geçirmez STL"><svg class="i"><use href="#i-server"/></svg>Üret</button></li>
             <li><div><b>Üretim paketi</b><p class="hint">STL'ler, plan ve rapor tek .zip dosyasında.</p></div><button class="primary" id="expZip"><svg class="i"><use href="#i-download"/></svg>İndir</button></li>
+            <li><div><b>Ek dosyalar</b><p class="hint" title="3MF: guide'lar ve modeller. DICOM SEG: kalan kemik ve rezeke parça, kaynak BT ile aynı koordinatta (yalnız DICOM vaka). Navigasyon: nokta, düzlem, vida ve implant eksenleri (LPS mm).">3MF, DICOM SEG ve navigasyon. Pakette de vardır.</p><p class="hint" id="xMsg"></p></div><span class="btns"><button id="x3mf"><svg class="i"><use href="#i-download"/></svg>3MF</button><button id="xSeg">DICOM SEG</button><button id="xNav">Navigasyon</button></span></li>
             <li><div><b>Cerrahi rapor</b><p class="hint">Görüntüler, kesim tablosu, montaj sırası ve imza alanı.</p></div><span class="btns"><button id="expPdf"><svg class="i"><use href="#i-download"/></svg>PDF</button><button id="expRep">HTML</button></span></li>
           </ol>
           <p class="hint" id="expMsg"></p>
@@ -632,3 +635,5 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
 <script src="mfg.js"></script>
 <script src="fit.js"></script>
 <script src="audit.js"></script>
+<script src="dates.js"></script>
+<script src="export.js"></script>
