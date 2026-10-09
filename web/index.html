@@ -297,6 +297,11 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
 /* scene list */
 .parts li { display: grid; grid-template-columns: 1fr 90px auto; }
 .parts input[type=range] { margin: 0; }
+/* guide fit colour legend over the 3D view */
+.fitlegend { position: absolute; left: 14px; bottom: 64px; background: var(--glass); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: var(--shadow); width: 220px; z-index: 3; }
+.fitlegend b { display: block; font-weight: 600; margin-bottom: 5px; }
+.fitlegend i { display: block; height: 10px; border-radius: 3px; }
+.fitlegend span { display: flex; justify-content: space-between; color: var(--muted); margin-top: 3px; } .fitlegend em { font-style: normal; font-family: var(--font-mono); font-size: 11px; }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
@@ -464,10 +469,12 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
       <details class="step" id="st5" name="flow">
         <summary><span class="n">5</span>Guide'lar<span class="tag" id="tag5g"></span><svg class="chev"><use href="#i-chev"/></svg></summary>
         <div class="body">
+          <div id="mfgBox" class="col"></div>
           <div id="guideList" class="col"></div>
           <div class="ctl"><label for="g_split" class="lbl2">Guide düzeni</label><select id="g_split"><option value="0">Tek guide (rezeksiyon üstünde köprülü)</option><option value="1">İki ayrı guide (her kesi için bir)</option></select></div>
           <div id="gCtl" class="col"></div>
           <div class="ctl"><label for="g_side" class="lbl2">Köprü kenarı</label><select id="g_side"><option value="1">Bir kenar (+)</option><option value="-1">Diğer kenar (−)</option></select></div>
+          <div id="fitBox" class="col"></div>
           <div id="plateBox" class="col"></div>
           <div class="stepwarn" data-for="guide"></div>
           <div class="nav"><button class="primary next" data-next="st6">Vidalar<svg class="i"><use href="#i-next"/></svg></button></div>
@@ -615,3 +622,5 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
 <script src="fguide.js"></script>
 <script src="osteo.js"></script>
 <script src="implant.js"></script>
+<script src="mfg.js"></script>
+<script src="fit.js"></script>
