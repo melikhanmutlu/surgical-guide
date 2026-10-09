@@ -263,6 +263,7 @@ button.link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2p
 .mk::before { content: ""; width: 13px; height: 13px; border-radius: 50%; background: var(--warn) var(--g-warn) center / 9px no-repeat; }
 .mk.crit { color: var(--crit); border-color: var(--crit); } .mk.crit::before { background-color: var(--crit); background-image: var(--g-crit); }
 .mk.ref { color: #6b4fc4; border-color: #8e6fd6; cursor: default; pointer-events: none; } .mk.ref::before { display: none; }
+.mk.ref.ves { color: #b42318; border-color: #c8323c; }
 .mk.meas { transform: translate(-50%, -50%); font-family: var(--font-mono); padding: 1px 6px; cursor: default; } .mk.meas::before { display: none; }
 .viewtools { position: absolute; right: 12px; top: 12px; z-index: 2; display: grid; justify-items: end; gap: 6px; }
 #viewCube { width: 96px; height: 96px; cursor: pointer; }
@@ -602,3 +603,5 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
 <script src="report.js"></script>
 <script src="segedit.js"></script>
 <script src="ref.js"></script>
+<script src="plate.js"></script>
+<script src="ves.js"></script>

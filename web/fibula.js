@@ -262,7 +262,7 @@ window.Fibula = (function () {
   }
   async function buildFibGuide() {
     if (!active() || !last || building) { if (building) scheduleGuide(); return; }
-    const ctx = guideCtx(last); if (!ctx) { S.fib.guide = null; St.updatePanels(); return; }
+    const ctx = guideCtx(last); S.fib.guideFail = !ctx; if (!ctx) { S.fib.guide = null; St.updatePanels(); return; }
     const key = JSON.stringify([ctx.g, ctx.pls.map(p => [p.p.toArray(), p.N.toArray(), p.w].flat().map(x => Math.round(x * 100))), ctx.scs.map(s => s.entry && s.entry.toArray().map(x => Math.round(x * 100)))]);
     if (key === guideKey && S.fib.guide) return;
     building = true;
@@ -287,7 +287,7 @@ window.Fibula = (function () {
     if (P0.distal < DISTAL_MIN) out.push(['crit', 'Kritik', `Distal korunan fibula ${fmt(P0.distal, 0)} mm; ayak bileği stabilitesi için en az ${DISTAL_MIN} mm.`]);
     if (c.proxLeft < PROX_KEEP) out.push(['crit', 'Kritik', `Fibula yetmiyor: proksimalde ${fmt(Math.max(c.proxLeft, 0), 0)} mm kalıyor, en az ${PROX_KEEP} mm gerekli.`]);
     const R = S.fib.guide && S.fib.guide.result;
-    if (!R && !building) out.push(['warn', 'Uyarı', 'Fibula guide\'ı üretilemedi; fibula yüzeyi bulunamadı.']);
+    if (!R && !building && S.fib.guideFail) out.push(['warn', 'Uyarı', 'Fibula guide\'ı üretilemedi; fibula yüzeyi bulunamadı.']);
     if (R) {
       if (R.pieces > 1) out.push(['crit', 'Kritik', `Fibula guide'ı ${R.pieces} parçaya bölünüyor.`]);
       if (R.seat && R.seat.ok && !R.seat.free) out.push(['crit', 'Kritik', 'Fibula guide\'ı hiçbir yönde takılamıyor; sarma derinliği fazla.']);

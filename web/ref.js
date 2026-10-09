@@ -227,7 +227,7 @@ window.Ref = (function () {
   });
   (window.ReportSections = window.ReportSections || []).push((d) => {
     const M = metrics(); if (!M) return;
-    d.h2('Simetri ve kondiller');
+    if (d.keep) d.keep(330); d.h2('Simetri ve kondiller');
     d.table(['Ölçü', 'Değer'], [['Orta sagittal düzlem eğimi', `${fmt(M.tilt, 1)}°`], ['Ayna uyumu', `%${fmt(M.score * 100, 0)}`]].concat(M.inter !== undefined ? [['Kondiller arası mesafe', `${fmt(M.inter)} mm`], ['Orta düzleme uzaklık (sağ / sol)', `${fmt(M.dR)} / ${fmt(M.dL)} mm`], ['Kondil asimetrisi', `${fmt(M.asym)} mm`]] : []), [0.6, 0.4]);
   });
   render();
