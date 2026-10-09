@@ -108,7 +108,7 @@ window.Report = (function () {
   function assembly() {
     const out = [], R = S.result, seat = R && R.seat && R.seat.ok ? (R.seat.best.tilt ? `${R.seat.best.tilt}° eğik` : 'dik') : 'dik';
     const fib = window.Fibula && Fibula.active() ? Fibula.summary() : null, plate = window.Plate && Plate.summary ? Plate.summary() : null;
-    const guides = window.Guides && Guides.count ? Guides.count() : 1;
+    const guides = S.g.split && S.planes.length >= 2 ? 2 : 1;
     out.push(`Mandibula guide${guides > 1 ? `'larını (${guides})` : "'ını"} kemiğe ${seat} yönde oturtun; oturmanın tam olduğunu kontrol edin.`);
     if (S.screws.length) out.push(`Vida yuvalarını sırayla delin ve guide'ı sabitleyin: ${S.screws.map((s, i) => `Vida ${i + 1} (${fmt(s.d)} mm matkap, ${fmt(s.len, 0)} mm)`).join(', ')}.`);
     if (S.planes.length) out.push(`Osteotomileri yuvalardan yapın: ${S.planes.map((p, i) => `Kesi ${i + 1}`).join(', ')} (yuva ${fmt(Math.max(...S.planes.map(p => p.w)))} mm).`);
@@ -118,7 +118,7 @@ window.Report = (function () {
       out.push(`Fibula osteotomilerini yapın: ${fib.segmentler.map(g => `segment ${g.no} ${fmt(g.boy_mm)} mm`).join(', ')}.`);
       out.push('Segmentleri numara sırasıyla defekte yerleştirin; rotasyonları plandaki gibi ayarlayın.');
     }
-    out.push(plate ? `Ön bükülmüş plağı (${plate.holes} delik) guide delikleriyle eşleşen deliklerden sabitleyin.` : 'Rekonstrüksiyonu plakla sabitleyin.');
+    out.push(!plate ? 'Rekonstrüksiyonu plakla sabitleyin.' : plate.guide_ile_eslesen ? `Ön bükülmüş plağı (${plate.holes} delik) guide vida delikleriyle eşleşen ${plate.guide_ile_eslesen} delikten başlayarak sabitleyin.` : `Ön bükülmüş plağı (${plate.holes} delik) plandaki konumunda sabitleyin; guide vida delikleriyle eşleşen delik yok.`);
     return out;
   }
 
@@ -142,7 +142,7 @@ window.Report = (function () {
     d.status(draft ? 'TASLAK' : 'ONAYLI PLAN', draft ? 'warn' : 'ok');
     d.text(`Sürüm: ${version}${surgeon ? ' · Onaylayan: ' + surgeon : ''}`, { size: 22 });
     if (draft) d.text(`Onay bekleyen: ${miss.join(', ') || '–'}${S.crit ? ` · ${S.crit} kritik kontrol` : ''}`, { size: 22, color: C.warn });
-    d.text(`Görüntü: ${($('caseInfo').innerText || '').replace(/\n/g, ' · ')} · Segmentasyon: ${S.segMethod || '–'}`, { size: 20, color: C.muted, after: 10 });
+    d.text(`Görüntü: ${St.caseLine()} · Segmentasyon: ${S.segMethod || '–'}`, { size: 20, color: C.muted, after: 10 });
     if (shots.length) { d.h2('Görünümler'); d.images(shots); }
     d.h2('Kesim tablosu');
     const sorted = S.planes.slice().sort((a, b) => a.off - b.off);

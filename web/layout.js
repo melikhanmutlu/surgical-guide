@@ -27,6 +27,7 @@
   $('eRight').addEventListener('click', () => setRight(true));
   $('tFocus').addEventListener('click', focusMode);
   narrow.addEventListener('change', () => { if (narrow.matches) { left = right = false; } apply(); });
+  apply();   // the stored panel state applies from the first paint
 
   // fullscreen (falls back to focus mode where the host frame does not allow it)
   const fsOK = document.fullscreenEnabled && app.requestFullscreen;

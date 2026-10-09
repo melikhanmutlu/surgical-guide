@@ -72,14 +72,22 @@ window.Ref = (function () {
     }
     return out;
   }
+  // a condylar resection ends at the condyle: when that point moves, the resection is rebuilt and re-approved
+  function condMoved(before) {
+    const side = S.lesion && S.lesion.condyle; if (!side || S.restoring) return;
+    const now = ref && ref.cond[side];
+    if (JSON.stringify(before || null) === JSON.stringify(now || null)) return;
+    St.unapprove(S.lesion); St.schedule(true);
+  }
   async function compute(keepManual) {
     if (!S.mask || !S.red) return;
     St.busy(true, 'Orta sagittal düzlem ve kondiller bulunuyor…'); await St.sleep();
+    const before = S.lesion && S.lesion.condyle && ref && ref.cond[S.lesion.condyle];
     try {
       const pl = findPlane(), cond = findCondyles(pl), man = keepManual && ref && ref.manual || {};
       ref = { n: pl.n.map(x => +x.toFixed(5)), d: +pl.d.toFixed(2), score: +pl.score.toFixed(3), cond: Object.assign(cond, man), manual: man };
     } finally { St.busy(false); }
-    update(); St.emit('changed');
+    update(); St.emit('changed'); condMoved(before);
   }
 
   // ---------- 3D: mirrored ghost, plane, condyle markers ----------
@@ -151,8 +159,11 @@ window.Ref = (function () {
       if (picking) {
         const t = ['bone', 'resected'].filter(k => St.parts[k] && St.parts[k].visible).map(k => St.parts[k].obj), h = ray.intersectObjects(t, false)[0];
         if (!h) return true;
+        const before = ref.cond[picking];
         ref.cond[picking] = h.point.toArray().map(x => Math.round(x * 100) / 100); ref.manual = Object.assign({}, ref.manual, { [picking]: ref.cond[picking] });
-        picking = null; $('modeBadge').hidden = true; update(); St.emit('changed'); return true;
+        const side = picking; picking = null; $('modeBadge').hidden = true; update(); St.emit('changed');
+        if (side === S.lesion.condyle) condMoved(before);
+        return true;
       }
       return prevTools ? prevTools.click(e, ray) : false;
     },
@@ -190,12 +201,13 @@ window.Ref = (function () {
       <div class="btns"><button id="rfRun">Yeniden hesapla</button></div>
       <p class="hint">Ayna görüntüsü rekonstrüksiyon için hedef konturdur. Kesitlerde kesikli gri çizgi olarak da görünür.</p>`
       : `<p class="hint">Orta sagittal düzlem, kemiğin kendi ayna görüntüsüne en iyi oturduğu düzlem olarak bulunur.</p><div class="btns"><button id="rfRun" ${S.mask ? '' : 'disabled'}><svg class="i"><use href="#i-target"/></svg>Simetri ve kondilleri bul</button></div>`}`;
-    $('rfRun').addEventListener('click', () => compute(false));
+    $('rfRun').addEventListener('click', () => compute(true));
     if (!ref) return;
     $('rfMirror').addEventListener('change', e => { view.mirror = e.target.checked; update(); });
     $('rfDefect').addEventListener('change', e => { view.defectOnly = e.target.checked; built = null; update(); });
     $('rfPlane').addEventListener('change', e => { view.plane = e.target.checked; update(); });
     $('refBox').querySelectorAll('[data-pk]').forEach(b => b.addEventListener('click', () => {
+      if (window.SegEdit) SegEdit.off(); if (window.Measure && Measure.active()) $('toolMeasure').click();
       picking = b.dataset.pk; const mb = $('modeBadge'); mb.hidden = false; mb.textContent = `${picking === 'R' ? 'Sağ' : 'Sol'} kondilin tepesine 3B görünümde tıklayın. Vazgeçmek için Esc.`;
     }));
   }
@@ -203,9 +215,14 @@ window.Ref = (function () {
 
   // ---------- plan, events, checks, report ----------
   (window.PlanExt = window.PlanExt || {}).ref = {
-    label: 'Simetri ve kondil referansı',
+    label: 'Simetri ve kondil referansı', pre: true,
     get: () => ref ? JSON.parse(JSON.stringify(ref)) : null,
-    set(x) { ref = x ? JSON.parse(JSON.stringify(x)) : null; built = null; update(); },
+    set(x) {
+      // stored plan = untrusted input: numbers only
+      const v3 = a => Array.isArray(a) && a.length === 3 && a.every(Number.isFinite) ? a.slice() : null, pts = o => { const r = {}; ['R', 'L'].forEach(k => { const p = o && v3(o[k]); if (p) r[k] = p; }); return r; };
+      ref = x && v3(x.n) && Number.isFinite(x.d) ? { n: v3(x.n), d: x.d, score: Number.isFinite(x.score) ? x.score : 0, cond: pts(x.cond), manual: pts(x.manual) } : null;
+      built = null; update();
+    },
   };
   let lastBone = null, auto = false;
   bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring)) { ref = null; auto = true; built = null; } update(); });

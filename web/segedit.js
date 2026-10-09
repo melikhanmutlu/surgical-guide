@@ -45,6 +45,8 @@ window.SegEdit = (function () {
     else if (window.MPR) MPR.redraw();
   }
   async function commit(msg) {
+    // the bone changed under every approved step
+    if (St.unapproveAll) St.unapproveAll();
     await St.rebuildBone(false);
     status(msg); St.emit('changed'); if (window.MPR) MPR.redraw();
   }
@@ -170,6 +172,8 @@ window.SegEdit = (function () {
   });
 
   // ---------- plan storage: run-length encoded voxel sets ----------
+  // content hash of both edit sets, so any change (not only a change in size) invalidates the production STL
+  function hash(str) { let h = 0x811c9dc5; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193); } return (h >>> 0).toString(36); }
   function rle(a) { const out = []; let cur = 0, run = 0; for (let i = 0; i < a.length; i++) { if (a[i] === cur) run++; else { out.push(run.toString(36)); cur ^= 1; run = 1; } } out.push(run.toString(36)); return out.join(','); }
   function unrle(s, N) { const a = new Uint8Array(N); let p = 0, cur = 0; s.split(',').forEach(t => { const r = parseInt(t, 36); if (cur) a.fill(1, p, Math.min(N, p + r)); p += r; cur ^= 1; }); return a; }
   (window.PlanExt = window.PlanExt || {}).seg = {
@@ -224,5 +228,5 @@ window.SegEdit = (function () {
   status();
 
   return { active: () => !!tool && tool !== 'scissors', tool: () => tool, paint, strokeEnd, applyTo(m) { if (!add || add.length !== m.length) return; for (let v = 0; v < m.length; v++) { if (del[v]) m[v] = 0; else if (add[v]) m[v] = 1; } },
-    hasAdditions: () => !!(add && add.indexOf(1) >= 0), edited, key: () => edited() ? rle(add).length + ':' + rle(del).length + ':' + count(add) + ':' + count(del) : '', setTool, metal, fragments, reset };
+    hasAdditions: () => !!(add && add.indexOf(1) >= 0), edited, key: () => edited() ? hash(rle(add)) + ':' + hash(rle(del)) : '', setTool, off: () => { if (tool) setTool(tool); }, metal, fragments, reset };
 })();

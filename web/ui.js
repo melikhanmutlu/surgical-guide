@@ -28,13 +28,13 @@ window.UI = (function () {
     const list = S.checkList || [], critOf = re => list.filter(o => o[0] === 'crit' && o[3] && re.test(o[3])).length;
     const fibOn = !!(window.Fibula && Fibula.active()), fibOk = fibOn && Fibula.approved();
     const plOk = S.planes.filter(p => p.ok).length, scOk = S.screws.filter(p => p.ok).length;
-    const R = S.result, gCrit = critOf(/^guide$/);
+    const R = S.result, gCrit = critOf(/^guide$/), want = S.g.split && S.planes.length >= 2 ? 2 : 1;
     const done = {
       st1: !!S.vol && !qcCrit,
       st2: S.selected && S.selected.size > 0,
       st3: !!S.anchor && S.lesion.ok && S.planes.length > 0 && plOk === S.planes.length,
       st4: fibOk,
-      st5: !!R && R.pieces === 1 && !gCrit,
+      st5: !!R && R.pieces === want && !gCrit,
       st6: S.screws.length > 0 && scOk === S.screws.length && !critOf(/^s\d/),
       st7: !$('expZip').disabled,
       st8: exported,
@@ -43,7 +43,7 @@ window.UI = (function () {
     tag($('tag2'), S.selected && S.selected.size ? 'ok' : '', S.selected && S.selected.size ? `${S.selected.size} yapı` : '');
     const resN = S.planes.length + 1, resOk = plOk + (S.lesion.ok ? 1 : 0);
     tag($('tag3'), !S.anchor ? '' : critOf(/^p\d|lesion/) ? 'crit' : resOk === resN ? 'ok' : 'warn', !S.anchor ? '' : `${resOk}/${resN} onaylı`);
-    tag($('tag5g'), !R ? '' : gCrit ? 'crit' : 'ok', !R ? '' : gCrit ? 'Kritik' : R.pieces === 1 ? 'Tek parça' : `${R.pieces} parça`);
+    tag($('tag5g'), !R ? '' : gCrit ? 'crit' : 'ok', !R ? '' : gCrit ? 'Kritik' : R.pieces === 1 ? 'Tek parça' : want === 2 && R.pieces === 2 ? 'İki guide' : `${R.pieces} parça`);
     tag($('tag5'), !S.screws.length ? '' : critOf(/^s\d/) ? 'crit' : scOk === S.screws.length ? 'ok' : 'warn', S.screws.length ? `${scOk}/${S.screws.length} onaylı` : '');
     const pend = S.anchor ? St.pendingList().length : 0;
     tag($('tag7'), !S.anchor ? '' : S.crit ? 'crit' : done.st7 ? 'ok' : 'warn', !S.anchor ? '' : S.crit ? `${S.crit} kritik` : done.st7 ? 'Onaylı' : `${pend} bekliyor`);
@@ -59,6 +59,8 @@ window.UI = (function () {
     const pill = $('readyPill');
     if (!S.anchor) { pill.className = 'pill'; pill.textContent = 'Hazırlanıyor'; }
     else if (crit) { pill.className = 'pill crit'; pill.textContent = 'Kritik uyarı'; }
+    pill.title = crit && S.anchor ? 'Kontrolleri aç' : '';
+    if ($('fibIntro')) $('fibIntro').hidden = !!(window.Fibula && Fibula.state().F);
     else if (done.st7) { pill.className = 'pill ok'; pill.textContent = 'Onaylı plan'; }
     else { pill.className = 'pill'; pill.textContent = 'Onay bekliyor'; }
     const dd = $('caseInfo').querySelector('dd');
@@ -175,5 +177,6 @@ window.UI = (function () {
   // restore the last open step
   const last = store.get('gs.step'); if (last && $(last)) openStep(last);
   sync();
+  $('readyPill').addEventListener('click', () => { if ($('readyPill').classList.contains('crit')) window.Layout && Layout.openTab('pChk', true); });
   return { openStep, openTab: id => window.Layout && Layout.openTab(id, true), onRender, sync, viewFrom };
 })();

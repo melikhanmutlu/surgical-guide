@@ -165,7 +165,7 @@ window.Vessels = (function () {
       $('vsDonor').addEventListener('change', e => { P.donor = e.target.value; changed(); });
       $('vsRecip').addEventListener('change', e => { P.recip = e.target.value; P.rp = null; changed(); });
       F.forEach(([k, , , , , un]) => $('vs_' + k).addEventListener('input', e => { P[k] = +e.target.value; $('vso_' + k).textContent = `${P[k]} ${un}`; later(); St.emit('changed'); }));
-      $('vsPick').addEventListener('click', () => { picking = true; const mb = $('modeBadge'); mb.hidden = false; mb.textContent = 'Alıcı damar noktasına (ör. fasiyal arter çentiği) mandibula görünümünde tıklayın. Vazgeçmek için Esc.'; if (window.Fibula && Fibula.view() !== 'm') $('scM').click(); });
+      $('vsPick').addEventListener('click', () => { if (window.SegEdit) SegEdit.off(); if (window.Measure && Measure.active()) $('toolMeasure').click(); picking = true; const mb = $('modeBadge'); mb.hidden = false; mb.textContent = 'Alıcı damar noktasına (ör. fasiyal arter çentiği) mandibula görünümünde tıklayın. Vazgeçmek için Esc.'; if (window.Fibula && Fibula.view() !== 'm') $('scM').click(); });
       $('vsAuto').addEventListener('click', () => { P.rp = null; changed(); });
     }
     $('vsDonor').value = P.donor || 'R'; $('vsRecip').value = P.recip || 'R';
@@ -173,14 +173,19 @@ window.Vessels = (function () {
     $('vsAuto').disabled = !P.rp;
     $('vsSum').innerHTML = s ? `<dt>Pedikül</dt><dd>${s.pedikul_mevcut_mm} mm mevcut · ${s.pedikul_gerekli_mm ?? '–'} mm gerekli</dd><dt>Pedikül çıkışı</dt><dd>greftin proksimal ucu</dd><dt>Perforatör</dt><dd>${s.perforator_segmenti ? 'segment ' + s.perforator_segmenti : 'greft dışında'}</dd><dt>Alıcı nokta</dt><dd>${s.alici_nokta_tahmini ? 'tahmini' : 'elle seçildi'}</dd>` : '<dt>Durum</dt><dd>fibula planı bekleniyor</dd>';
   }
-  function update() { try { compute(); } catch (e) { last = null; } draw(); render(); St.renderChecks(); }
+  function update() { try { compute(); } catch (e) { last = null; } draw(); render(); St.renderChecks(); St.renderAppr(); }
   const later = () => { clearTimeout(timer); timer = setTimeout(update, 250); };
   function changed() { update(); St.emit('changed'); }
 
+  // a stored plan is untrusted input: keep only known keys, with the default's type
+  const clean = x => { const o = Object.assign({}, DEF); if (x && typeof x === 'object') for (const k in DEF) { if (!(k in x)) continue; const d = DEF[k], v = x[k];
+    if (typeof d === 'number') { const n = Number(v); if (Number.isFinite(n)) o[k] = n; } else if (typeof d === 'boolean') o[k] = !!v; else if (typeof d === 'string') { if (typeof v === 'string') o[k] = v.slice(0, 60); } else if (v === null) o[k] = null;
+    else if (typeof v === 'string') o[k] = v.slice(0, 8); else if (Number.isFinite(v)) o[k] = v;
+    else if (Array.isArray(v) && v.length <= 4 && v.every(Number.isFinite)) o[k] = v.slice(); } return o; };
   (window.PlanExt = window.PlanExt || {}).ves = {
     label: 'Damar ve pedikül planı',
     get: () => (fib() ? Object.assign({}, P) : null),
-    set(x) { P = Object.assign({}, DEF, x || {}); update(); },
+    set(x) { P = clean(x); ['donor', 'recip'].forEach(k => { if (P[k] !== 'R' && P[k] !== 'L') P[k] = null; }); if (P.rp && P.rp.length !== 3) P.rp = null; update(); },
   };
   bus.addEventListener('changed', () => { if (!S.restoring) later(); });
   bus.addEventListener('parts', () => { if (!S.restoring) later(); });

@@ -175,7 +175,10 @@ window.Fibula = (function () {
   const plan = () => S.fib.plan;
   // approval is tied to what the surgeon decided (fibula parameters + mandible cuts), not to derived numbers
   const r3 = x => Math.round(x * 1000) / 1000;
-  const sig = () => { const { ok, by, at, sig: _s, ...p } = plan(); return JSON.stringify([p, S.planes.map(q => [q.off, q.yaw, q.pitch, q.w]), S.anchor ? [S.anchor.p, S.anchor.n].map(v => [v.x, v.y, v.z].map(r3)) : null]); };
+  const sig = () => { const { ok, by, at, sig: _s, ...p } = plan(); return JSON.stringify([p, S.planes.map(q => [q.off, q.yaw, q.pitch, q.w]), S.anchor ? [S.anchor.p, S.anchor.n].map(v => [v.x, v.y, v.z].map(r3)) : null,
+    // the defect also depends on the condyle (condylar resection) and on the bone mask itself
+    S.lesion.condyle || null, S.lesion.condyle && window.Ref && Ref.get() ? Ref.get().cond[S.lesion.condyle] || null : null,
+    document.getElementById('thr').value, window.SegEdit ? SegEdit.key() : '']); };
 
   // ---------- scenes ----------
   function clearLeg() { while (leg.children.length) { const c = leg.children.pop(); c.traverse(o => { if (o.material) o.material.dispose(); if (o.geometry && o.geometry !== F?.c?.geo && o.geometry !== F?.c?.tgeo) o.geometry.dispose(); }); } }

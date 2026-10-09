@@ -54,8 +54,11 @@ window.Plate = (function () {
     if (!P.on || !S.anchor || !St.parts.bone) return null;
     const E = St.resEnds(); if (!E) return null;
     const T = targets(), { u, v, n } = St.frameAxes();
-    const s0 = snap(S.anchor.p.clone().addScaledVector(v, P.h), n, T); if (!s0) return null;
-    const { A, B } = E, out = q => q.clone().sub(A.p).dot(A.N) < -(A.w / 2 + P.ext);
+    const { A, B } = E;
+    // start inside the defect: the anchor, or the middle of the two ends when the cuts have moved off it
+    const ea = A.p.clone().sub(S.anchor.p).dot(u), eb = B.p.clone().sub(S.anchor.p).dot(u), shift = 0 > Math.min(ea, eb) + 2 && 0 < Math.max(ea, eb) - 2 ? 0 : (ea + eb) / 2;
+    const s0 = snap(S.anchor.p.clone().addScaledVector(u, shift).addScaledVector(v, P.h), n, T); if (!s0) return null;
+    const out = q => q.clone().sub(A.p).dot(A.N) < -(A.w / 2 + P.ext);
     const toA = A.p.clone().sub(s0.p).dot(u) < 0 ? u.clone().negate() : u.clone();
     const wa = walk(s0, toA, T, q => out(q));
     const wb = E.condyle ? walk(s0, toA.clone().negate(), T, q => q.distanceTo(B.p) < 10)
@@ -118,7 +121,7 @@ window.Plate = (function () {
   async function update() {
     try { compute(); } catch (e) { last = null; }
     if (last) markMatched();
-    draw(); renderSum(); St.renderChecks(); if (window.MPR) MPR.redraw();
+    draw(); renderSum(); St.renderChecks(); St.renderAppr(); if (window.MPR) MPR.redraw();
   }
   const later = () => { clearTimeout(timer); timer = setTimeout(update, 350); };
 
@@ -233,10 +236,15 @@ window.Plate = (function () {
   }
   function changed() { render(); update(); St.emit('changed'); }
 
+  // a stored plan is untrusted input: keep only known keys, with the default's type
+  const clean = x => { const o = Object.assign({}, DEF); if (x && typeof x === 'object') for (const k in DEF) { if (!(k in x)) continue; const d = DEF[k], v = x[k];
+    if (typeof d === 'number') { const n = Number(v); if (Number.isFinite(n)) o[k] = n; } else if (typeof d === 'boolean') o[k] = !!v; else if (typeof d === 'string') { if (typeof v === 'string') o[k] = v.slice(0, 60); } else if (v === null) o[k] = null;
+    else if (typeof v === 'string') o[k] = v.slice(0, 8); else if (Number.isFinite(v)) o[k] = v;
+    else if (Array.isArray(v) && v.length <= 4 && v.every(Number.isFinite)) o[k] = v.slice(); } return o; };
   (window.PlanExt = window.PlanExt || {}).plate = {
     label: 'Plak planı',
     get: () => P.on ? Object.assign({}, P) : null,
-    set(x) { P = Object.assign({}, DEF, x || {}); render(); update(); },
+    set(x) { P = clean(x); if (!(P.sys in SYSTEMS)) P.sys = DEF.sys; render(); update(); },
   };
   bus.addEventListener('parts', () => { if (P.on && !S.restoring) later(); });
   bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring)) { P = Object.assign({}, DEF); last = null; draw(); render(); } });

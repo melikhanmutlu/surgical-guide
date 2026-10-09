@@ -47,12 +47,14 @@ window.Measure = (function () {
     return true;
   }
   function add(m) { S.measures.push(m); pts = []; hint(`${NAMES[m.type]} ${val(m)} eklendi. Yeni ölçüm için tıklamaya devam edin.`); render(); St.emit('changed'); }
-  function hint(t) { const b = $('modeBadge'); b.hidden = !on; b.textContent = t; }
+  // the badge is shared with other tools: only hide it if it still shows our text
+  let mine = '';
+  function hint(t) { const b = $('modeBadge'); if (on) { b.hidden = false; b.textContent = mine = t; } else if (b.textContent === mine) b.hidden = true; }
   // 3D clicks come here first (Studio's picking hook)
   window.Tools = {
     click(e, ray) {
       if (!on) return false;
-      const targets = Object.values(St.parts).filter(pt => pt.visible && pt.obj.isMesh && !/^plane|lesion|anchor/.test(pt.id)).map(pt => pt.obj);
+      const targets = Object.values(St.parts).filter(pt => pt.visible && pt.obj.isMesh && !/^(plane|lesion|anchor|mirror|guide)/.test(pt.id)).map(pt => pt.obj);
       const g = St.parts.grafts; if (g && g.visible) g.obj.traverse(c => { if (c.isMesh) targets.push(c); });
       const h = ray.intersectObjects(targets, false)[0];
       if (!h) return true;
@@ -61,7 +63,7 @@ window.Measure = (function () {
     },
   };
   function setOn(v) {
-    on = v; pts = []; $('toolMeasure').setAttribute('aria-pressed', on);
+    on = v; pts = []; if (on && window.SegEdit) SegEdit.off(); $('toolMeasure').setAttribute('aria-pressed', on);
     hint(`${NAMES[type]}: ${type === 'thick' ? 'kemik yüzeyine tıklayın' : 'noktalara tıklayın (3B ya da kesit)'}. Bitirmek için Esc.`);
     if (on && window.UI) UI.openTab('pMes');
     draw();
