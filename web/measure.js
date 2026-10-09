@@ -63,7 +63,7 @@ window.Measure = (function () {
     },
   };
   function setOn(v) {
-    on = v; pts = []; if (on && window.SegEdit) SegEdit.off(); $('toolMeasure').setAttribute('aria-pressed', on);
+    on = v; pts = []; if (on && window.SegEdit) SegEdit.off(); if (on && window.Lesion) Lesion.off(); $('toolMeasure').setAttribute('aria-pressed', on);
     hint(`${NAMES[type]}: ${type === 'thick' ? 'kemik yüzeyine tıklayın' : 'noktalara tıklayın (3B ya da kesit)'}. Bitirmek için Esc.`);
     if (on && window.UI) UI.openTab('pMes');
     draw();

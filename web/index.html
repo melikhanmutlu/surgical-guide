@@ -327,7 +327,7 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
 .aulog li { font-size: 12.5px; border-left: 2px solid var(--line-strong); padding-left: 8px; }
 .aulog small { display: block; font: 11px var(--font-mono); color: var(--faint); }
 /* slice cell mode menu (standard, panoramic, perpendicular to cut) */
-.cellmode { position: absolute; top: 6px; right: 6px; z-index: 2; font: 11.5px var(--font-body); background: rgba(0, 0, 0, .55); color: #dfe6e3; border: 1px solid #3a424a; border-radius: 5px; padding: 2px 4px; height: auto; width: auto; }
+.cellmode { position: absolute; bottom: 6px; right: 6px; z-index: 2; font: 11.5px var(--font-body); background: rgba(0, 0, 0, .55); color: #dfe6e3; border: 1px solid #3a424a; border-radius: 5px; padding: 2px 4px; height: auto; width: auto; }
 /* guide fit colour legend over the 3D view */
 .fitlegend { position: absolute; left: 14px; bottom: 64px; background: var(--glass); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: var(--shadow); width: 220px; z-index: 3; }
 .fitlegend b { display: block; font-weight: 600; margin-bottom: 5px; }
@@ -450,8 +450,11 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
           <div class="btns"><button id="pickAnchor"><svg class="i"><use href="#i-target"/></svg>Rezeksiyon bölgesini modelde seç</button></div>
           <div class="ctl"><label for="resType" class="lbl2">Rezeksiyon tipi</label><select id="resType"><option value="">Segment (iki kesi arası)</option><option value="R">Kondil dahil, sağ (tek kesi)</option><option value="L">Kondil dahil, sol (tek kesi)</option></select></div>
           <p class="hint" id="resTypeHint" hidden>Ramus ve kondil, kondile en uzak kesiden itibaren çıkarılır. Diğer kesiler yalnız guide yuvası olarak kalır. Kondil konumu Anatomi adımındaki referanstan gelir.</p>
+          <div id="lesPaint" class="col"></div>
+          <h3 class="sub">Ya da sınırı elle ayarla</h3>
           <div id="lesCtl" class="col"></div>
-          <div class="btns"><button class="primary" id="suggest"><svg class="i"><use href="#i-spark"/></svg>Kesi ve vida öner</button></div>
+          <div class="ctl"><label for="perSide" class="lbl2">Her tarafta vida</label><select id="perSide"><option value="1">1 vida</option><option value="2" selected>2 vida</option></select></div>
+          <div class="btns"><button id="suggest"><svg class="i"><use href="#i-spark"/></svg>Kesi ve vida öner</button></div>
           <p class="hint" id="lesStatus"></p>
           <h3 class="sub">Kesiler</h3>
           <div class="btns"><button id="addPlane"><svg class="i"><use href="#i-plus"/></svg>Kesi ekle</button></div>
@@ -668,3 +671,4 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
 <script src="export.js"></script>
 <script src="reformat.js"></script>
 <script src="postop.js"></script>
+<script src="lesion.js"></script>

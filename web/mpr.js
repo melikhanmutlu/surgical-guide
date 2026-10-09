@@ -208,7 +208,7 @@
       if (e.shiftKey) { st.drag = { kind: 'wl', v, X, Y, L: st.win.L, W: st.win.W }; return; }
       if (v.custom) { const T = xf(v); st.drag = { kind: 'custom', v }; v.custom.pick(v, T.ix(X), T.iy(Y)); return; }
       if (window.Measure && Measure.active()) { const T = xf(v); Measure.pick(V(...toWorld(imgToIdx(v, T.ix(X), T.iy(Y)))), null); return; }
-      if (window.SegEdit && SegEdit.active()) { const T = xf(v); st.drag = { kind: 'paint', v }; SegEdit.paint(toWorld(imgToIdx(v, T.ix(X), T.iy(Y))), v.axis, true); return; }
+      const P = painter(); if (P) { const T = xf(v); st.drag = { kind: 'paint', v, P }; P.paint(toWorld(imgToIdx(v, T.ix(X), T.iy(Y))), v.axis, true); return; }
       const li = hitLine(v, X, Y);
       if (li >= 0) { st.drag = { kind: 'plane', v, i: li }; St.select('p' + li); c.style.cursor = 'grabbing'; return; }
       st.drag = { kind: 'cursor', v }; moveCursor(v, X, Y);
@@ -221,12 +221,14 @@
       else if (d.kind === 'wl') { const k = 1 / Math.min(devicePixelRatio, 2); st.win = { L: Math.round(d.L - (Y - d.Y) * 2 * k), W: Math.max(10, Math.round(d.W + (X - d.X) * 4 * k)) }; customWin(); redraw(); }
       else if (d.kind === 'custom') { const T = xf(v); v.custom.pick(v, T.ix(X), T.iy(Y)); }
       else if (d.kind === 'plane') dragPlane(v, d.i, X, Y);
-      else if (d.kind === 'paint') { const T = xf(v); SegEdit.paint(toWorld(imgToIdx(v, T.ix(X), T.iy(Y))), v.axis, false); }
+      else if (d.kind === 'paint') { const T = xf(v); d.P.paint(toWorld(imgToIdx(v, T.ix(X), T.iy(Y))), v.axis, false); }
     });
-    const end = () => { if (st.drag && st.drag.kind === 'plane') { St.unapprove(S.planes[st.drag.i]); St.schedule(true); } if (st.drag && st.drag.kind === 'paint') SegEdit.strokeEnd(); st.drag = null; c.style.cursor = 'crosshair'; };
+    const end = () => { if (st.drag && st.drag.kind === 'plane') { St.unapprove(S.planes[st.drag.i]); St.schedule(true); } if (st.drag && st.drag.kind === 'paint') st.drag.P.strokeEnd(); st.drag = null; c.style.cursor = 'crosshair'; };
     c.addEventListener('pointerup', end); c.addEventListener('pointercancel', end);
     c.addEventListener('dblclick', () => { st.max = st.max === v.id ? null : v.id; layout(); });
   }
+  // slice painting tools: lesion brush, segmentation brush / eraser
+  const painter = () => (window.Lesion && Lesion.active() ? Lesion : window.SegEdit && SegEdit.active() ? SegEdit : null);
   function moveCursor(v, X, Y) { const T = xf(v); setCursor(imgToIdx(v, T.ix(X), T.iy(Y))); }
   function dragPlane(v, i, X, Y) {
     const T = xf(v), w = toWorld(imgToIdx(v, T.ix(X), T.iy(Y))), q = V(...w), pw = St.planesWorld()[i], { u } = St.frameAxes();

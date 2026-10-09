@@ -547,22 +547,86 @@
   }
   function suggest() {
     if (!S.anchor) return;
-    const L = S.lesion, a = Math.min(L.from, L.to) - L.margin, b = Math.max(L.from, L.to) + L.margin, gap = 7;
+    const L = S.lesion, a = Math.min(L.from, L.to) - L.margin, b = Math.max(L.from, L.to) + L.margin;
     S.planes = [{ off: a, yaw: 0, pitch: 0, w: 1.2, ok: false }, { off: b, yaw: 0, pitch: 0, w: 1.2, ok: false }];
-    const def = SCREW_DEFAULT[S.kind] || SCREW_DEFAULT.dicom;
-    S.g.L = Math.min(70, Math.max(16, Math.ceil(2 * Math.max(Math.abs(a - gap), Math.abs(b + gap)) + def.D + 2)));
+    placeScrews();
+    unapprove(S.lesion); S.sel = null;
+    updateLesionPart(); schedule(true);
+  }
+  // screws outside the two outer cuts (one or two per side, 'Vida / taraf'), each at the tilt that stays longest in bone
+  // without crossing a cut; the guide is made long enough to hold them
+  function placeScrews() {
+    const def = SCREW_DEFAULT[S.kind] || SCREW_DEFAULT.dicom, per = +($('perSide') ? $('perSide').value : 1) || 1, gap = 7;
+    const { u, v } = frameAxes(), pls = planesWorld().sort((x, y) => x.off - y.off);
+    if (pls.length < 1) { S.screws = []; return; }
+    const ends = pls.length > 1 ? [[pls[0], -1], [pls[pls.length - 1], 1]] : [[pls[0], -1], [pls[0], 1]];
+    const sv = per === 2 ? Math.max(2, Math.min(5, S.g.W / 2 - def.D / 2 - 1.5)) : 0, vs = per === 2 ? [-sv, sv] : [0];
+    const pos = [];
+    for (const [pw, side] of ends) for (const vv of vs) {
+      // where the cut crosses this screw's lateral line, then the gap outward
+      const t = pw.off - vv * pw.N.dot(v) / Math.max(0.2, pw.N.dot(u));
+      pos.push({ u: Math.round((t + side * (gap + pw.w / 2)) * 2) / 2, v: vv });
+    }
+    S.g.L = Math.min(70, Math.max(16, Math.ceil(2 * Math.max(...pos.map(p => Math.abs(p.u))) + def.D + 2)));
     syncGuideInputs();
-    const pls = planesWorld();
-    S.screws = [a - gap, b + gap].map(uu => {
+    const pw = planesWorld();
+    S.screws = pos.map(({ u: uu, v: vv }) => {
       let best = null, bs = -Infinity;
       for (let tu = -20; tu <= 20; tu += 5) for (let tv = -20; tv <= 20; tv += 5) {
-        const sc = Object.assign({ u: uu, v: 0, tiltU: tu, tiltV: tv, ok: false }, def), sv = screwScore(sc, pls);
-        if (sv > bs) { bs = sv; best = sc; }
+        const sc = Object.assign({ u: uu, v: vv, tiltU: tu, tiltV: tv, ok: false }, def), sc2 = screwScore(sc, pw);
+        if (sc2 > bs) { bs = sc2; best = sc; }
       }
       return best;
     });
+  }
+  // a painted lesion (world points) -> lesion extent, and cuts that clear it by the safety margin at the angle that
+  // removes the least bone (up to 30°, small penalty per degree so a straight cut wins a near tie)
+  function planFromLesion(pts) {
+    if (!S.anchor || !pts.length) return null;
+    const { u, v, n } = frameAxes(), A0 = S.anchor.p, L = S.lesion, w = 1.2, clear = L.margin + w / 2;
+    const rel = pts.map(q => q.clone().sub(A0)), offs = rel.map(q => q.dot(u));
+    const lo = Math.min(...offs), hi = Math.max(...offs), mid = (lo + hi) / 2;
+    L.from = Math.round(lo * 2) / 2; L.to = Math.round(hi * 2) / 2;
+    // bone near the lesion, every other voxel (enough to compare candidate cuts)
+    const r = S.red, c = A0.clone().add(u.clone().multiplyScalar(mid)), R = (hi - lo) / 2 + L.margin + 40, bone = [];
+    const ci = G.indexOf(r, [c.x, c.y, c.z]), rad = r.sp.map(sp => Math.ceil(R / sp));
+    for (let k = Math.max(0, Math.round(ci[2] - rad[2])); k <= Math.min(r.nz - 1, ci[2] + rad[2]); k += 2)
+      for (let j = Math.max(0, Math.round(ci[1] - rad[1])); j <= Math.min(r.ny - 1, ci[1] + rad[1]); j += 2)
+        for (let i = Math.max(0, Math.round(ci[0] - rad[0])); i <= Math.min(r.nx - 1, ci[0] + rad[0]); i += 2) {
+          if (!S.mask[i + r.nx * (j + r.ny * k)]) continue;
+          const q = V(...G.worldOf(r, i, j, k)); if (q.distanceTo(c) <= R) bone.push(q.sub(A0));
+        }
+    const normal = (yaw, pitch) => { const N = u.clone().applyAxisAngle(n, deg(yaw)); return N.applyAxisAngle(V().crossVectors(n, N).normalize(), deg(pitch)).normalize(); };
+    function best(side) {
+      let out = null;
+      for (let yaw = -30; yaw <= 30; yaw += 5) for (let pitch = -30; pitch <= 30; pitch += 5) {
+        const N = normal(yaw, pitch), un = N.dot(u);
+        let off = side < 0 ? Infinity : -Infinity;
+        for (const q of rel) { const x = side < 0 ? (q.dot(N) - clear) / un : (q.dot(N) + clear) / un; off = side < 0 ? Math.min(off, x) : Math.max(off, x); }
+        const d0 = off * un; let cnt = 0;
+        for (const b of bone) { const s = b.dot(N) - d0, along = b.dot(u); if (side < 0 ? s > 0 && along < mid : s < 0 && along > mid) cnt++; }
+        const cost = cnt * (1 + 0.003 * (Math.abs(yaw) + Math.abs(pitch)));
+        if (!out || cost < out.cost) out = { off: Math.round(off * 10) / 10, yaw, pitch, w, ok: false, cost };
+      }
+      delete out.cost; return out;
+    }
+    S.planes = [best(-1), best(1)];
+    placeScrews();
     unapprove(S.lesion); S.sel = null;
-    updateLesionPart(); schedule(true);
+    syncLesion(); updateLesionPart(); schedule(true);
+    return S.planes;
+  }
+  // guide centre for a painted lesion: the outer bone surface opposite the lesion centre (away from the arch / shaft centre)
+  function anchorFromLesion(pts) {
+    if (!pts.length || !parts.bone) return false;
+    const c = pts.reduce((a, b) => a.add(b), V()).multiplyScalar(1 / pts.length);
+    const box = new THREE.Box3().setFromObject(parts.bone.obj), bc = box.getCenter(V());
+    const out = c.clone().sub(bc); out.z = 0; if (out.lengthSq() < 1) out.set(0, -1, 0); out.normalize();
+    const targets = ['bone', 'resected'].filter(k => parts[k]).map(k => parts[k].obj);
+    const rc = new THREE.Raycaster(c.clone().addScaledVector(out, 120), out.clone().negate());
+    const hit = rc.intersectObjects(targets, false)[0]; if (!hit) return false;
+    const nrm = hit.face.normal.clone().transformDirection(hit.object.matrixWorld); if (nrm.dot(out) < 0) nrm.negate();
+    setAnchor(hit.point.clone(), nrm); return true;
   }
   const lFields = [['from', 'Lezyon başlangıcı', -30, 30, 0.5, 'mm'], ['to', 'Lezyon bitişi', -30, 30, 0.5, 'mm'], ['margin', 'Güvenlik payı', 0, 15, 0.5, 'mm']];
   $('lesCtl').innerHTML = lFields.map(([k, t, mn, mx, st]) => `<div class="ctl"><div class="ctl-row"><label for="l_${k}">${t}</label><output id="lo_${k}"></output></div><input type="range" id="l_${k}" min="${mn}" max="${mx}" step="${st}"></div>`).join('');
@@ -1134,6 +1198,7 @@
   $('segMode').addEventListener('change', e => { const ai = e.target.value === 'ai'; $('aiBox').hidden = !ai; $('thrBox').hidden = ai; if (!ai && S.red) segment(false); });
   $('aiRun').addEventListener('click', () => { if (S.red) segmentAI(); });
   $('suggest').addEventListener('click', suggest);
+  $('perSide').addEventListener('change', () => { if (S.anchor && S.planes.length) { placeScrews(); S.sel = null; schedule(false); } });
   let surgTimer = null;
   $('surgeon').addEventListener('input', () => { renderAppr(); clearTimeout(surgTimer); surgTimer = setTimeout(() => emit('changed'), 800); });
   $('expZip').addEventListener('click', () => exportPackage());
@@ -1366,7 +1431,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   }
   function serverUrl() { return ($('aiUrl').value || '').trim().replace(/\/+$/, ''); }
   function select(sel) { S.sel = sel; emit('select', sel); renderElements(); rebuildElementParts(S.result ? S.result.pls : [], S.result ? S.result.screwInfo : []); applyExplode(); render(); }
-  window.Studio = { caseLine, renderParts, resEnds, splitGap, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr };
+  window.Studio = { planFromLesion, anchorFromLesion, placeScrews, caseLine, renderParts, resEnds, splitGap, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr };
   bus.addEventListener('planeDragged', () => { renderElements(); schedule(true, true); });
   emit('ready');
 
