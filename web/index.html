@@ -1,0 +1,337 @@
+<title>Yolmed Guide Stüdyosu</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Full-viewport workspace: slim top bar, collapsible step panel (left), 3D stage (centre), tabbed inspector (right). */
+:root {
+  --bg: #eef0ee; --panel: #ffffff; --fg: #1c2421; --muted: #5c6964; --line: #d7dcd9; --stage: #e2e6e3; --glass: rgba(255,255,255,.88);
+  --accent: #2f6fd0; --accent-ink: #ffffff;
+  --ok: #2f7d4f; --warn: #a06200; --crit: #b3261e; --ok-bg: #e5f2ea; --warn-bg: #fbf0dc; --crit-bg: #fbe4e2;
+  --font-body: "Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --lw: 292px; --rw: 316px;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #121715; --panel: #1a201e; --fg: #e4ebe8; --muted: #9aa8a2; --line: #2c3532; --stage: #1f2725; --glass: rgba(26,32,30,.9);
+  --accent: #6aa4ff; --accent-ink: #0d1a2e; --ok: #6cc391; --warn: #e3ad55; --crit: #f08a82;
+  --ok-bg: #1d3327; --warn-bg: #362a14; --crit-bg: #3a1d1b; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #121715; --panel: #1a201e; --fg: #e4ebe8; --muted: #9aa8a2; --line: #2c3532; --stage: #1f2725; --glass: rgba(26,32,30,.9);
+  --accent: #6aa4ff; --accent-ink: #0d1a2e; --ok: #6cc391; --warn: #e3ad55; --crit: #f08a82;
+  --ok-bg: #1d3327; --warn-bg: #362a14; --crit-bg: #3a1d1b; color-scheme: dark }
+[hidden] { display: none !important; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 13px/1.45 var(--font-body); overflow: hidden; }
+.app { height: 100dvh; display: grid; grid-template-rows: auto minmax(0, 1fr); background: var(--bg); }
+
+/* top bar */
+.top { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--line); background: var(--panel); min-width: 0; }
+.brand { font-weight: 600; font-size: 14px; white-space: nowrap; }
+.brand small { font: 500 10.5px var(--font-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-right: 6px; }
+.case { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1 1 auto; }
+.pill { font: 600 10.5px var(--font-mono); letter-spacing: .04em; text-transform: uppercase; padding: 3px 8px; border-radius: 999px; white-space: nowrap; background: var(--warn-bg); color: var(--warn); }
+.pill.ok { background: var(--ok-bg); color: var(--ok); } .pill.crit { background: var(--crit-bg); color: var(--crit); }
+.ibtn { display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; }
+.ibtn svg { width: 16px; height: 16px; flex: none; }
+.ibtn[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+@media (max-width: 900px) { .ibtn .lbl, .brand small, .case { display: none; } }
+@media (max-width: 480px) { .top { gap: 5px; padding: 6px 8px; } .brand { font-size: 13px; } .hud input[type=range] { width: 110px; } .hud { gap: 5px 8px; padding: 5px 8px; } .hud label { display: none; } }
+
+/* workspace */
+.work { position: relative; display: grid; grid-template-columns: var(--lw) minmax(0, 1fr) var(--rw); min-height: 0; transition: grid-template-columns .18s ease; }
+.app.no-left .work { --lw: 0px; } .app.no-right .work { --rw: 0px; }
+.side { min-height: 0; overflow: hidden auto; background: var(--panel); scrollbar-width: thin; }
+.side.left { border-right: 1px solid var(--line); } .side.right { border-left: 1px solid var(--line); display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
+.app.no-left .side.left, .app.no-right .side.right { visibility: hidden; }
+@media (max-width: 820px) {
+  .work { grid-template-columns: minmax(0, 1fr); }
+  .side { position: absolute; top: 0; bottom: 0; z-index: 5; width: min(320px, 88vw); box-shadow: 0 6px 24px rgba(0,0,0,.18); }
+  .side.left { left: 0; } .side.right { right: 0; }
+  .stagewrap { grid-column: 1; }
+}
+
+/* step accordion */
+.step { border-bottom: 1px solid var(--line); }
+.step > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px; padding: 9px 12px; font-weight: 600; user-select: none; }
+.step > summary::-webkit-details-marker { display: none; }
+.step > summary .n { font: 500 10.5px var(--font-mono); color: var(--muted); width: 12px; }
+.step > summary .chev { margin-left: 4px; width: 12px; height: 12px; color: var(--muted); transition: transform .15s; }
+.step[open] > summary .chev { transform: rotate(90deg); }
+.step > summary .tag { margin-left: auto; }
+.step > summary:hover { background: var(--stage); }
+.body { padding: 2px 12px 12px; display: grid; gap: 8px; }
+
+/* inspector tabs */
+.tabs { display: flex; gap: 2px; padding: 6px 6px 0; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
+.tab { border: 0; border-radius: 6px 6px 0 0; background: transparent; padding: 6px 7px; color: var(--muted); white-space: nowrap; border-bottom: 2px solid transparent; }
+.tab[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--accent); }
+.tab .cnt { font: 600 10px var(--font-mono); margin-left: 4px; padding: 1px 5px; border-radius: 999px; background: var(--crit-bg); color: var(--crit); }
+.pane { overflow: auto; padding: 12px; display: grid; gap: 10px; align-content: start; scrollbar-width: thin; }
+
+/* stage */
+.stagewrap { position: relative; min-width: 0; min-height: 0; }
+.views { position: absolute; inset: 0; display: grid; gap: 2px; background: var(--line); grid-template-columns: 1fr; grid-template-rows: 1fr; }
+.views[data-mode="quad"] { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+.views[data-mode="quad"][data-max]:not([data-max=""]) { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+.cell { position: relative; min-width: 0; min-height: 0; overflow: hidden; background: var(--stage); }
+.cell.slice { background: #000; }
+.cell.slice canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: crosshair; touch-action: none; }
+.seg { display: inline-flex; } .seg button { border-radius: 0; } .seg button:first-child { border-radius: 6px 0 0 6px; } .seg button:last-child { border-radius: 0 6px 6px 0; margin-left: -1px; }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.hud select { width: auto; }
+.stage { position: absolute; inset: 0; background: var(--stage); touch-action: none; }
+.stage canvas { display: block; width: 100%; height: 100%; }
+.hud { position: absolute; left: 0; right: 0; margin: 0 auto; width: fit-content; bottom: 12px; z-index: 2; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 6px 10px; padding: 6px 10px; background: var(--glass); border: 1px solid var(--line); border-radius: 10px; backdrop-filter: blur(6px); max-width: calc(100% - 24px); }
+.hud label { white-space: nowrap; } .hud input[type=range] { width: 150px; }
+.overlay { position: absolute; left: 12px; top: 12px; z-index: 2; font: 500 12.5px var(--font-body); background: var(--accent); color: var(--accent-ink); padding: 6px 10px; border-radius: 6px; }
+.busy { position: absolute; right: 12px; top: 12px; z-index: 2; font-size: 12.5px; color: var(--muted); background: var(--panel); border: 1px solid var(--line); padding: 6px 10px; border-radius: 6px; }
+.edge { position: absolute; top: 50%; transform: translateY(-50%); z-index: 2; padding: 10px 3px; border-radius: 6px; background: var(--glass); }
+.edge.l { left: 6px; } .edge.r { right: 6px; }
+.keys { position: absolute; left: 12px; bottom: 12px; z-index: 1; font: 11px var(--font-mono); color: var(--muted); }
+@media (max-width: 1100px) { .keys { display: none; } }
+
+/* controls */
+.ctl { display: grid; gap: 1px; }
+.ctl-row { display: flex; justify-content: space-between; gap: 8px; }
+.ctl-row output { font: 500 12px var(--font-mono); font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; }
+input[type=range] { width: 100%; margin: 2px 0; accent-color: var(--accent); }
+button, select, .filebtn { font: 500 12.5px var(--font-body); color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 5px 9px; cursor: pointer; }
+button:hover, .filebtn:hover { border-color: var(--muted); }
+button:focus-visible, select:focus-visible, input:focus-visible, .filebtn:focus-within, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+button:disabled { opacity: .5; cursor: not-allowed; }
+select { width: 100%; }
+input[type=url], input[type=text] { font: 12.5px var(--font-body); color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; width: 100%; box-sizing: border-box; }
+.filebtn input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.filebtn { position: relative; display: inline-block; }
+.btns { display: flex; flex-wrap: wrap; gap: 6px; }
+.hint { font-size: 11.5px; color: var(--muted); margin: 0; }
+.lbl2 { font-size: 11.5px; color: var(--muted); }
+.err { font-size: 12px; color: var(--crit); margin: 0; }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; margin: 0; }
+.kv dt { color: var(--muted); } .kv dd { margin: 0; font: 500 12px var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; overflow-wrap: anywhere; }
+.col { display: grid; gap: 8px; min-width: 0; }
+.comp { display: flex; gap: 8px; align-items: center; }
+.comp span { margin-left: auto; font: 11.5px var(--font-mono); color: var(--muted); }
+.el-list { display: flex; flex-wrap: wrap; gap: 5px; }
+.el.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.el .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-left: 6px; background: var(--warn); vertical-align: 1px; }
+.el .dot.ok { background: var(--ok); }
+.parts { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
+.parts li { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.parts label { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.parts i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+.parts button { padding: 1px 7px; font-size: 11.5px; }
+.checks { list-style: none; margin: 0; padding: 0; display: grid; gap: 5px; }
+.checks li { font-size: 12.5px; padding: 6px 9px; border-radius: 6px; display: grid; grid-template-columns: auto 1fr; gap: 8px; align-items: baseline; }
+.checks li b { font: 600 10.5px var(--font-mono); letter-spacing: .04em; text-transform: uppercase; }
+.checks .ok { background: var(--ok-bg); } .checks .ok b { color: var(--ok); }
+.checks .warn { background: var(--warn-bg); } .checks .warn b { color: var(--warn); }
+.checks .crit { background: var(--crit-bg); } .checks .crit b { color: var(--crit); }
+.checks .info { background: var(--stage); } .checks .info b { color: var(--muted); }
+.appr { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
+.appr li .act { display: flex; gap: 4px; flex: none; } .appr li .act button { padding: 1px 7px; font-size: 11.5px; }
+.appr li .meta { min-width: 0; display: grid; } .appr li .meta small { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.appr li.cur .meta > span { font-weight: 600; }
+.appr li { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.tag { font: 600 10px var(--font-mono); letter-spacing: .04em; text-transform: uppercase; padding: 2px 6px; border-radius: 4px; white-space: nowrap; background: var(--stage); color: var(--muted); }
+.tag.ok { background: var(--ok-bg); color: var(--ok); } .tag.warn { background: var(--warn-bg); color: var(--warn); } .tag.crit { background: var(--crit-bg); color: var(--crit); }
+.tbl { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 12px; }
+th, td { text-align: right; padding: 4px 5px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+th { font-weight: 500; color: var(--muted); font-size: 11px; }
+td { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+pre { margin: 0; overflow: auto; font: 11px/1.45 var(--font-mono); background: var(--stage); padding: 10px; border-radius: 6px; }
+.note { font-size: 11.5px; color: var(--muted); border-left: 3px solid var(--warn); padding-left: 8px; margin: 0; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dicom-parser@1.8.21/dist/dicomParser.min.js"></script>
+<script src="codecs.js"></script>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-left" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M6 2.5v11"/></symbol>
+  <symbol id="i-right" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M10 2.5v11"/></symbol>
+  <symbol id="i-focus" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 5.5V2h3.5M10.5 2H14v3.5M14 10.5V14h-3.5M5.5 14H2v-3.5"/></symbol>
+  <symbol id="i-full" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 2H2v4M10 2h4v4M14 10v4h-4M2 10v4h4M2 2l4 4M14 2l-4 4M14 14l-4-4M2 14l4-4"/></symbol>
+  <symbol id="i-undo" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5.5 3 2.5 6l3 3"/><path d="M2.5 6h7a4 4 0 0 1 0 8H7"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4.5 2.5 8 6l-3.5 3.5"/></symbol>
+</svg>
+
+<div class="app" id="app">
+  <header class="top">
+    <span class="brand"><small>Yolmed</small>Guide stüdyosu</span>
+    <span class="case" id="caseTitle"></span>
+    <span class="hint" id="saveState" style="white-space:nowrap"></span>
+    <button class="ibtn" id="undo" title="Geri al (Ctrl+Z)" disabled><svg><use href="#i-undo"/></svg></button>
+    <button class="ibtn" id="redo" title="Yinele (Ctrl+Shift+Z)" disabled><svg style="transform:scaleX(-1)"><use href="#i-undo"/></svg></button>
+    <span class="pill" id="readyPill" title="Plan durumu">Hazırlanıyor</span>
+    <button class="ibtn" id="tLeft" aria-pressed="true" title="Adımlar paneli ( [ )"><svg><use href="#i-left"/></svg><span class="lbl">Adımlar</span></button>
+    <button class="ibtn" id="tRight" aria-pressed="true" title="İnceleme paneli ( ] )"><svg><use href="#i-right"/></svg><span class="lbl">İnceleme</span></button>
+    <button class="ibtn" id="tFocus" aria-pressed="false" title="Yalnız model ( F )"><svg><use href="#i-focus"/></svg><span class="lbl">Odak</span></button>
+    <button class="ibtn" id="tFull" title="Tam ekran"><svg><use href="#i-full"/></svg><span class="lbl">Tam ekran</span></button>
+  </header>
+
+  <div class="work">
+    <aside class="side left" id="leftPanel" aria-label="Adımlar">
+      <details class="step" id="stepCase">
+        <summary><span class="n">0</span>Vaka kaydı<span class="tag" id="tag0"></span><svg class="chev"><use href="#i-chev"/></svg></summary>
+        <div class="body">
+          <div class="ctl"><label for="caseName" class="lbl2">Vaka adı</label><input id="caseName" type="text" placeholder="Protokol no ya da kısa ad" autocomplete="off"></div>
+          <p class="hint">Hasta adı ve kimlik bilgisi yazmayın. Kayıtta yalnız plan tutulur, görüntü tutulmaz.</p>
+          <dl class="kv"><dt>Kayıt yeri</dt><dd id="stBackend">–</dd><dt>Durum</dt><dd id="stSave">–</dd></dl>
+          <div class="btns"><button id="caseNew">Yeni vaka</button><button id="caseRefresh">Listeyi yenile</button></div>
+          <ul class="appr" id="caseList" aria-label="Kayıtlı vakalar"></ul>
+          <div class="ctl"><label for="aiUrl" class="lbl2">Hastane sunucusu</label><input id="aiUrl" type="url" value="http://localhost:8800" spellcheck="false"></div>
+          <div class="btns"><button id="srvConnect">Bağlan</button></div>
+          <p class="hint">Sunucu; vaka kaydı, yapay zeka segmentasyonu ve üretim STL'i için kullanılır. Ulaşılamazsa kayıt bu sayfanın kendi veritabanında ya da tarayıcıda tutulur.</p>
+        </div>
+      </details>
+      <details class="step" open>
+        <summary><span class="n">1</span>Vaka verisi<span class="tag" id="tag1"></span><svg class="chev"><use href="#i-chev"/></svg></summary>
+        <div class="body">
+          <div class="btns"><button id="sampleM">Örnek: mandibula</button><button id="sampleL">Örnek: alt bacak</button></div>
+          <div class="btns">
+            <label class="filebtn">DICOM klasörü<input type="file" id="dicomDir" webkitdirectory multiple></label>
+            <label class="filebtn">DICOM dosyaları<input type="file" id="dicomFiles" multiple></label>
+          </div>
+          <p class="hint">Dosyalar tarayıcıdan çıkmaz; modele sürükleyip bırakabilirsiniz. Sıkıştırılmamış, RLE, JPEG, JPEG-LS ve JPEG 2000 BT okunur.</p>
+          <p class="err" id="caseMsg" hidden></p>
+          <dl class="kv" id="caseInfo"></dl>
+          <ul class="checks" id="qc" aria-label="Görüntü kalite kontrolü"></ul>
+        </div>
+      </details>
+
+      <details class="step">
+        <summary><span class="n">2</span>Kemik segmentasyonu<span class="tag" id="tag2"></span><svg class="chev"><use href="#i-chev"/></svg></summary>
+        <div class="body">
+          <div class="ctl"><label for="segMode" class="lbl2">Yöntem</label><select id="segMode"><option value="thr">Eşik (tarayıcıda)</option><option value="ai">Yapay zeka (hastane sunucusu)</option></select></div>
+          <div id="aiBox" class="col" hidden>
+            <div class="ctl"><label for="aiStruct" class="lbl2">Yapı</label><select id="aiStruct"><option value="mandible">Mandibula</option><option value="fibula">Fibula</option><option value="mandible,fibula">Mandibula ve fibula</option></select></div>
+            <div class="btns"><button id="aiRun">Sunucuda segmente et</button></div>
+            <p class="hint">Hacim, "Vaka kaydı" adımındaki hastane sunucusuna gider. Yayınlanmış önizleme bu sunucuya ulaşamaz.</p>
+          </div>
+          <div class="ctl" id="thrBox"><div class="ctl-row"><label for="thr">Kemik eşiği</label><output id="thrO">250 HU</output></div><input type="range" id="thr" min="120" max="800" step="10" value="250"></div>
+          <div id="comps" class="col" style="gap:3px"></div>
+        </div>
+      </details>
+
+      <details class="step">
+        <summary><span class="n">3</span>Guide yeri ve gövdesi<svg class="chev" style="margin-left:auto"><use href="#i-chev"/></svg></summary>
+        <div class="body">
+          <div class="btns"><button id="pickAnchor">Modelde yer seç</button></div>
+          <div id="gCtl" class="col"></div>
+          <div class="ctl"><label for="g_side" class="lbl2">Köprü kenarı</label><select id="g_side"><option value="1">Bir kenar (+)</option><option value="-1">Diğer kenar (−)</option></select></div>
+        </div>
+      </details>
+
+      <details class="step" open>
+        <summary><span class="n">4</span>Rezeksiyon sınırı<span class="tag" id="tag4"></span><svg class="chev"><use href="#i-chev"/></svg></summary>
+        <div class="body">
+          <div id="lesCtl" class="col"></div>
+          <div class="btns"><button class="primary" id="suggest">Kesi ve vida öner</button><button id="approveLes">Sınırı onayla</button></div>
+          <p class="hint" id="lesStatus"></p>
+        </div>
+      </details>
+
+      <details class="step" open>
+        <summary><span class="n">5</span>Kesiler ve vidalar<span class="tag" id="tag5"></span><svg class="chev"><use href="#i-chev"/></svg></summary>
+        <div class="body">
+          <div class="btns"><button id="addPlane">Kesi ekle</button><button id="addScrew">Vida ekle</button></div>
+          <div class="el-list" id="elList"></div>
+          <div id="elProps" class="col"></div>
+        </div>
+      </details>
+      <details class="step" id="stepFib">
+        <summary><span class="n">6</span>Fibula rekonstrüksiyonu<span class="tag" id="tag6" hidden></span><svg class="chev"><use href="#i-chev"/></svg></summary>
+        <div class="body">
+          <p class="hint" id="fibIntro">Mandibula kesileri arasındaki defekt fibula segmentleriyle doldurulur; segment planı ve fibula guide'ı bu planla birlikte kaydedilir.</p>
+          <div class="btns">
+            <button id="fibSample">Örnek bacak BT'si</button>
+            <label class="filebtn">Fibula DICOM klasörü<input type="file" id="fibDicom" webkitdirectory multiple></label>
+          </div>
+          <p class="hint" id="fibMsg" hidden></p>
+          <div id="fibBody" class="col" hidden>
+            <div class="ctl"><label for="fibCand" class="lbl2">Fibula</label><select id="fibCand"></select></div>
+            <div class="ctl"><span class="lbl2">Segment sayısı</span><span class="seg" id="fibN"><button data-n="1">1</button><button data-n="2">2</button><button data-n="3">3</button></span></div>
+            <div id="fibKnots" class="col"></div>
+            <div class="btns"><button id="fibOpt">Kırılma noktalarını öner</button></div>
+            <div id="fibRolls" class="col"></div>
+            <div id="fibJointBox" class="col">
+              <div class="ctl"><label for="fibJoint" class="lbl2">Eklem kesisi</label><select id="fibJoint"></select></div>
+              <div class="ctl"><div class="ctl-row"><label for="fibYaw">Eklem açısı (yan)</label><output id="fibYawO"></output></div><input type="range" id="fibYaw" min="-30" max="30" step="1"></div>
+              <div class="ctl"><div class="ctl-row"><label for="fibPitch">Eklem açısı (dik)</label><output id="fibPitchO"></output></div><input type="range" id="fibPitch" min="-30" max="30" step="1"></div>
+            </div>
+            <div class="ctl"><div class="ctl-row"><label for="fibKerf">Testere payı</label><output id="fibKerfO"></output></div><input type="range" id="fibKerf" min="0.5" max="2" step="0.1"></div>
+            <div class="ctl"><div class="ctl-row"><label for="fibDistal">Distal korunan fibula</label><output id="fibDistalO"></output></div><input type="range" id="fibDistal" min="40" max="140" step="1"></div>
+            <div class="tbl"><table><thead><tr><th>Segment</th><th>Boy</th><th>Distalden</th><th>Uç açıları</th></tr></thead><tbody id="fibRows"></tbody></table></div>
+            <dl class="kv" id="fibSum"></dl>
+            <ul class="checks" id="fibChecks"></ul>
+            <div class="btns"><button id="fibView">Fibulayı göster</button><button class="primary" id="fibApprove">Fibula planını onayla</button></div>
+            <p class="hint" id="fibStatus"></p>
+          </div>
+        </div>
+      </details>
+      <div class="body" style="padding-top:12px"><p class="note">Araştırma prototipi, klinik kullanım için değildir. Guide tarayıcıda 0,4 mm çözünürlükte üretilir.</p></div>
+    </aside>
+
+    <section class="stagewrap" aria-label="3B görünüm">
+      <div class="views" id="views" data-mode="3d">
+        <div class="cell" id="cell3d"><div class="stage" id="stage"></div></div>
+        <div class="cell slice" id="cell_ax" hidden><canvas aria-label="Aksiyel kesit"></canvas></div>
+        <div class="cell slice" id="cell_co" hidden><canvas aria-label="Koronal kesit"></canvas></div>
+        <div class="cell slice" id="cell_sa" hidden><canvas aria-label="Sagittal kesit"></canvas></div>
+      </div>
+      <div class="overlay" id="modeBadge" hidden></div>
+      <div class="busy" id="busy"><span id="busyText">Yükleniyor…</span></div>
+      <button class="edge l" id="eLeft" title="Adımlar panelini aç" hidden><svg width="12" height="12"><use href="#i-chev"/></svg></button>
+      <button class="edge r" id="eRight" title="İnceleme panelini aç" hidden><svg width="12" height="12" style="transform:scaleX(-1)"><use href="#i-chev"/></svg></button>
+      <div class="hud">
+        <span class="seg"><button id="vm3d" aria-pressed="true" title="Yalnız 3B (K)">3B</button><button id="vmQuad" aria-pressed="false" title="3B ve BT kesitleri (K)">Kesitler</button></span>
+        <span class="seg" id="sceneSeg" hidden><button id="scM" aria-pressed="true" title="Mandibula ve yerleştirilmiş greftler">Mandibula</button><button id="scF" aria-pressed="false" title="Fibula, segmentler ve fibula guide'ı">Fibula</button></span>
+        <span id="winBox" hidden><select id="win" aria-label="Pencere"><option value="bone">Kemik penceresi</option><option value="soft">Yumuşak doku</option><option value="wide">Geniş</option></select></span>
+        <label for="explode">Patlatma</label><input type="range" id="explode" min="0" max="40" step="1" value="0"><output id="explodeO" class="hint" style="white-space:nowrap;min-width:36px">0 mm</output>
+        <button id="guideOnly">Yalnız guide</button><button id="showAll">Tümü</button><button id="fit">Ortala</button>
+      </div>
+      <div class="keys">[ ] paneller · F odak · K kesitler</div>
+    </section>
+
+    <aside class="side right" id="rightPanel" aria-label="İnceleme">
+      <div class="tabs" role="tablist">
+        <button class="tab" role="tab" data-tab="pApr" aria-selected="true">Onay</button>
+        <button class="tab" role="tab" data-tab="pChk" aria-selected="false">Kontroller<span class="cnt" id="critCnt" hidden></span></button>
+        <button class="tab" role="tab" data-tab="pMes" aria-selected="false">Ölçümler</button>
+        <button class="tab" role="tab" data-tab="pPrt" aria-selected="false">Parçalar</button>
+        <button class="tab" role="tab" data-tab="pVer" aria-selected="false">Sürümler</button>
+        <button class="tab" role="tab" data-tab="pJsn" aria-selected="false">Plan</button>
+      </div>
+      <div class="pane" id="pApr" role="tabpanel">
+        <div class="ctl"><label for="surgeon" class="lbl2">Onaylayan cerrah</label><input id="surgeon" type="text" placeholder="Ad Soyad" autocomplete="off"></div>
+        <ul class="appr" id="appr"></ul>
+        <div class="btns"><button class="primary" id="expZip">Üretim paketi (.zip)</button><button id="expRep">Rapor (.html)</button></div>
+        <div class="btns"><button id="expSrv" title="Hastane sunucusunda yüzey tabanlı (Manifold) boolean ile su geçirmez STL">Üretim STL'i (sunucu)</button></div>
+        <p class="hint" id="prodMsg">Su geçirmez üretim STL'i hastane sunucusunda Manifold ile üretilir.</p>
+        <p class="hint" id="expMsg"></p>
+      </div>
+      <div class="pane" id="pChk" role="tabpanel" hidden><ul class="checks" id="checks"></ul><p class="hint">Eşikler örnek değerlerdir; klinik ekip belirler.</p></div>
+      <div class="pane" id="pMes" role="tabpanel" hidden><div id="measures" class="col" style="gap:10px"></div></div>
+      <div class="pane" id="pPrt" role="tabpanel" hidden><ul class="parts" id="parts"></ul></div>
+      <div class="pane" id="pVer" role="tabpanel" hidden>
+        <div class="ctl"><label for="verNote" class="lbl2">Sürüm notu</label><input id="verNote" type="text" placeholder="Örn. konsey sonrası kesi 2 mm distale" autocomplete="off"></div>
+        <div class="btns"><button class="primary" id="verSave">Sürüm kaydet</button></div>
+        <p class="hint" id="verMsg">Sürümler değiştirilemez. Geri yüklenen sürüm yeni taslak olur.</p>
+        <ul class="appr" id="verList"></ul>
+      </div>
+      <div class="pane" id="pJsn" role="tabpanel" hidden><pre id="json"></pre></div>
+    </aside>
+  </div>
+</div>
+<script src="config.js"></script>
+<script src="geom.js"></script>
+<script src="seat.js"></script>
+<script src="app.js"></script>
+<script src="store.js"></script>
+<script src="mpr.js"></script>
+<script src="fibula.js"></script>
+<script src="layout.js"></script>

@@ -1,0 +1,12 @@
+numpy
+scipy
+scikit-image
+SimpleITK
+pydicom
+trimesh
+manifold3d  # yolmed_server.py: üretim STL boolean
+fast-simplification
+shapely
+matplotlib
+# optional, AI segmentation backend (GPU recommended):
+# TotalSegmentator

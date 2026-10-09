@@ -1,0 +1,7 @@
+# hosted service (yolmed_server.py): studio + case store + segmentation + production STL
+numpy
+scipy
+SimpleITK
+pydicom
+trimesh
+manifold3d
