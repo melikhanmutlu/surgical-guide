@@ -5,3 +5,4 @@ SimpleITK
 pydicom
 trimesh
 manifold3d
+scikit-image

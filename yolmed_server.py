@@ -27,6 +27,8 @@ import math
 import mimetypes
 import os
 import re
+import base64 as _b64
+import hmac
 import secrets
 import sqlite3
 import threading
@@ -39,7 +41,11 @@ from scipy import ndimage as ndi
 
 import seg_server  # /health and /segment are served by seg_server.Handler, unchanged
 
-MAX_BODY = 512 * 1024 * 1024
+MAX_BODY = 256 * 1024 * 1024
+MAX_GRID = 40e6                       # guide grid cells (~2 GB peak at this size)
+GUIDE_SLOTS = threading.BoundedSemaphore(int(os.environ.get("YOLMED_GUIDE_JOBS", "1")))
+# access password (HTTP Basic). Unset = open, for local use only; set YOLMED_PASSWORD on any shared host.
+PASSWORD = os.environ.get("YOLMED_PASSWORD") or None
 
 
 class HttpError(Exception):
@@ -220,6 +226,12 @@ def _weld(verts, tris, eps=1e-4):
     return verts[used], inv.reshape(-1, 3), len(pairs)
 
 
+def _check_ranges(vals):
+    for k, (v, lo, hi) in vals.items():
+        if not (math.isfinite(v) and lo <= v <= hi):
+            raise HttpError(400, f"{k} must be within [{lo}, {hi}] (got {v})")
+
+
 def build_guide(req):
     import manifold3d as m3d
     import trimesh
@@ -242,6 +254,15 @@ def build_guide(req):
     L, W = float(g["L"]), float(g["W"])
     wrap, wall, clear = float(g["wrap"]), float(g["wall"]), float(g["clear"])
     bridge, side = float(g["bridge"]), (1.0 if float(g.get("side", 1)) >= 0 else -1.0)
+    _check_ranges({"L": (L, 5, 200), "W": (W, 3, 100), "wrap": (wrap, 0, 40), "wall": (wall, 0.5, 10), "clear": (clear, 0, 3), "bridge": (bridge, 0, 30)})
+    for pl in req.get("planes") or []:
+        _check_ranges({"plane w": (float(pl["w"]), 0.1, 10)})
+    for s_ in req.get("screws") or []:
+        _check_ranges({"screw d": (float(s_["d"]), 0.5, 10), "screw D": (float(s_["D"]), float(s_["d"]), 15), "sleeveH": (float(s_["sleeveH"]), 0, 30)})
+    if req.get("gap"):
+        _check_ranges({"flange": (float(req["gap"].get("flange", 3.0)), 0, 20)})
+    if min(nx, ny, nz) < 2 or len(sp) != 3 or not np.all(np.isfinite(sp)) or np.any(sp <= 0):
+        raise HttpError(400, "invalid crop grid")
     cw = clear + wall
     bridge_lo, bridge_hi = cw - 0.5, cw + 2.5
 
@@ -286,7 +307,7 @@ def build_guide(req):
     # exactly on the (usually round-numbered) box / slot / sleeve faces -> no coincident vertices
     glo, ghi = lo - pad - r * 0.41421356, hi + pad
     shape = tuple(int(math.ceil(x)) + 1 for x in (ghi - glo) / r)
-    if np.prod(shape) > 80e6:
+    if np.prod(shape) > MAX_GRID:
         raise HttpError(422, f"guide grid too large ({shape}); increase resolution value")
 
     # resample the filled bone mask onto the frame-aligned isotropic grid (output index -> crop k, j, i)
@@ -425,7 +446,12 @@ class Handler(seg_server.Handler):
         self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
 
     def _body(self):
-        n = int(self.headers.get("Content-Length") or 0)
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            raise HttpError(400, "bad Content-Length")
+        if n < 0:
+            raise HttpError(400, "bad Content-Length")
         if n > MAX_BODY:
             raise HttpError(413, "request too large")
         try:
@@ -472,10 +498,14 @@ class Handler(seg_server.Handler):
                 raise HttpError(405, "method not allowed")
             if path == "/guide" and method == "POST":
                 b = self._body()
+                if not GUIDE_SLOTS.acquire(timeout=120):
+                    raise HttpError(503, "guide service busy, try again")
                 try:
                     return self._json(200, build_guide(b))
                 except (KeyError, TypeError, ValueError, IndexError) as e:
                     raise HttpError(400, f"bad guide request: {type(e).__name__}: {e}")
+                finally:
+                    GUIDE_SLOTS.release()
             raise HttpError(404, f"not found: {path}")
         except HttpError as e:
             return self._json(e.code, {"error": e.msg})
@@ -506,10 +536,30 @@ class Handler(seg_server.Handler):
         self.send_header("Cache-Control", "no-cache")
         self.end_headers(); self.wfile.write(body)
 
+    def _authorized(self):
+        if not PASSWORD:
+            return True
+        h = self.headers.get("Authorization") or ""
+        if h.startswith("Basic "):
+            try:
+                pw = _b64.b64decode(h[6:]).decode("utf-8").split(":", 1)[1]
+            except Exception:
+                pw = ""
+            if hmac.compare_digest(pw.encode("utf-8"), PASSWORD.encode("utf-8")):
+                return True
+        body = b'{"error": "authentication required"}'
+        self.send_response(401)
+        self.send_header("WWW-Authenticate", 'Basic realm="Yolmed", charset="UTF-8"')
+        self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(body)))
+        self.end_headers(); self.wfile.write(body)
+        return False
+
     def do_GET(self):
         path = urlparse(self.path).path
         if path == "/health":
             return super().do_GET()
+        if not self._authorized():
+            return
         if self.web_root and not (path.startswith("/cases") or path in ("/guide", "/segment")):
             try:
                 return self._static(path)
@@ -518,11 +568,15 @@ class Handler(seg_server.Handler):
         return self._dispatch("GET")
 
     def do_POST(self):
+        if not self._authorized():
+            return
         if urlparse(self.path).path == "/segment":
             return super().do_POST()
         return self._dispatch("POST")
 
     def do_PUT(self):
+        if not self._authorized():
+            return
         return self._dispatch("PUT")
 
 
@@ -545,5 +599,5 @@ if __name__ == "__main__":
     if os.path.dirname(a.db):
         os.makedirs(os.path.dirname(a.db), exist_ok=True)
     srv = make_server(a.host, a.port, a.db, a.backend, a.web)
-    print(f"yolmed service ({a.backend}, db={a.db}) on http://{a.host}:{a.port}")
+    print(f"yolmed service ({a.backend}, db={a.db}) on http://{a.host}:{a.port}" + ("" if PASSWORD else "  [WARNING: no YOLMED_PASSWORD set, open to anyone who can reach it]"))
     srv.serve_forever()
