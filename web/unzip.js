@@ -72,7 +72,7 @@ window.Unzip = (function () {
         const file = new File([blob], base), rel = root + '/' + en.name;
         Object.defineProperty(file, 'relPath', { value: rel });
         if (isZipName(base)) await walk(file, root + '/' + en.name.slice(0, -base.length), depth + 1); else out.push(file);
-        if (onProgress && i % 50 === 0) await onProgress(i, list.length, f.name);
+        if (onProgress) await onProgress(i, list.length, f.name);
       }
     }
     for (const f of files) await walk(f, '', 0);

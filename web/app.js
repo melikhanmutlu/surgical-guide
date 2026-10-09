@@ -12,10 +12,23 @@
   let busyTick = null, busyCancelFn = null;
   const busy = (on, text, opt = {}) => {
     $('busy').hidden = !on; if (text) $('busyText').textContent = text;
-    $('busyBar').hidden = !(on && opt.bar); $('busyCancel').hidden = !(on && opt.cancel); busyCancelFn = on ? opt.cancel || null : null;
+    $('busyBar').hidden = !(on && opt.bar); $('busyBar').classList.remove('det'); $('busyBar').firstElementChild.style.width = ''; $('busyCancel').hidden = !(on && opt.cancel); busyCancelFn = on ? opt.cancel || null : null;
     clearInterval(busyTick);
     if (on && opt.bar) { const t0 = Date.now(); busyTick = setInterval(() => { $('busyText').textContent = `${text} ${Math.round((Date.now() - t0) / 1000)} sn${opt.max ? ' / en çok ' + opt.max + ' sn' : ''}`; }, 1000); }
   };
+  // determinate bar for file loading: percentage and, once the rate is known, the time left
+  const etaText = s => s < 60 ? `${Math.max(1, Math.round(s))} sn` : `${Math.floor(s / 60)} dk ${Math.round(s % 60)} sn`;
+  function progress() {
+    const t0 = performance.now(); let last = -1e9;
+    clearInterval(busyTick); $('busy').hidden = false; $('busyBar').hidden = false; $('busyBar').classList.add('det'); $('busyCancel').hidden = true;
+    return async (f, text) => {
+      const now = performance.now(); if (now - last < 120 && f < 1) return; last = now;
+      f = Math.max(0, Math.min(1, f)); const el = (now - t0) / 1000, eta = f > 0.03 && el > 0.8 && f < 1 ? el * (1 - f) / f : null;
+      $('busyBar').firstElementChild.style.width = (f * 100).toFixed(1) + '%';
+      $('busyText').textContent = `${text} %${Math.floor(f * 100)}${eta !== null ? ` · yaklaşık ${etaText(eta)} kaldı` : ''}`;
+      await sleep();
+    };
+  }
   $('busyCancel').addEventListener('click', () => { if (busyCancelFn) busyCancelFn(); });
 
   // served by yolmed_server (config.js): the same origin is the case store, segmentation and STL service
@@ -130,15 +143,17 @@
   async function readDicom(files) {
     if (!window.dicomParser) return { error: 'DICOM okuyucu yüklenemedi.' };
     const zipName = files.length === 1 && /\.zip$/i.test(files[0].name) ? files[0].name.replace(/\.zip$/i, '') : null;
-    if (window.Unzip) {
+    // one bar across the stages: unzip (if any) 30 %, reading the files, then decoding the chosen series
+    const prog = progress(), hasZip = window.Unzip && (await Promise.all(files.slice(0, 50).map(f => Unzip.isZip(f).catch(() => false)))).some(Boolean);
+    const zw = hasZip ? 0.3 : 0, pw = (1 - zw) * 0.55, dw = 1 - zw - pw;
+    await prog(0, 'Dosyalar okunuyor…');
+    if (hasZip) {
       try {
-        busy(true, 'Zip açılıyor…'); await sleep();
-        const x = await Unzip.expand(files, async (i, n, name) => { busy(true, `${name}: ${i}/${n} dosya açıldı…`); await sleep(); });
+        const x = await Unzip.expand(files, (i, n) => prog(zw * i / n, `Zip açılıyor (${i}/${n})…`));
         files = x.files;
       } catch (e) { return { error: 'Zip açılamadı: ' + e.message }; }
     }
     if (!files.length) return { error: 'Dosya bulunamadı.' };
-    busy(true, `${files.length} dosya okunuyor…`);
     const slices = [], unsup = {}; let skipped = 0, multi = 0;
     for (const f of files) {
       try {
@@ -153,7 +168,7 @@
         if (ipp.length !== 3 || iop.length !== 6) { skipped++; continue; }
         slices.push({ ds, ipp, iop, series: ds.string('x0020000e') || '', sop: dstr(ds, 'x00080018'), path: f.relPath || f.webkitRelativePath || f.name });
       } catch (e) { skipped++; }
-      if (slices.length % 40 === 0) await sleep();
+      await prog(zw + pw * (slices.length + skipped + multi) / files.length, `DICOM okunuyor (${slices.length + skipped} / ${files.length})…`);
     }
     if (!slices.length) { const u = Object.keys(unsup); return { error: u.length ? `Bu aktarım sözdizimi desteklenmiyor: ${u.map(t => window.DicomCodecs ? DicomCodecs.name(t) : t).join(', ')}.` : multi ? 'Çok çerçeveli (enhanced) DICOM henüz desteklenmiyor; seriyi tek kesitli dosyalar olarak dışa aktarın.' : 'Görüntü içeren DICOM bulunamadı.' }; }
     const bySeries = {}; slices.forEach(s => (bySeries[s.series] = bySeries[s.series] || []).push(s));
@@ -166,7 +181,7 @@
       if (want) for (const g of groups) { const d = g[0].ds; if (await sha256(`${g[0].series}|${d.uint16('x00280011')}x${d.uint16('x00280010')}x${g.length}`) === want) { hit = g; break; } }
       ser = hit || await pickSeries(groups);
       if (!ser) return { error: 'Seri seçilmedi.' };
-      busy(true, `${ser.length} kesit hazırlanıyor…`); await sleep();
+      $('busy').hidden = false;
     }
     const r = V(...ser[0].iop.slice(0, 3)), c = V(...ser[0].iop.slice(3)), nrm = V().crossVectors(r, c);
     ser.sort((a, b) => V(...a.ipp).dot(nrm) - V(...b.ipp).dot(nrm));
@@ -185,7 +200,7 @@
     const fp = await sha256(`${ser[0].series}|${cols}x${rows}x${ser.length}`);
     const source = { type: 'dicom', name: (ds0.string('x0008103e') || 'DICOM').trim(), fp, slices: ser.length };
     const hu = new Int16Array(rows * cols * ser.length), ts0 = (ds0.string('x00020010') || '1.2.840.10008.1.2.1').replace(/\0/g, '').trim();
-    if (window.DicomCodecs && !/^1\.2\.840\.10008\.1\.2(\.1|\.2|\.1\.99)?$/.test(ts0)) busy(true, `${DicomCodecs.name(ts0)} açılıyor…`);
+    const what = window.DicomCodecs && !/^1\.2\.840\.10008\.1\.2(\.1|\.2|\.1\.99)?$/.test(ts0) ? `${DicomCodecs.name(ts0)} açılıyor` : 'Kesitler hazırlanıyor';
     for (let k = 0; k < ser.length; k++) {
       const ds = ser[k].ds, el = ds.elements.x7fe00010, signed = ds.uint16('x00280103') === 1;
       const slope = parseFloat(ds.string('x00281053') || '1'), icpt = parseFloat(ds.string('x00281052') || '0');
@@ -199,7 +214,7 @@
         px = signed ? new Int16Array(buf) : new Uint16Array(buf);
       }
       for (let i = 0; i < rows * cols; i++) hu[k * rows * cols + i] = Math.max(-1024, Math.min(32000, px[i] * slope + icpt));
-      if (k % 20 === 19) await sleep();
+      await prog(zw + pw + dw * (k + 1) / ser.length, `${what} (${k + 1} / ${ser.length})…`);
     }
     return { source, vol: { hu, nx: cols, ny: rows, nz: ser.length, sp: [ps[1], ps[0], dz], origin: ser[0].ipp,
       axes: [[r.x, r.y, r.z], [c.x, c.y, c.z], [nrm.x, nrm.y, nrm.z]], meta }, label: `${zipName || ((ser[0].path || '').includes('/') ? ser[0].path.split('/')[0] : 'DICOM')}${groups.length > 1 && source.name ? ' · ' + source.name : ''} · ${ser.length} kesit${skipped ? `, ${skipped} dosya atlandı` : ''}` };
