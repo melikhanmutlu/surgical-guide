@@ -41,13 +41,30 @@
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   stage.appendChild(renderer.domElement);
   const scene = new THREE.Scene();
-  scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8f8c, 0.7));
+  const hemi = new THREE.HemisphereLight(0xffffff, 0x5c6166, 0.5); scene.add(hemi);
   const camera = new THREE.PerspectiveCamera(35, 1, 1, 5000); camera.up.set(0, 0, 1);
-  const key = new THREE.DirectionalLight(0xffffff, 0.85); key.position.set(0.3, -0.4, 1); camera.add(key); scene.add(camera);
+  // head light from the viewer's upper left plus a weak fill from the right, so surfaces keep their shape without washing out
+  const key = new THREE.DirectionalLight(0xffffff, 0.55); key.position.set(-0.35, 0.45, 1); camera.add(key);
+  const fill = new THREE.DirectionalLight(0xffffff, 0.15); fill.position.set(1, -0.2, 0.4); camera.add(fill); scene.add(camera);
   const controls = new THREE.OrbitControls(camera, renderer.domElement);
   // optional second camera (fibula side, layer 1) for the side-by-side view, driven from the right half of the stage
   const camF = new THREE.PerspectiveCamera(35, 1, 1, 5000); camF.up.set(0, 0, 1); camF.layers.set(1);
-  const keyF = key.clone(); camF.add(keyF); scene.add(camF);
+  const keyF = key.clone(), fillF = fill.clone(); camF.add(keyF, fillF); scene.add(camF);
+  // lighting: a preset (how much comes from the head light vs all around) times a brightness, kept per viewer
+  const LIGHT = { balanced: [0.4, 0.48, 0.12], soft: [0.5, 0.3, 0.1], contrast: [0.26, 0.68, 0.1] };
+  const lightStore = { get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} } };
+  let light = { preset: LIGHT[lightStore.get('gs.light')] ? lightStore.get('gs.light') : 'balanced', k: +(lightStore.get('gs.lightK') || 1) };
+  if (!(light.k >= 0.4 && light.k <= 1.6)) light.k = 1;
+  function applyLight() {
+    const [h, k, f] = LIGHT[light.preset];
+    hemi.intensity = h * light.k; key.intensity = keyF.intensity = k * light.k; fill.intensity = fillF.intensity = f * light.k;
+    lightStore.set('gs.light', light.preset); lightStore.set('gs.lightK', String(light.k));
+    if ($('lightK')) { $('lightK').value = light.k; $('lightKO').textContent = `%${Math.round(light.k * 100)}`; $('lightP').value = light.preset; }
+  }
+  $('lightP').addEventListener('change', e => { light.preset = e.target.value; applyLight(); render(); });
+  $('lightK').addEventListener('input', e => { light.k = +e.target.value; applyLight(); render(); });
+  $('lightReset').addEventListener('click', () => { light = { preset: 'balanced', k: 1 }; applyLight(); render(); });
+  applyLight();
   const ctlF = new THREE.OrbitControls(camF, $('splitPane'));
   function render() {
     const w = stage.clientWidth, h = stage.clientHeight;
@@ -74,7 +91,7 @@
   }
   controls.addEventListener('change', render); ctlF.addEventListener('change', render);
   new ResizeObserver(resize).observe(stage);
-  const mat = (color, extra = {}) => new THREE.MeshStandardMaterial(Object.assign({ color, roughness: 0.6, metalness: 0, side: THREE.DoubleSide }, extra));
+  const mat = (color, extra = {}) => new THREE.MeshStandardMaterial(Object.assign({ color, roughness: 0.72, metalness: 0, side: THREE.DoubleSide }, extra));
 
   // scene parts (each can be shown, hidden, isolated, exploded)
   const parts = {};

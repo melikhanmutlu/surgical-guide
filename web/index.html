@@ -617,6 +617,9 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
     <dl class="kv"><dt>Kayıt yeri</dt><dd id="stBackend">–</dd><dt>Durum</dt><dd id="stSave">–</dd><dt>Sunucu</dt><dd id="stConn">–</dd></dl>
     <p class="hint">Yayındaki sitede vakalar, yapay zeka segmentasyonu ve üretim STL'i sitenin kendi sunucusunu kullanır. Önizlemede kayıt bu sayfanın veritabanında ya da tarayıcıda tutulur.</p>
     <h3 class="sub">Görünüm</h3>
+    <div class="ctl"><label for="lightP" class="lbl2">Işık</label><select id="lightP"><option value="balanced">Dengeli</option><option value="soft">Yumuşak</option><option value="contrast">Kontrastlı</option></select></div>
+    <div class="ctl"><div class="ctl-row"><label for="lightK">Işık şiddeti</label><output id="lightKO">%100</output></div><input type="range" id="lightK" min="0.4" max="1.6" step="0.05" value="1"></div>
+    <div class="btns"><button type="button" id="lightReset">Varsayılana dön</button></div>
     <label class="switch"><input type="checkbox" id="devMode"><span>Geliştirici modu (plan JSON sekmesi)</span></label>
   </form>
 </dialog>
