@@ -19,7 +19,7 @@
       return r.json();
     };
     return {
-      label: 'Hastane sunucusu',
+      label: 'Sunucu',
       list: () => req('GET', '/cases'),
       create: m => req('POST', '/cases', m),
       get: id => req('GET', `/cases/${id}`),
@@ -286,7 +286,6 @@
     backend = await pickBackend();
     renderCaseHead(); refreshList(); loadVersions(); setSave(caseId ? 'Bağlandı' : 'Kaydedilmedi');
   }
-  $('srvConnect').addEventListener('click', async () => { await flush().catch(() => {}); caseId = null; await connect(); });
 
   // ---------- start: pick a backend, then reopen the last case once the first volume is in ----------
   let firstVolume = new Promise(res => St.bus.addEventListener('volume', res, { once: true }));

@@ -106,7 +106,6 @@ window.UI = (function () {
   // ---------- dialogs: settings, shortcuts ----------
   const openDlg = id => { const d = $(id); if (d.open) return; d.showModal ? d.showModal() : d.setAttribute('open', ''); };
   $('tSettings').addEventListener('click', () => openDlg('dlgSet'));
-  $('tConn').addEventListener('click', () => openDlg('dlgSet'));
   $('tHelp').addEventListener('click', () => openDlg('dlgHelp'));
   const setDev = on => { $('devMode').checked = on; document.querySelectorAll('.tab.dev').forEach(t => { t.hidden = !on; }); if (!on && !$('pJsn').hidden && window.Layout) Layout.openTab('pChk'); store.set('gs.dev', on ? '1' : '0'); };
   $('devMode').addEventListener('change', e => setDev(e.target.checked));
@@ -114,16 +113,14 @@ window.UI = (function () {
 
   // ---------- server connection light ----------
   async function ping() {
-    const url = St.serverUrl(), dot = $('connDot');
-    if (!url) { dot.className = 'conn'; $('stConn').textContent = 'tanımlı değil'; return; }
+    const url = St.serverUrl();
+    if (!url) { $('stConn').textContent = 'yok (önizleme)'; return; }
     try {
       const ac = new AbortController(), t = setTimeout(() => ac.abort(), 2500);
       const r = await fetch(url + '/health', { signal: ac.signal }); clearTimeout(t);
-      const ok = r.ok; dot.className = 'conn ' + (ok ? 'ok' : 'off');
-      $('stConn').textContent = ok ? 'bağlı' : `yanıt ${r.status}`; $('tConn').title = ok ? `Hastane sunucusu bağlı (${url})` : 'Hastane sunucusu yanıt vermiyor';
-    } catch (e) { dot.className = 'conn off'; $('stConn').textContent = 'ulaşılamıyor'; $('tConn').title = `Hastane sunucusuna ulaşılamıyor (${url})`; }
+      $('stConn').textContent = r.ok ? 'bağlı' : `yanıt ${r.status}`;
+    } catch (e) { $('stConn').textContent = 'ulaşılamıyor'; }
   }
-  $('srvConnect').addEventListener('click', ping);
   ping(); setInterval(ping, 30000);
 
   // ---------- keyboard ----------

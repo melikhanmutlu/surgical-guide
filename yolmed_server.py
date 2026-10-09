@@ -27,8 +27,6 @@ import math
 import mimetypes
 import os
 import re
-import base64 as _b64
-import hmac
 import secrets
 import sqlite3
 import threading
@@ -44,8 +42,6 @@ import seg_server  # /health and /segment are served by seg_server.Handler, unch
 MAX_BODY = 256 * 1024 * 1024
 MAX_GRID = 40e6                       # guide grid cells (~2 GB peak at this size)
 GUIDE_SLOTS = threading.BoundedSemaphore(int(os.environ.get("YOLMED_GUIDE_JOBS", "1")))
-# access password (HTTP Basic). Unset = open, for local use only; set YOLMED_PASSWORD on any shared host.
-PASSWORD = os.environ.get("YOLMED_PASSWORD") or None
 
 
 class HttpError(Exception):
@@ -536,30 +532,10 @@ class Handler(seg_server.Handler):
         self.send_header("Cache-Control", "no-cache")
         self.end_headers(); self.wfile.write(body)
 
-    def _authorized(self):
-        if not PASSWORD:
-            return True
-        h = self.headers.get("Authorization") or ""
-        if h.startswith("Basic "):
-            try:
-                pw = _b64.b64decode(h[6:]).decode("utf-8").split(":", 1)[1]
-            except Exception:
-                pw = ""
-            if hmac.compare_digest(pw.encode("utf-8"), PASSWORD.encode("utf-8")):
-                return True
-        body = b'{"error": "authentication required"}'
-        self.send_response(401)
-        self.send_header("WWW-Authenticate", 'Basic realm="Yolmed", charset="UTF-8"')
-        self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(body)))
-        self.end_headers(); self.wfile.write(body)
-        return False
-
     def do_GET(self):
         path = urlparse(self.path).path
         if path == "/health":
             return super().do_GET()
-        if not self._authorized():
-            return
         if self.web_root and not (path.startswith("/cases") or path in ("/guide", "/segment")):
             try:
                 return self._static(path)
@@ -568,15 +544,11 @@ class Handler(seg_server.Handler):
         return self._dispatch("GET")
 
     def do_POST(self):
-        if not self._authorized():
-            return
         if urlparse(self.path).path == "/segment":
             return super().do_POST()
         return self._dispatch("POST")
 
     def do_PUT(self):
-        if not self._authorized():
-            return
         return self._dispatch("PUT")
 
 
@@ -599,5 +571,5 @@ if __name__ == "__main__":
     if os.path.dirname(a.db):
         os.makedirs(os.path.dirname(a.db), exist_ok=True)
     srv = make_server(a.host, a.port, a.db, a.backend, a.web)
-    print(f"yolmed service ({a.backend}, db={a.db}) on http://{a.host}:{a.port}" + ("" if PASSWORD else "  [WARNING: no YOLMED_PASSWORD set, open to anyone who can reach it]"))
+    print(f"yolmed service ({a.backend}, db={a.db}) on http://{a.host}:{a.port}")
     srv.serve_forever()

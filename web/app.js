@@ -306,6 +306,7 @@
   }
   async function segmentAI() {
     const r = S.red, url = serverUrl();
+    if (!url) { alertMsg('Bu işlem sunucu gerektirir; yayındaki sitede (sguide.up.railway.app) çalışır.'); return; }
     const ac = new AbortController();
     busy(true, 'Segmentasyon sunucusunda çalışıyor…', { bar: true, cancel: () => ac.abort() });
     try {
@@ -1218,11 +1219,12 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     };
   }
   async function serverGuide(c, outer) {
-    const url = serverUrl(), ac = new AbortController(), to = setTimeout(() => ac.abort(), 180000);
+    const url = serverUrl(); if (!url) throw new Error('Bu işlem sunucu gerektirir; yayındaki sitede (sguide.up.railway.app) çalışır. Pakette önizleme STL\'i vardır.');
+    const ac = new AbortController(), to = setTimeout(() => ac.abort(), 180000);
     if (outer) outer.addEventListener('abort', () => ac.abort());
     let res;
     try { res = await fetch(url + '/guide', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(guideRequest(c)), signal: ac.signal }); }
-    catch (e) { if (outer && outer.aborted) throw new Error('Üretim STL\'i iptal edildi.'); throw new Error(`Sunucuya ulaşılamadı (${url}). Üretim STL'i hastane sunucusu çalışırken alınır; pakette önizleme STL'i vardır.`); }
+    catch (e) { if (outer && outer.aborted) throw new Error('Üretim STL\'i iptal edildi.'); throw new Error(`Sunucuya ulaşılamadı. Pakette önizleme STL'i vardır.`); }
     finally { clearTimeout(to); }
     const js = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(`Sunucu hatası: ${js.error || res.status}`);

@@ -79,7 +79,7 @@ run_pipeline.py         uçtan uca komut
 - Perforatör damar konumu plana girmiyor (BTA'dan damar segmentasyonu eklenmeli).
 - Guide'lar yarım kabuk; diş/alveol üzerine oturma, kenar yuvarlatma ve baskı toleransı ayarı yok.
 
-## Guide stüdyosu ve hastane sunucusu (web/ + yolmed_server.py)
+## Guide stüdyosu ve sunucu (web/ + yolmed_server.py)
 
 - `web/`: tarayıcı stüdyosu (statik dosyalar; herhangi bir web sunucusundan açılır). Vaka kaydı, sürüm geçmişi,
   geri alma, aksiyel/koronal/sagittal kesitler, oturma analizi, sıkıştırılmış DICOM (codecs.js), fibula akışı (fibula.js).
@@ -98,5 +98,4 @@ Depo Dockerfile ile tek servis olarak çalışır: stüdyo `/` adresinde, vaka k
    (volume olmadan her yeniden yayında silinir).
 3. **Settings → Networking → Generate Domain** ile adres alın.
 
-Not: Sunucu kimlik doğrulaması içermez; adresi bilen herkes vakaları görebilir. Gerçek hasta verisi
-(özellikle `/segment`'e giden BT hacmi) için KVKK kapsamında hastane içi kurulum ya da erişim kısıtlaması gerekir.
+Not: Sunucu kimlik doğrulaması içermez; adresi bilen herkes kayıtlı vakaları görebilir. Şimdilik örnek dosyalarla çalışmak için tasarlandı.

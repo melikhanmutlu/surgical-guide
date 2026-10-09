@@ -184,19 +184,6 @@ def main():
         assert list(map(bool, got)) == [False, True, True], got
         print(f"split guide OK: bodies {r2['bodies']}, volume {r2['volume_mm3']:.1f} mm3")
         st, r = J(call(base, "POST", "/guide", {"crop": crop})); assert st == 400 and "error" in r
-        # ---- access password
-        yolmed_server.PASSWORD = "s3cret"
-        try:
-            assert call(base, "GET", "/health")[0] == 200
-            st, h, _ = call(base, "GET", "/cases"); assert st == 401 and "Basic" in h["WWW-Authenticate"]
-            assert call(base, "POST", "/guide", {"crop": crop})[0] == 401
-            bad = "Basic " + base64.b64encode(b"x:wrong").decode()
-            assert call(base, "GET", "/cases", headers={"Authorization": bad})[0] == 401
-            ok = "Basic " + base64.b64encode(b"x:s3cret").decode()
-            assert call(base, "GET", "/cases", headers={"Authorization": ok})[0] == 200
-        finally:
-            yolmed_server.PASSWORD = None
-        print("auth OK")
     finally:
         srv.shutdown(); srv.server_close()
         os.remove(db)
