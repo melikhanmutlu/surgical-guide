@@ -210,7 +210,7 @@ window.Fibula = (function () {
     St.applyExplode(); St.render();
   }
   function setView(v) {
-    view = v; St.camera.layers.set(v === 'f' ? 1 : 0);
+    view = v; St.camera.layers.set(v === 'f' ? 1 : 0); if (St.syncGizmo) St.syncGizmo();
     $('scM').setAttribute('aria-pressed', v === 'm'); $('scF').setAttribute('aria-pressed', v === 'f');
     $('fibView').textContent = v === 'f' ? 'Mandibulayı göster' : 'Fibulayı göster';
     if (v === 'f' && F && F.c) {

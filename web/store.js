@@ -82,7 +82,9 @@
 
   // ---------- state ----------
   let backend = null, caseId = null, caseName = '', lastJSON = null, userAt = -1e9, snapTimer = null, saveTimer = null, pendingSave = null;
-  const H = { list: [], idx: -1 };
+  let autosave = true, dirty = false;
+  try { autosave = localStorage.getItem('yolmed.autosave') !== '0'; } catch (e) {}
+  const H = { list: [], idx: -1 };   // entries: {plan, label, at, cp}
   ['pointerdown', 'keydown', 'input', 'change'].forEach(t => document.addEventListener(t, e => { if (e.isTrusted) userAt = performance.now(); }, true));
   const setSave = (text, cls) => { $('saveState').textContent = text; $('stSave').textContent = text; $('saveState').style.color = cls === 'err' ? 'var(--crit)' : ''; };
   function renderCaseHead() {
@@ -91,30 +93,78 @@
     const t = $('tag0'); t.className = 'tag ' + (caseId ? 'ok' : 'warn'); t.textContent = caseId ? 'Kayıtlı' : 'Kayıtsız';
     $('stBackend').textContent = backend ? backend.label : '–';
   }
-  function updUndo() { $('undo').disabled = H.idx <= 0; $('redo').disabled = H.idx >= H.list.length - 1; }
+  function updUndo() { $('undo').disabled = H.idx <= 0; $('redo').disabled = H.idx >= H.list.length - 1; renderHist(); }
   const remember = () => { try { localStorage.setItem('yolmed.lastCase', JSON.stringify({ backend: backend.label, id: caseId })); } catch (e) {} };
 
-  // ---------- history (undo / redo) ----------
-  function baseline() { const p = St.planOf(); lastJSON = JSON.stringify(p); H.list = [p]; H.idx = 0; updUndo(); }
-  function snapshot() {
+  // ---------- history (undo / redo, one labelled entry per edit) ----------
+  const NAMES = {
+    p: { off: 'konum', yaw: 'yatay açı', pitch: 'dikey açı', w: 'yuva genişliği' },
+    s: { u: 'konum', v: 'yanal konum', tiltU: 'eğim', tiltV: 'yanal eğim', d: 'matkap çapı', D: 'kovan çapı', sleeveH: 'kovan yüksekliği', len: 'vida boyu' },
+    g: { rot: 'guide dönüşü', L: 'guide uzunluğu', W: 'guide genişliği', wrap: 'sarma derinliği', wall: 'duvar kalınlığı', clear: 'oturma aralığı', bridge: 'köprü genişliği', side: 'köprü tarafı' },
+    l: { from: 'lezyon başlangıcı', to: 'lezyon bitişi', margin: 'güvenlik payı' },
+  };
+  const num = (x, k) => St.fmt(x, Number.isInteger(x) && !/off|from|to|u$|v$/.test(k) ? 0 : 1);
+  function diffObj(a, b, names, prefix, out) {
+    const ch = Object.keys(names).filter(k => a[k] !== b[k]);
+    ch.forEach(k => out.push(`${prefix}${prefix ? ' ' : ''}${names[k]} ${num(a[k], k)} → ${num(b[k], k)}`));
+    if (!ch.length && !!a.ok !== !!b.ok) out.push(`${prefix || 'Rezeksiyon sınırı'} ${b.ok ? 'onaylandı' : 'onayı kaldırıldı'}`);
+  }
+  function describe(a, b) {
+    if (!a || !b) return 'Başlangıç';
+    const out = [], J = JSON.stringify;
+    if (J(a.source) !== J(b.source)) return 'Vaka verisi yüklendi';
+    if (J(a.seg) !== J(b.seg)) out.push('Segmentasyon değişti');
+    if (J(a.anchor) !== J(b.anchor)) out.push(a.anchor ? 'Guide merkezi taşındı' : 'Guide merkezi seçildi');
+    const list = (A, B, kind, word) => {
+      if (A.length !== B.length) { out.push(B.length > A.length ? `${word} eklendi` : `${word} silindi`); return; }
+      A.forEach((x, i) => diffObj(x, B[i], NAMES[kind], `${word} ${i + 1}`, out));
+    };
+    const capital = t => t.charAt(0).toUpperCase() + t.slice(1);
+    const before = out.length;
+    if (J(a.planes) !== J(b.planes) && J(a.screws) !== J(b.screws)) out.push('Kesi ve vida önerisi uygulandı');
+    else { list(a.planes || [], b.planes || [], 'p', 'Kesi'); list(a.screws || [], b.screws || [], 's', 'Vida'); }
+    diffObj(a.g || {}, b.g || {}, NAMES.g, '', out);
+    diffObj(a.lesion || {}, b.lesion || {}, NAMES.l, '', out);
+    if (J(a.fibula) !== J(b.fibula)) out.push(!a.fibula ? 'Fibula planı başlatıldı' : !b.fibula ? 'Fibula planı kaldırıldı' : a.fibula.ok !== b.fibula.ok && b.fibula.ok !== undefined ? (b.fibula.ok ? 'Fibula planı onaylandı' : 'Fibula onayı kaldırıldı') : 'Fibula planı değişti');
+    if (a.surgeon !== b.surgeon) out.push('Onaylayan cerrah adı');
+    if (out.length === before && out.length === 0) return 'Değişiklik';
+    const t = out.map(capital);
+    return t.length > 2 ? `${t[0]} · ${t[1]} +${t.length - 2}` : t.join(' · ');
+  }
+  const entry = (plan, label) => ({ plan, label, at: Date.now() });
+  function baseline(label) { const p = St.planOf(); lastJSON = JSON.stringify(p); H.list = [entry(p, label || 'Başlangıç')]; H.idx = 0; updUndo(); }
+  function snapshot(label, forceUser) {
     if (S.restoring || !S.red) return;
     const plan = St.planOf(), js = JSON.stringify(plan);
     if (js === lastJSON) return;
-    const user = performance.now() - userAt < 5000;
+    const user = forceUser || performance.now() - userAt < 5000;
     lastJSON = js;
-    if (H.idx < 0) { H.list = [plan]; H.idx = 0; }
-    else if (!user) H.list[H.idx] = plan;          // derived update (preset, async recompute): not an undo step
-    else { H.list = H.list.slice(0, H.idx + 1); H.list.push(plan); if (H.list.length > 150) H.list.shift(); H.idx = H.list.length - 1; }
+    if (H.idx < 0) { H.list = [entry(plan, 'Başlangıç')]; H.idx = 0; }
+    else if (!user) H.list[H.idx].plan = plan;     // derived update (preset, async recompute): not an undo step
+    else {
+      const e = entry(plan, label || describe(H.list[H.idx].plan, plan));
+      H.list = H.list.slice(0, H.idx + 1); H.list.push(e); if (H.list.length > 150) H.list.shift(); H.idx = H.list.length - 1;
+    }
     updUndo();
-    if (caseId || (user && H.list.length > 1)) queueSave(plan);
+    if (caseId || (user && H.list.length > 1)) changedPlan(plan);
   }
-  async function step(d) {
-    const i = H.idx + d; if (i < 0 || i >= H.list.length || S.restoring) return;
+  async function goTo(i) {
+    if (i < 0 || i >= H.list.length || i === H.idx || S.restoring) return;
     H.idx = i; updUndo();
-    await St.applyPlan(H.list[i]);
+    await St.applyPlan(H.list[i].plan);
     lastJSON = JSON.stringify(St.planOf());
-    if (caseId) queueSave(H.list[i]);
+    if (caseId) changedPlan(H.list[i].plan);
   }
+  const step = d => goTo(H.idx + d);
+  const ago = t => { const s = (Date.now() - t) / 1000; return s < 50 ? 'şimdi' : s < 3600 ? `${Math.round(s / 60)} dk önce` : new Date(t).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }); };
+  function renderHist() {
+    const ul = $('histList'); if (!ul) return;
+    const rows = H.list.map((e, i) => ({ e, i })).reverse();
+    ul.innerHTML = rows.map(({ e, i }) => `<li class="${i === H.idx ? 'cur' : i > H.idx ? 'fut' : ''}"><button data-h="${i}" ${i === H.idx ? 'aria-current="step"' : ''} title="${i === H.idx ? 'Şu anki durum' : 'Bu adıma dön'}"><span class="n">${i}</span><span class="lb">${esc(e.label)}${e.cp ? `<em class="cp">${esc(e.cp)}</em>` : ''}</span><small>${i === H.idx ? 'şu an' : ago(e.at)}</small></button></li>`).join('') || '<li class="hint">Henüz işlem yok.</li>';
+    ul.querySelectorAll('[data-h]').forEach(b => b.addEventListener('click', () => goTo(+b.dataset.h)));
+    $('histCnt').textContent = H.list.length > 1 ? `${H.idx} / ${H.list.length - 1}` : '';
+  }
+  setInterval(() => { if (!$('pVer').hidden) renderHist(); }, 30000);
   St.bus.addEventListener('changed', () => { if (S.restoring) return; clearTimeout(snapTimer); snapTimer = setTimeout(snapshot, 300); });
   St.bus.addEventListener('volume', e => {
     if (e.detail && e.detail.restoring) return;
@@ -127,7 +177,8 @@
   document.addEventListener('keydown', e => {
     if (!(e.ctrlKey || e.metaKey) || /INPUT|TEXTAREA/.test(document.activeElement.tagName) && document.activeElement.type !== 'range') return;
     const k = e.key.toLowerCase();
-    if (k === 'z' && !e.shiftKey) { step(-1); e.preventDefault(); }
+    if (k === 's') { saveNow(); e.preventDefault(); }
+    else if (k === 'z' && !e.shiftKey) { step(-1); e.preventDefault(); }
     else if ((k === 'z' && e.shiftKey) || k === 'y') { step(1); e.preventDefault(); }
   });
 
@@ -140,6 +191,22 @@
     caseId = r.id; remember(); renderCaseHead(); refreshList();
     return caseId;
   }
+  function changedPlan(plan) {
+    if (autosave) { queueSave(plan); return; }
+    dirty = true; setSave('Kaydedilmemiş değişiklik');
+  }
+  async function saveNow() {
+    if (!backend) return;
+    try { await ensureCase(); clearTimeout(saveTimer); pendingSave = null; const r = await backend.saveDraft(caseId, St.planOf()); dirty = false; setSave('Kaydedildi ' + when(r.updated_at || nowISO()).split(' ').pop()); }
+    catch (e) { setSave('Kaydedilemedi', 'err'); St.alertMsg('Plan kaydedilemedi: ' + e.message); }
+  }
+  function setAutosave(on) {
+    autosave = on; $('autoSave').checked = on; $('saveNow').hidden = on;
+    try { localStorage.setItem('yolmed.autosave', on ? '1' : '0'); } catch (e) {}
+    if (on && dirty) { dirty = false; queueSave(St.planOf()); }
+  }
+  $('autoSave').addEventListener('change', e => setAutosave(e.target.checked));
+  $('saveNow').addEventListener('click', saveNow);
   function queueSave(plan) {
     if (!backend) return;
     pendingSave = plan; setSave('Kaydediliyor…');
@@ -175,37 +242,38 @@
       if (!plan) { St.busy(false); setSave('Boş vaka'); return; }
       const ok = await St.openPlan(plan);
       St.busy(false);
-      if (ok) { baseline(); setSave('Açıldı'); } else { awaitingDicom = true; setSave('DICOM bekleniyor'); }
+      if (ok) { baseline('Vaka açıldı'); setSave('Açıldı'); } else { awaitingDicom = true; setSave('DICOM bekleniyor'); }
     } catch (e) { St.busy(false); St.alertMsg('Vaka açılamadı: ' + e.message); }
   }
   let awaitingDicom = false;
-  St.bus.addEventListener('planApplied', () => { if (awaitingDicom) { awaitingDicom = false; baseline(); setSave('Açıldı'); } });
+  St.bus.addEventListener('planApplied', () => { if (awaitingDicom) { awaitingDicom = false; baseline('Vaka açıldı'); setSave('Açıldı'); } });
 
   // ---------- versions ----------
   function renderVersions(vs) {
-    $('verList').innerHTML = vs.map(v => `<li><span class="meta"><span>S${v.n}${v.note ? ' · ' + esc(v.note) : ''}</span><small>${esc(v.author || '–')} · ${when(v.created_at)}</small></span><span class="act"><button data-v="${v.n}">Yükle</button></span></li>`).join('') || (caseId ? '<li class="hint">Henüz sürüm yok.</li>' : '');
+    $('verList').innerHTML = vs.map(v => `<li><span class="meta"><span>S${v.n}${v.note ? ' · ' + esc(v.note) : ''}</span><small>${esc(v.author || '–')} · ${when(v.created_at)}</small></span><span class="act"><button data-v="${v.n}">Yükle</button></span></li>`).join('') || (caseId ? '<li class="hint">Henüz checkpoint yok.</li>' : '');
     $('verList').querySelectorAll('[data-v]').forEach(b => b.addEventListener('click', () => restoreVersion(+b.dataset.v)));
   }
-  async function loadVersions() { if (!caseId) { renderVersions([]); return; } try { renderVersions(await backend.versions(caseId)); } catch (e) { $('verMsg').textContent = 'Sürümler alınamadı: ' + e.message; } }
+  async function loadVersions() { if (!caseId) { renderVersions([]); return; } try { renderVersions(await backend.versions(caseId)); } catch (e) { $('verMsg').textContent = 'Checkpoint\'ler alınamadı: ' + e.message; } }
   async function saveVersion(note) {
     try {
       await ensureCase(); await flush();
       const plan = St.planOf(), r = await backend.addVersion(caseId, { plan, note: note || '', author: plan.surgeon || '' });
-      $('verMsg').textContent = `S${r.n} kaydedildi.`; $('verNote').value = '';
+      $('verMsg').textContent = `Checkpoint S${r.n} oluşturuldu.`; $('verNote').value = ''; dirty = false;
+      if (H.idx >= 0) { H.list[H.idx].cp = `S${r.n}${note ? ' · ' + note : ''}`; renderHist(); }
       loadVersions(); refreshList();
-    } catch (e) { $('verMsg').textContent = 'Sürüm kaydedilemedi: ' + e.message; }
+    } catch (e) { $('verMsg').textContent = 'Checkpoint oluşturulamadı: ' + e.message; }
   }
   async function restoreVersion(n) {
     try {
       const v = await backend.getVersion(caseId, n);
       const ok = await St.openPlan(v.plan);
       if (!ok) return;
-      lastJSON = null; snapshot(); queueSave(St.planOf());
-      $('verMsg').textContent = `S${n} geri yüklendi ve taslak oldu. Geri almak için Ctrl+Z.`;
-    } catch (e) { $('verMsg').textContent = 'Sürüm yüklenemedi: ' + e.message; }
+      lastJSON = null; snapshot(`Checkpoint S${n}${v.note ? ' · ' + v.note : ''} yüklendi`, true); changedPlan(St.planOf());
+      $('verMsg').textContent = `S${n} yüklendi ve taslak oldu. Geri almak için Ctrl+Z.`;
+    } catch (e) { $('verMsg').textContent = 'Checkpoint yüklenemedi: ' + e.message; }
   }
   $('verSave').addEventListener('click', () => saveVersion($('verNote').value.trim()));
-  $('caseNew').addEventListener('click', async () => { await flush(); caseId = null; caseName = ''; $('caseName').value = ''; renderCaseHead(); renderVersions([]); baseline(); setSave('Yeni vaka; ilk değişiklikte kaydedilir'); markCurrent(); });
+  $('caseNew').addEventListener('click', async () => { await flush(); caseId = null; caseName = ''; $('caseName').value = ''; renderCaseHead(); renderVersions([]); baseline(); setSave(autosave ? 'Yeni vaka; ilk değişiklikte kaydedilir' : 'Yeni vaka'); markCurrent(); });
   $('caseRefresh').addEventListener('click', refreshList);
   async function connect() {
     setSave('Bağlanıyor…');
@@ -216,6 +284,7 @@
 
   // ---------- start: pick a backend, then reopen the last case once the first volume is in ----------
   let firstVolume = new Promise(res => St.bus.addEventListener('volume', res, { once: true }));
+  setAutosave(autosave);
   (async () => {
     renderCaseHead(); setSave('Bağlanıyor…');
     backend = await pickBackend();
@@ -227,5 +296,9 @@
     if (last && last.id && last.backend === backend.label) await openCase(last.id);
     else baseline();
   })();
-  window.addEventListener('beforeunload', () => { if (pendingSave) { try { flush(); } catch (e) {} } });
+  window.addEventListener('beforeunload', e => {
+    if (pendingSave) { try { flush(); } catch (err) {} }
+    if (dirty) { e.preventDefault(); e.returnValue = ''; }
+  });
+  window.CaseStore = { history: H, goTo, describe, saveNow, setAutosave, saveVersion };
 })();

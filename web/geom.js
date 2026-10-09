@@ -115,56 +115,79 @@ const G = (() => {
 
   // separable [1 2 1]/4 blur of a 0/1 mask -> Float32 field
   function blur(mask, nx, ny, nz) {
+    // separable [1 2 1]/4 along x, y, z (edges clamp)
     let a = Float32Array.from(mask), b = new Float32Array(a.length);
-    const strides = [1, nx, nx * ny], dims = [nx, ny, nz];
-    for (let ax = 0; ax < 3; ax++) {
-      const s = strides[ax], n = dims[ax];
-      for (let i = 0; i < a.length; i++) {
-        const c = ax === 0 ? i % nx : ax === 1 ? ((i / nx) | 0) % ny : (i / (nx * ny)) | 0;
-        const l = c > 0 ? a[i - s] : a[i], r = c < n - 1 ? a[i + s] : a[i];
-        b[i] = 0.25 * l + 0.5 * a[i] + 0.25 * r;
-      }
-      [a, b] = [b, a];
+    const nxy = nx * ny;
+    for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) {
+      const r = nx * (j + ny * k);
+      for (let i = 0; i < nx; i++) { const v = r + i; b[v] = 0.25 * a[i > 0 ? v - 1 : v] + 0.5 * a[v] + 0.25 * a[i < nx - 1 ? v + 1 : v]; }
     }
-    return a;
+    [a, b] = [b, a];
+    for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) {
+      const r = nx * (j + ny * k), lo = j > 0 ? -nx : 0, hi = j < ny - 1 ? nx : 0;
+      for (let i = 0; i < nx; i++) { const v = r + i; b[v] = 0.25 * a[v + lo] + 0.5 * a[v] + 0.25 * a[v + hi]; }
+    }
+    [a, b] = [b, a];
+    for (let k = 0; k < nz; k++) {
+      const lo = k > 0 ? -nxy : 0, hi = k < nz - 1 ? nxy : 0, r = nxy * k;
+      for (let v = r; v < r + nxy; v++) b[v] = 0.25 * a[v + lo] + 0.5 * a[v] + 0.25 * a[v + hi];
+    }
+    return b;
   }
 
   // ---------- surface nets ----------
   // field (nx*ny*nz), inside = field > level. Returns {positions: Float32Array (grid coords), indices: Uint32Array}
-  function surfaceNets(field, nx, ny, nz, level = 0.5) {
-    const vid = new Int32Array(nx * ny * nz).fill(-1), pos = [], idx = [];
+  // box = [i0, j0, k0, i1, j1, k1] limits the cells looked at (inclusive voxel range); default the whole grid
+  function surfaceNets(field, nx, ny, nz, level = 0.5, box) {
     const nxy = nx * ny;
+    const i0 = box ? Math.max(0, box[0]) : 0, j0 = box ? Math.max(0, box[1]) : 0, k0 = box ? Math.max(0, box[2]) : 0;
+    const i1 = box ? Math.min(nx - 1, box[3]) : nx - 1, j1 = box ? Math.min(ny - 1, box[4]) : ny - 1, k1 = box ? Math.min(nz - 1, box[5]) : nz - 1;
+    const vid = new Int32Array(nx * ny * nz);   // vertex index + 1 (0 = none)
+    let pos = new Float32Array(1 << 16), np = 0, idx = new Uint32Array(1 << 17), ni = 0;
+    const off = [0, 1, nx, nx + 1, nxy, nxy + 1, nxy + nx, nxy + nx + 1];
     const corner = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0], [0, 0, 1], [1, 0, 1], [0, 1, 1], [1, 1, 1]];
     const edges = [[0, 1], [2, 3], [4, 5], [6, 7], [0, 2], [1, 3], [4, 6], [5, 7], [0, 4], [1, 5], [2, 6], [3, 7]];
     const val = new Float32Array(8);
-    for (let k = 0; k < nz - 1; k++) for (let j = 0; j < ny - 1; j++) for (let i = 0; i < nx - 1; i++) {
-      let mask = 0;
-      for (let c = 0; c < 8; c++) {
-        const q = corner[c]; val[c] = field[(i + q[0]) + nx * ((j + q[1]) + ny * (k + q[2]))] - level;
-        if (val[c] > 0) mask |= 1 << c;
+    for (let k = k0; k < k1; k++) for (let j = j0; j < j1; j++) {
+      const r = nx * (j + ny * k);
+      for (let i = i0; i < i1; i++) {
+        const v0 = r + i;
+        let mask = 0;
+        for (let c = 0; c < 8; c++) { const x = field[v0 + off[c]] - level; val[c] = x; if (x > 0) mask |= 1 << c; }
+        if (mask === 0 || mask === 255) continue;
+        let sx = 0, sy = 0, sz = 0, n = 0;
+        for (let e = 0; e < 12; e++) {
+          const a = edges[e][0], b = edges[e][1];
+          if ((val[a] > 0) === (val[b] > 0)) continue;
+          const t = val[a] / (val[a] - val[b]), A = corner[a], B = corner[b];
+          sx += A[0] + t * (B[0] - A[0]); sy += A[1] + t * (B[1] - A[1]); sz += A[2] + t * (B[2] - A[2]); n++;
+        }
+        if (np + 3 > pos.length) { const q = new Float32Array(pos.length * 2); q.set(pos); pos = q; }
+        vid[v0] = np / 3 + 1;
+        pos[np++] = i + sx / n; pos[np++] = j + sy / n; pos[np++] = k + sz / n;
       }
-      if (mask === 0 || mask === 255) continue;
-      let sx = 0, sy = 0, sz = 0, n = 0;
-      for (const [a, b] of edges) {
-        if ((val[a] > 0) === (val[b] > 0)) continue;
-        const t = val[a] / (val[a] - val[b]), A = corner[a], B = corner[b];
-        sx += A[0] + t * (B[0] - A[0]); sy += A[1] + t * (B[1] - A[1]); sz += A[2] + t * (B[2] - A[2]); n++;
+    }
+    const quad = (a, b, c, d, flip) => {
+      if (!a || !b || !c || !d) return;
+      if (ni + 6 > idx.length) { const q = new Uint32Array(idx.length * 2); q.set(idx); idx = q; }
+      a--; b--; c--; d--;
+      if (flip) { idx[ni++] = a; idx[ni++] = d; idx[ni++] = c; idx[ni++] = a; idx[ni++] = c; idx[ni++] = b; }
+      else { idx[ni++] = a; idx[ni++] = b; idx[ni++] = c; idx[ni++] = a; idx[ni++] = c; idx[ni++] = d; }
+    };
+    for (let k = k0; k < k1; k++) for (let j = j0; j < j1; j++) {
+      const r = nx * (j + ny * k);
+      for (let i = i0; i < i1; i++) {
+        const v0 = r + i, here = field[v0] > level;
+        // edge along +x from (i,j,k): shared by cubes (i, j-1..j, k-1..k)
+        if (j > j0 && k > k0 && here !== (field[v0 + 1] > level))
+          quad(vid[v0], vid[v0 - nx], vid[v0 - nx - nxy], vid[v0 - nxy], !here);
+        if (i > i0 && k > k0 && here !== (field[v0 + nx] > level))
+          quad(vid[v0], vid[v0 - nxy], vid[v0 - 1 - nxy], vid[v0 - 1], !here);
+        if (i > i0 && j > j0 && here !== (field[v0 + nxy] > level))
+          quad(vid[v0], vid[v0 - 1], vid[v0 - 1 - nx], vid[v0 - nx], !here);
       }
-      vid[i + nx * (j + ny * k)] = pos.length / 3;
-      pos.push(i + sx / n, j + sy / n, k + sz / n);
     }
-    const quad = (a, b, c, d, flip) => { if (a < 0 || b < 0 || c < 0 || d < 0) return; if (flip) idx.push(a, d, c, a, c, b); else idx.push(a, b, c, a, c, d); };
-    for (let k = 0; k < nz - 1; k++) for (let j = 0; j < ny - 1; j++) for (let i = 0; i < nx - 1; i++) {
-      const v0 = i + nx * (j + ny * k), here = field[v0] > level;
-      // edge along +x from (i,j,k): shared by cubes (i, j-1..j, k-1..k)
-      if (j > 0 && k > 0 && here !== (field[v0 + 1] > level))
-        quad(vid[v0], vid[v0 - nx], vid[v0 - nx - nxy], vid[v0 - nxy], !here);
-      if (i > 0 && k > 0 && here !== (field[v0 + nx] > level))
-        quad(vid[v0], vid[v0 - nxy], vid[v0 - 1 - nxy], vid[v0 - 1], !here);
-      if (i > 0 && j > 0 && here !== (field[v0 + nxy] > level))
-        quad(vid[v0], vid[v0 - 1], vid[v0 - 1 - nx], vid[v0 - nx], !here);
-    }
-    return { positions: new Float32Array(pos), indices: new Uint32Array(idx) };
+    return { positions: pos.slice(0, np), indices: idx.slice(0, ni) };
   }
 
   return { worldOf, indexOf, reduce, threshold, components, exterior, edt, blur, surfaceNets };

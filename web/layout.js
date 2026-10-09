@@ -47,6 +47,14 @@
     e.preventDefault();
   });
 
+  // ---------- theme: follows the system until the viewer picks one ----------
+  const root = document.documentElement, dark = matchMedia('(prefers-color-scheme: dark)');
+  const savedTheme = store.get('gs.theme'); if (savedTheme === 'light' || savedTheme === 'dark') root.dataset.theme = savedTheme;
+  const isDark = () => (root.dataset.theme ? root.dataset.theme === 'dark' : dark.matches);
+  const syncTheme = () => { $('tTheme').title = isDark() ? 'Aydınlık temaya geç' : 'Koyu temaya geç'; $('tTheme').setAttribute('aria-label', $('tTheme').title); window.dispatchEvent(new Event('themechange')); };
+  $('tTheme').addEventListener('click', () => { root.dataset.theme = isDark() ? 'light' : 'dark'; store.set('gs.theme', root.dataset.theme); syncTheme(); });
+  dark.addEventListener('change', syncTheme); syncTheme();
+
   // ---------- inspector tabs ----------
   const tabs = [...document.querySelectorAll('.tab')];
   function openTab(id) {

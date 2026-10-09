@@ -125,7 +125,7 @@
         v.lines = v.lines || []; v.lines.push({ i, L });
       });
       // screws: path projected (dashed), solid where it passes through this slice, ring at the crossing
-      (S.result ? S.result.screwInfo : []).forEach((si, i) => {
+      (S.liveScrews || (S.result ? S.result.screwInfo : [])).forEach((si, i) => {
         if (!si.ok) return;
         const e = toIdx([si.s.entry.x, si.s.entry.y, si.s.entry.z]), tip = si.s.entry.clone().add(si.s.dir.clone().multiplyScalar(si.s.sc.len)), t2 = toIdx([tip.x, tip.y, tip.z]);
         const A = idxToImg(v, e), B = idxToImg(v, t2), a = v.axis, s = st.cur[a];
@@ -246,6 +246,7 @@
     const d = dims(); setCursor(S.anchor ? toIdx([S.anchor.p.x, S.anchor.p.y, S.anchor.p.z]) : d.map(x => (x - 1) / 2));
   });
   St.bus.addEventListener('parts', () => { if (S.anchor && !st.placed) { st.placed = true; jumpTo(S.anchor.p); } redraw(); });
+  St.bus.addEventListener('preview', redraw);
   St.bus.addEventListener('planApplied', () => { st.cache.clear(); if (S.anchor) jumpTo(S.anchor.p); });
   St.bus.addEventListener('select', e => {
     const sel = e.detail; if (!sel || !S.anchor || st.drag) return;

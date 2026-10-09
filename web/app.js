@@ -37,7 +37,7 @@
     parts[id] = { id, label, obj, color, visible: prev ? prev.visible : true, base: obj.position.clone() };
     obj.visible = parts[id].visible; scene.add(obj);
   }
-  function disposeObj(o) { o.traverse(c => { if (c.geometry) c.geometry.dispose(); if (c.material) c.material.dispose(); }); }
+  function disposeObj(o) { o.traverse(c => { if (c.geometry && !c.geometry.userData.shared) c.geometry.dispose(); if (c.material) c.material.dispose(); }); }
 
   function meshFromNets(net, toWorld, material) {
     const p = net.positions, w = new Float32Array(p.length);
@@ -247,33 +247,68 @@
   const toWorldRed = (x, y, z) => G.worldOf(S.red, x, y, z);
 
   // ---------- resected bone (between first and last plane, connected piece at the anchor) ----------
-  async function rebuildResection() {
-    const r = S.red;
-    let boneMask = S.mask, resMask = null;
+  // blur only inside box (+2 voxels of context) and write it into dst; the separable blur reaches 1 voxel per axis
+  function blurInto(dst, mask, r, box) {
+    const [i0, j0, k0, i1, j1, k1] = [Math.max(0, box[0] - 2), Math.max(0, box[1] - 2), Math.max(0, box[2] - 2), Math.min(r.nx - 1, box[3] + 2), Math.min(r.ny - 1, box[4] + 2), Math.min(r.nz - 1, box[5] + 2)];
+    const sx = i1 - i0 + 1, sy = j1 - j0 + 1, sz = k1 - k0 + 1, sub = new Uint8Array(sx * sy * sz);
+    for (let k = 0; k < sz; k++) for (let j = 0; j < sy; j++) { const a = sx * (j + sy * k), b = i0 + r.nx * (j + j0 + r.ny * (k + k0)); for (let i = 0; i < sx; i++) sub[a + i] = mask[b + i]; }
+    const f = G.blur(sub, sx, sy, sz);
+    // keep the outermost layer from the full-volume field (the crop clamps its edges)
+    for (let k = 1; k < sz - 1; k++) for (let j = 1; j < sy - 1; j++) { const a = sx * (j + sy * k), b = i0 + r.nx * (j + j0 + r.ny * (k + k0)); for (let i = 1; i < sx - 1; i++) dst[b + i] = f[a + i]; }
+  }
+  let fullBone = null;
+  async function rebuildResection(opts = {}) {
+    const r = S.red, nxy = r.nx * r.ny;
+    let resMask = null, box = null, best = null;
     if (S.anchor && S.planes.length >= 2) {
       const pl = planesWorld().sort((a, b) => a.off - b.off), A = pl[0], B = pl[pl.length - 1];
-      const cand = new Uint8Array(S.mask.length), R2 = 70 * 70, ap = S.anchor.p;
-      for (let k = 0; k < r.nz; k++) for (let j = 0; j < r.ny; j++) for (let i = 0; i < r.nx; i++) {
+      const R = 70, ap = S.anchor.p, c = G.indexOf(r, [ap.x, ap.y, ap.z]);
+      const rad = r.sp.map(s => Math.ceil(R / s));
+      const lo = c.map((x, a) => Math.max(0, Math.floor(x - rad[a]))), hi = c.map((x, a) => Math.min([r.nx, r.ny, r.nz][a] - 1, Math.ceil(x + rad[a])));
+      const cand = new Uint8Array(S.mask.length), ax = r.axes, sp = r.sp, o = r.origin;
+      const aT = A.w / 2 + A.N.dot(A.p), bT = -B.w / 2 + B.N.dot(B.p);
+      for (let k = lo[2]; k <= hi[2]; k++) for (let j = lo[1]; j <= hi[1]; j++) for (let i = lo[0]; i <= hi[0]; i++) {
         const v = i + r.nx * (j + r.ny * k); if (!S.mask[v]) continue;
-        const w = G.worldOf(r, i, j, k), q = V(...w);
-        if (q.distanceToSquared(ap) > R2) continue;
-        if (q.clone().sub(A.p).dot(A.N) > A.w / 2 && q.clone().sub(B.p).dot(B.N) < -B.w / 2) cand[v] = 1;
+        const x = o[0] + ax[0][0] * i * sp[0] + ax[1][0] * j * sp[1] + ax[2][0] * k * sp[2];
+        const y = o[1] + ax[0][1] * i * sp[0] + ax[1][1] * j * sp[1] + ax[2][1] * k * sp[2];
+        const z = o[2] + ax[0][2] * i * sp[0] + ax[1][2] * j * sp[1] + ax[2][2] * k * sp[2];
+        if ((x - ap.x) ** 2 + (y - ap.y) ** 2 + (z - ap.z) ** 2 > R * R) continue;
+        if (x * A.N.x + y * A.N.y + z * A.N.z > aT && x * B.N.x + y * B.N.y + z * B.N.z < bT) cand[v] = 1;
       }
       const { labels, comps } = G.components(cand, r.nx, r.ny, r.nz, 1);
       if (comps.length) {
         // the piece nearest the anchor
-        let best = comps[0], bd = Infinity;
-        comps.forEach(c => { const d = V(...G.worldOf(r, ...c.centroid)).distanceTo(ap); if (d < bd) { bd = d; best = c; } });
-        resMask = new Uint8Array(cand.length); boneMask = S.mask.slice();
-        for (let v = 0; v < cand.length; v++) if (labels[v] === best.label) { resMask[v] = 1; boneMask[v] = 0; }
+        let bd = Infinity;
+        comps.forEach(cm => { const d = V(...G.worldOf(r, ...cm.centroid)).distanceTo(ap); if (d < bd) { bd = d; best = cm; } });
+        resMask = new Uint8Array(cand.length); box = [Infinity, Infinity, Infinity, -1, -1, -1];
+        for (let v = 0; v < cand.length; v++) if (labels[v] === best.label) {
+          resMask[v] = 1; const i = v % r.nx, j = ((v / r.nx) | 0) % r.ny, k = (v / nxy) | 0;
+          if (i < box[0]) box[0] = i; if (j < box[1]) box[1] = j; if (k < box[2]) box[2] = k; if (i > box[3]) box[3] = i; if (j > box[4]) box[4] = j; if (k > box[5]) box[5] = k;
+        }
       }
     }
-    const field = boneMask === S.mask ? S.maskF : G.blur(boneMask, r.nx, r.ny, r.nz);
-    setPart('bone', 'Kemik (kalan)', meshFromNets(G.surfaceNets(field, r.nx, r.ny, r.nz), toWorldRed, mat(COLORS.bone)), COLORS.bone);
-    if (resMask) setPart('resected', 'Rezeke edilecek parça', meshFromNets(G.surfaceNets(G.blur(resMask, r.nx, r.ny, r.nz), r.nx, r.ny, r.nz), toWorldRed, mat(COLORS.resected)), COLORS.resected);
-    else setPart('resected', null, null);
+    // the remaining bone's field differs from the full one only around the resected piece
+    let field = S.maskF;
+    if (resMask && !opts.live) {
+      const boneMask = S.mask.slice(); for (let v = 0; v < boneMask.length; v++) if (resMask[v]) boneMask[v] = 0;
+      field = S.maskF.slice(); blurInto(field, boneMask, r, box);
+    }
+    if (opts.live) {
+      // while dragging: the whole bone (meshed once) with the resected piece drawn over it
+      if (!fullBone || fullBone.F !== S.maskF) {
+        if (fullBone) { fullBone.geo.userData.shared = false; fullBone.geo.dispose(); }
+        const geo = meshFromNets(G.surfaceNets(S.maskF, r.nx, r.ny, r.nz), toWorldRed, null).geometry; geo.userData.shared = true;
+        fullBone = { F: S.maskF, geo };
+      }
+      if (!parts.bone || parts.bone.obj.geometry !== fullBone.geo) setPart('bone', 'Kemik (kalan)', new THREE.Mesh(fullBone.geo, mat(COLORS.bone)), COLORS.bone);
+    } else setPart('bone', 'Kemik (kalan)', meshFromNets(G.surfaceNets(field, r.nx, r.ny, r.nz), toWorldRed, mat(COLORS.bone)), COLORS.bone);
+    if (resMask) {
+      const rf = new Float32Array(resMask.length); blurInto(rf, resMask, r, box);
+      const bb = [box[0] - 2, box[1] - 2, box[2] - 2, box[3] + 2, box[4] + 2, box[5] + 2];
+      setPart('resected', 'Rezeke edilecek parça', meshFromNets(G.surfaceNets(rf, r.nx, r.ny, r.nz, 0.5, bb), toWorldRed, mat(COLORS.resected, { polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 })), COLORS.resected);
+    } else setPart('resected', null, null);
     S.resMask = resMask;
-    S.resectedVolume = resMask ? resMask.reduce((a, b) => a + b, 0) * r.sp[0] * r.sp[1] * r.sp[2] : 0;
+    S.resectedVolume = best ? best.size * r.sp[0] * r.sp[1] * r.sp[2] : 0;
   }
 
   // ---------- anchor frame ----------
@@ -396,7 +431,7 @@
   // generic voxel guide builder: ctx = { P, u, v, n, g, pls:[{p,N,w}], scs:[{sc,dir,entry}], bone(q) -> bool }
   async function buildGuide(ctx) {
     const t0 = performance.now();
-    const { g, P, u, v, n, pls, scs } = ctx, boneAt = ctx.bone, h = 0.4;
+    const { g, P, u, v, n, pls, scs } = ctx, boneAt = ctx.bone, h = ctx.h || 0.4, T = {};
     const maxSleeve = Math.max(0, ...scs.map(s => s.sc.sleeveH));
     const lo = [-g.L / 2 - 4, -g.W / 2 - 4, -Math.max(g.wrap + 10, 30)], hi = [g.L / 2 + 4, g.W / 2 + 4, g.clear + g.wall + Math.max(maxSleeve, g.bridge) + 6];
     const nx = Math.ceil((hi[0] - lo[0]) / h) + 1, ny = Math.ceil((hi[1] - lo[1]) / h) + 1, nz = Math.ceil((hi[2] - lo[2]) / h) + 1, N = nx * ny * nz;
@@ -405,8 +440,8 @@
     // bone in the local grid
     const B = new Uint8Array(N);
     for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) if (boneAt(world(i, j, k))) B[i + nx * (j + ny * k)] = 1;
-    await sleep();
-    const O = G.exterior(B, nx, ny, nz), D = G.edt(B, nx, ny, nz);
+    T.bone = performance.now() - t0; await sleep();
+    const O = G.exterior(B, nx, ny, nz), D = G.edt(B, nx, ny, nz); T.edt = performance.now() - t0;
     await sleep();
     const c = g.clear, w = g.wall, Gm = new Uint8Array(N);
     let undercutCols = 0, contact = 0;
@@ -435,7 +470,9 @@
       if (!s.entry) { screwInfo.push({ s, ok: false }); continue; }
       const out = s.dir.clone().negate(), R = s.sc.D / 2, r = s.sc.d / 2, top = c + w + s.sc.sleeveH;
       const e0 = s.entry.clone().sub(P), el = [e0.dot(u), e0.dot(v), e0.dot(n)], ol = [out.dot(u), out.dot(v), out.dot(n)];
-      for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      // only the grid cells within R of the drill axis (the hole runs through the whole grid)
+      const rng = [0, 1, 2].map(a => { const p1 = el[a] - ol[a] * 400, p2 = el[a] + ol[a] * 400; return [Math.max(0, Math.floor((Math.min(p1, p2) - R - lo[a]) / h) - 1), Math.min([nx, ny, nz][a] - 1, Math.ceil((Math.max(p1, p2) + R - lo[a]) / h) + 1)]; });
+      for (let k = rng[2][0]; k <= rng[2][1]; k++) for (let j = rng[1][0]; j <= rng[1][1]; j++) for (let i = rng[0][0]; i <= rng[0][1]; i++) {
         const qa = lo[0] + i * h - el[0], qb = lo[1] + j * h - el[1], qc = lo[2] + k * h - el[2];
         const t = qa * ol[0] + qb * ol[1] + qc * ol[2];
         const ra = qa - t * ol[0], rb = qb - t * ol[1], rc = qc - t * ol[2], radial = Math.sqrt(ra * ra + rb * rb + rc * rc);
@@ -453,27 +490,33 @@
       }
       screwInfo.push({ s, ok: true, inBone: Math.min(inBone, s.sc.len), crossesPlane, exitAt });
     }
-    await sleep();
+    T.screws = performance.now() - t0; await sleep();
     // drop specks left by slots and holes; count real pieces
     const cc = G.components(Gm, nx, ny, nz, 1), big = cc.comps.length ? cc.comps[0].size * 0.01 : 0;
     const comps = cc.comps.filter(cm => cm.size >= big), keepL = new Set(comps.map(cm => cm.label));
     for (let i = 0; i < N; i++) if (Gm[i] && !keepL.has(cc.labels[i])) Gm[i] = 0;
     const mesh = meshFromNets(G.surfaceNets(G.blur(Gm, nx, ny, nz), nx, ny, nz, 0.5), toWorld, mat(COLORS.guide));
     let vol = 0; for (let i = 0; i < N; i++) vol += Gm[i];
-    const seat = window.Seat ? Seat.analyze({ Gm, B, D, nx, ny, nz, h, lo, clear: c }) : null;
-    return { mesh, result: { pieces: comps.length, contact: contact * h * h, undercut: undercutCols * h * h, volume: vol * h * h * h, screwInfo, pls, seat, ms: performance.now() - t0 },
+    T.mesh = performance.now() - t0;
+    const seat = window.Seat && !ctx.fast ? Seat.analyze({ Gm, B, D, nx, ny, nz, h, lo, clear: c }) : null;
+    return { mesh, result: { pieces: comps.length, contact: contact * h * h, undercut: undercutCols * h * h, volume: vol * h * h * h, screwInfo, pls, seat, ms: performance.now() - t0, T },
       grid: { Gm, B, nx, ny, nz, h, lo, P: P.clone(), u: u.clone(), v: v.clone(), n: n.clone() } };
   }
+  // every edit bumps ver; a built guide is shown only if it is at least as new as the one on screen
+  const live = { ver: 0, shown: 0, running: false, dirty: false, planes: false, resAt: 0 };
   async function regenerate() {
     if (!S.anchor) return;
+    const ver = live.ver;
     busy(true, 'Guide üretiliyor…'); await sleep();
     const pls = planesWorld(), scs = screwsWorld();
     const out = await buildGuide(Object.assign({ g: S.g, P: S.anchor.p, pls, scs, bone: boneAt }, frameAxes()));
+    if (ver < live.shown) { disposeObj(out.mesh); return; }
+    live.shown = ver; S.liveScrews = null;
     setPart('guide', 'Guide', out.mesh, COLORS.guide);
     S.result = out.result; S.grid = out.grid;
     const screwInfo = out.result.screwInfo;
     rebuildElementParts(pls, screwInfo);
-    applyExplode(); updatePanels(); busy(false); render();
+    applyExplode(); updatePanels(); if (ver === live.ver) busy(false); render();
     emit('parts'); emit('changed');
   }
 
@@ -532,7 +575,7 @@
     box.innerHTML = fields.map(([k, t, mn, mx, st, unit]) => `<div class="ctl"><div class="ctl-row"><label for="f_${k}">${t}</label><output id="o_${k}">${fmt(o[k], st < 1 ? 1 : 0)} ${unit}</output></div><input type="range" id="f_${k}" min="${mn}" max="${mx}" step="${st}" value="${o[k]}"></div>`).join('') +
       `<p class="hint">${o.ok ? `Onaylandı${o.by ? ' · ' + o.by : ''}. Değişiklik onayı kaldırır.` : 'Sistem önerisi; cerrah onayı bekliyor.'}</p>` +
       `<div class="btns"><button class="primary" id="okEl">${o.ok ? 'Onayı kaldır' : 'Onayla'}</button><button id="delEl">${isP ? 'Kesiyi sil' : 'Vidayı sil'}</button></div>`;
-    fields.forEach(([k, , , , st, unit]) => $('f_' + k).addEventListener('input', e => { o[k] = +e.target.value; unapprove(o); $('o_' + k).textContent = `${fmt(o[k], st < 1 ? 1 : 0)} ${unit}`; schedule(isP); }));
+    fields.forEach(([k, , , , st, unit]) => $('f_' + k).addEventListener('input', e => { o[k] = +e.target.value; unapprove(o); $('o_' + k).textContent = `${fmt(o[k], st < 1 ? 1 : 0)} ${unit}`; schedule(isP, true); }));
     $('okEl').addEventListener('click', () => { o.ok ? unapprove(o) : stamp(o); renderElements(); renderAppr(); renderJSON(); emit('changed'); });
     $('delEl').addEventListener('click', () => { (isP ? S.planes : S.screws).splice(i, 1); S.sel = null; schedule(isP); });
   }
@@ -606,20 +649,66 @@
   }
 
   // ---------- interactions ----------
+  // Live preview: cut discs and screws follow the value at once, a coarse guide (0.8 mm grid, no seating
+  // analysis) is rebuilt as fast as the machine allows, and the full guide, resection and checks follow
+  // once the value rests.
   let timer = null;
-  function schedule(planesChanged) {
-    renderElements();
+  let previewRaf = 0;
+  function previewElements() {
+    if (!previewRaf) previewRaf = requestAnimationFrame(() => { previewRaf = 0; previewNow(); });
+  }
+  function previewNow() {
+    if (!S.anchor) return;
+    const pls = planesWorld(), info = screwsWorld().map(s => ({ s, ok: !!s.entry }));
+    S.liveScrews = info;
+    rebuildElementParts(pls, info); applyExplode(); emit('preview'); render();
+  }
+  async function coarseLoop() {
+    if (live.running) { live.dirty = true; return; }
+    live.running = true;
+    try {
+      do {
+        live.dirty = false;
+        if (!S.anchor) break;
+        const ver = live.ver;
+        if (live.planes && performance.now() - live.resAt > 250) { live.planes = false; await rebuildResection({ live: true }); live.resAt = performance.now(); }
+        const out = await buildGuide(Object.assign({ g: S.g, P: S.anchor.p, pls: planesWorld(), scs: screwsWorld(), bone: boneAt, h: 0.8, fast: true }, frameAxes()));
+        if (ver <= live.shown) { disposeObj(out.mesh); continue; }
+        live.shown = ver; setPart('guide', 'Guide', out.mesh, COLORS.guide); applyExplode(); emit('preview'); render();
+        await new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));   // let the frame (and pending input) through
+      } while (live.dirty);
+    } finally { live.running = false; }
+  }
+  function schedule(planesChanged, liveEdit) {
+    live.ver++;
+    if (planesChanged) live.planes = live.resDirty = true;
+    if (!liveEdit) renderElements();
+    previewElements();
+    if (liveEdit && S.anchor) { $('busyText').textContent = 'Önizleme'; $('busy').hidden = false; coarseLoop(); }
     clearTimeout(timer);
-    timer = setTimeout(async () => { if (planesChanged) { busy(true, 'Rezeksiyon güncelleniyor…'); await sleep(); await rebuildResection(); } await regenerate(); }, 250);
+    timer = setTimeout(async () => {
+      if (live.running) { await new Promise(r => { const w = () => live.running ? setTimeout(w, 20) : r(); w(); }); }
+      if (live.resDirty) { live.planes = live.resDirty = false; busy(true, 'Rezeksiyon güncelleniyor…'); await sleep(); await rebuildResection(); }
+      await regenerate();
+    }, liveEdit ? 300 : 120);
   }
   const ray = new THREE.Raycaster(), mouse = new THREE.Vector2();
   let downAt = null;
   renderer.domElement.addEventListener('pointerdown', e => { downAt = [e.clientX, e.clientY]; });
   renderer.domElement.addEventListener('pointerup', async e => {
-    if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 4 || S.mode === 'orbit') return;
+    const usedGizmo = gz.used; gz.used = false;
+    if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 4 || usedGizmo) return;
     const rect = renderer.domElement.getBoundingClientRect();
     mouse.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
     ray.setFromCamera(mouse, camera);
+    if (S.mode === 'orbit') {
+      // click a screw or a cut disc to select it (screws first: they sit inside the discs)
+      const els = Object.values(parts).filter(pt => pt.visible && /^(screw|plane)\d/.test(pt.id));
+      const hits = ray.intersectObjects(els.map(pt => pt.obj), false);
+      const h = hits.find(x => els.find(pt => pt.obj === x.object).id.startsWith('screw')) || hits[0];
+      if (h) { const id = els.find(pt => pt.obj === h.object).id; select((id.startsWith('screw') ? 's' : 'p') + id.replace(/\D/g, '')); }
+      return;
+    }
     const targets = ['bone', 'resected', 'guide'].filter(k => parts[k] && parts[k].visible).map(k => parts[k].obj);
     const hit = ray.intersectObjects(targets, false)[0];
     if (!hit) return;
@@ -634,6 +723,93 @@
       S.sel = 's' + (S.screws.length - 1); setMode('orbit'); schedule(false);
     }
   });
+  // ---------- 3D handles: drag the selected cut or screw along / around the guide axes ----------
+  // x = along the bone (u), y = lateral (v), z = seating normal (n). A cut moves only along x and turns
+  // about y and z; a screw moves in x/y (it always starts on the bone surface) and tilts about x and y.
+  const gizmo = THREE.TransformControls ? new THREE.TransformControls(camera, renderer.domElement) : null;
+  const proxy = new THREE.Object3D(); scene.add(proxy);
+  const gz = { mode: 'translate', start: null, used: false };
+  if (gizmo) {
+    gizmo.setSize(0.8); gizmo.setSpace('local'); scene.add(gizmo);
+    gizmo.addEventListener('change', render);
+    gizmo.addEventListener('dragging-changed', e => {
+      controls.enabled = !e.value;
+      if (e.value) { gz.used = true; gz.start = gizmoStart(); return; }
+      const moved = gz.start && gz.start.moved; gz.start = null;
+      if (moved) schedule(S.sel && S.sel[0] === 'p', false); syncGizmo();
+    });
+    gizmo.addEventListener('objectChange', () => { if (gz.start) gizmoApply(); });
+  }
+  function selObj() {
+    if (!S.sel || !S.anchor) return null;
+    const isP = S.sel[0] === 'p', i = +S.sel.slice(1), o = isP ? S.planes[i] : S.screws[i];
+    return o ? { isP, i, o } : null;
+  }
+  function syncGizmo() {
+    if (!gizmo) return;
+    const so = selObj(), fib = window.Fibula && Fibula.active && Fibula.active() && camera.layers.isEnabled(1);
+    $('gizmoSeg').hidden = !so;
+    if (!so || fib) { gizmo.detach(); render(); return; }
+    if (gz.start) return;
+    const { u, v, n } = frameAxes();
+    proxy.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(u, v, n));
+    if (so.isP) proxy.position.copy(planesWorld()[so.i].p);
+    else { const sw = screwWorld(so.o); proxy.position.copy(sw.entry || S.anchor.p.clone().add(u.clone().multiplyScalar(so.o.u)).add(v.clone().multiplyScalar(so.o.v))); }
+    proxy.updateMatrixWorld();
+    gizmo.setMode(gz.mode);
+    const t = gz.mode === 'translate';
+    gizmo.showX = so.isP ? t : true;
+    gizmo.showY = so.isP ? !t : true;
+    gizmo.showZ = so.isP && !t;
+    gizmo.attach(proxy); render();
+  }
+  function gizmoStart() {
+    const so = selObj(); if (!so) return null;
+    const o = so.o, st = { so, p0: proxy.position.clone(), q0: proxy.quaternion.clone(), o0: Object.assign({}, o), key: [o.off, o.yaw, o.pitch, o.u, o.v, o.tiltU, o.tiltV].join() };
+    if (so.isP) st.N0 = planesWorld()[so.i].N.clone(); else st.d0 = screwWorld(so.o).dir.clone();
+    return st;
+  }
+  const clampR = (x, a, b, st) => Math.max(a, Math.min(b, Math.round(x / st) * st));
+  function gizmoApply() {
+    const { so, p0, q0, o0 } = gz.start, o = so.o, { u, v, n } = frameAxes();
+    const d = proxy.position.clone().sub(p0), dq = proxy.quaternion.clone().multiply(q0.clone().invert());
+    if (so.isP) {
+      if (gz.mode === 'translate') o.off = clampR(o0.off + d.dot(u), -30, 30, 0.5);
+      else {
+        const N = gz.start.N0.clone().applyQuaternion(dq);
+        o.yaw = clampR(THREE.MathUtils.radToDeg(Math.atan2(N.dot(v), N.dot(u))), -45, 45, 0.5);
+        o.pitch = clampR(THREE.MathUtils.radToDeg(-Math.asin(Math.max(-1, Math.min(1, N.dot(n))))), -45, 45, 0.5);
+      }
+    } else {
+      if (gz.mode === 'translate') { o.u = clampR(o0.u + d.dot(u), -30, 30, 0.5); o.v = clampR(o0.v + d.dot(v), -15, 15, 0.5); }
+      else {
+        const D = gz.start.d0.clone().applyQuaternion(dq), a = Math.asin(Math.max(-1, Math.min(1, -D.dot(u))));
+        o.tiltU = clampR(THREE.MathUtils.radToDeg(a), -40, 40, 1);
+        o.tiltV = clampR(THREE.MathUtils.radToDeg(Math.atan2(D.dot(v), -D.dot(n))), -40, 40, 1);
+      }
+    }
+    const key = [o.off, o.yaw, o.pitch, o.u, o.v, o.tiltU, o.tiltV].join();
+    if (key === gz.start.key) return;
+    gz.start.key = key; gz.start.moved = true;
+    unapprove(o); syncSliders(o); schedule(so.isP, true);
+  }
+  function syncSliders(o) {
+    ['off', 'yaw', 'pitch', 'u', 'v', 'tiltU', 'tiltV'].forEach(k => { const el = $('f_' + k); if (el && o[k] !== undefined) { el.value = o[k]; const out = $('o_' + k); if (out) out.textContent = `${fmt(o[k], +el.step < 1 ? 1 : 0)} ${/yaw|pitch|tilt/.test(k) ? '°' : 'mm'}`; } });
+  }
+  function setGizmoMode(m) { gz.mode = m; $('gzT').setAttribute('aria-pressed', m === 'translate'); $('gzR').setAttribute('aria-pressed', m === 'rotate'); syncGizmo(); }
+  $('gzT').addEventListener('click', () => setGizmoMode('translate'));
+  $('gzR').addEventListener('click', () => setGizmoMode('rotate'));
+  document.addEventListener('keydown', e => {
+    if (/INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName) && document.activeElement.type !== 'range') return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.key === 'w' || e.key === 'W') setGizmoMode('translate');
+    else if (e.key === 'e' || e.key === 'E') setGizmoMode('rotate');
+    else if (e.key === 'Escape' && S.sel && !gz.start) select(null);
+  });
+  bus.addEventListener('select', syncGizmo);
+  bus.addEventListener('parts', syncGizmo);
+  bus.addEventListener('planApplied', syncGizmo);
+
   function setMode(m) {
     S.mode = m;
     $('modeBadge').hidden = m === 'orbit';
@@ -676,7 +852,7 @@
     gFields.forEach(([k, , , , st, unit]) => { $('g_' + k).value = S.g[k]; $('go_' + k).textContent = `${fmt(S.g[k], st < 1 ? (st < 0.1 ? 2 : 1) : 0)} ${unit}`; });
     $('g_side').value = String(S.g.side);
   }
-  gFields.forEach(([k]) => $('g_' + k).addEventListener('input', e => { S.g[k] = +e.target.value; syncGuideInputs(); if (k === 'rot') { unapproveAll(); updateLesionPart(); } schedule(k === 'rot'); }));
+  gFields.forEach(([k]) => $('g_' + k).addEventListener('input', e => { S.g[k] = +e.target.value; syncGuideInputs(); if (k === 'rot') { unapproveAll(); updateLesionPart(); } schedule(k === 'rot', true); }));
   $('g_side').addEventListener('change', e => { S.g.side = +e.target.value; schedule(false); });
   syncGuideInputs();
 
@@ -880,8 +1056,8 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   }
   function serverUrl() { return ($('aiUrl').value || '').trim().replace(/\/+$/, ''); }
   function select(sel) { S.sel = sel; emit('select', sel); renderElements(); rebuildElementParts(S.result ? S.result.pls : [], S.result ? S.result.screwInfo : []); applyExplode(); render(); }
-  window.Studio = { S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr };
-  bus.addEventListener('planeDragged', () => renderElements());
+  window.Studio = { gizmo, proxy, syncGizmo, live, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr };
+  bus.addEventListener('planeDragged', () => { renderElements(); schedule(true, true); });
   emit('ready');
 
   try { await loadSample('mandible'); } catch (e) { busy(false); alertMsg('Örnek vaka açılamadı: ' + e.message); }
