@@ -303,6 +303,8 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
 .aulog { list-style: none; padding: 0; margin: 4px 0 0; display: flex; flex-direction: column; gap: 6px; }
 .aulog li { font-size: 12.5px; border-left: 2px solid var(--line-strong); padding-left: 8px; }
 .aulog small { display: block; font: 11px var(--font-mono); color: var(--faint); }
+/* slice cell mode menu (standard, panoramic, perpendicular to cut) */
+.cellmode { position: absolute; top: 6px; right: 6px; z-index: 2; font: 11.5px var(--font-body); background: rgba(0, 0, 0, .55); color: #dfe6e3; border: 1px solid #3a424a; border-radius: 5px; padding: 2px 4px; height: auto; width: auto; }
 /* guide fit colour legend over the 3D view */
 .fitlegend { position: absolute; left: 14px; bottom: 64px; background: var(--glass); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: var(--shadow); width: 220px; z-index: 3; }
 .fitlegend b { display: block; font-weight: 600; margin-bottom: 5px; }
@@ -610,7 +612,7 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
       <tr><td><kbd>1</kbd>–<kbd>5</kbd></td><td>Hazır görünüm: ön, sağ, sol, üst, alt</td></tr>
       <tr><td><kbd>?</kbd></td><td>Bu pencere</td></tr>
     </table>
-    <p class="hint">Kesitlerde: tekerlek kesit değiştirir, Ctrl+tekerlek yakınlaştırır, sağ tuşla kaydırılır, kesi çizgisi sürüklenir, çift tıklama görünümü büyütür.</p>
+    <p class="hint">Kesitlerde: tekerlek kesit değiştirir, Ctrl+tekerlek yakınlaştırır, sağ tuşla kaydırılır, Shift+sürükleme pencere ve seviyeyi değiştirir, kesi çizgisi sürüklenir, çift tıklama görünümü büyütür. Sağ üstteki menüden kesit panoramik ya da seçili kesiye dik görünüme çevrilir.</p>
   </form>
 </dialog>
 
@@ -637,3 +639,4 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
 <script src="audit.js"></script>
 <script src="dates.js"></script>
 <script src="export.js"></script>
+<script src="reformat.js"></script>

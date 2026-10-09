@@ -19,7 +19,8 @@
   const dims = () => [S.vol.nx, S.vol.ny, S.vol.nz];
   const toIdx = w => G.indexOf(S.vol, w);
   const toWorld = ix => G.worldOf(S.vol, ix[0], ix[1], ix[2]);
-  function imgSize(v) { const d = dims(), sp = S.vol.sp; return { W: d[v.ix], H: d[v.iy], sx: sp[v.ix], sy: sp[v.iy] }; }
+  // a view can be replaced by a reformat (panoramic, oblique): v.custom = { size(v), draw(v, ctx, T, dpr), wheel(v, n), pick(v, x, y) }
+  function imgSize(v) { if (v.custom) return v.custom.size(v); const d = dims(), sp = S.vol.sp; return { W: d[v.ix], H: d[v.iy], sx: sp[v.ix], sy: sp[v.iy] }; }
   function idxToImg(v, ix) { const d = dims(); return [ix[v.ix], v.flipY ? d[v.iy] - 1 - ix[v.iy] : ix[v.iy]]; }
   function imgToIdx(v, x, y) { const d = dims(), ix = st.cur.slice(); ix[v.ix] = x; ix[v.iy] = v.flipY ? d[v.iy] - 1 - y : y; return ix; }
   function xf(v) {   // image pixel -> canvas pixel
@@ -102,6 +103,7 @@
     if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
     ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = '#000'; ctx.fillRect(0, 0, w, h);
     if (!S.vol) return;
+    if (v.custom) { ctx.imageSmoothingEnabled = true; v.custom.draw(v, ctx, xf(v), dpr); wlLabel(ctx, w, h, dpr); return; }
     const T = xf(v), { W, H } = imgSize(v);
     ctx.imageSmoothingEnabled = true;
     ctx.drawImage(sliceImage(v), T.ox, T.oy, W * T.sx * T.s, H * T.sy * T.s);
@@ -153,7 +155,10 @@
     label(ctx, `${v.name} · ${k + 1}/${dims()[v.axis]} · ${St.fmt(wpos[v.axis === 2 ? 2 : v.axis === 1 ? 1 : 0], 1)} mm`, 8 * dpr, 16 * dpr, '#cfd8d4', dpr);
     label(ctx, v.lab[0], 6 * dpr, h / 2, '#8fa39b', dpr); label(ctx, v.lab[1], w - 14 * dpr, h / 2, '#8fa39b', dpr);
     label(ctx, v.lab[2], w / 2, 30 * dpr, '#8fa39b', dpr); label(ctx, v.lab[3], w / 2, h - 8 * dpr, '#8fa39b', dpr);
+    wlLabel(ctx, w, h, dpr);
   }
+  // window / level readout (Shift + drag changes it)
+  function wlLabel(ctx, w, h, dpr) { label(ctx, `P ${Math.round(st.win.W)} · S ${Math.round(st.win.L)}`, 8 * dpr, h - 8 * dpr, '#8fa39b', dpr); }
   // overlays drawn by other modules (measurements, segmentation edits, reference lines)
   const overlayAPI = () => ({ toIdx, idxToImg, label, st, dims, contour, planeLine });
   function label(ctx, t, x, y, col, dpr) { ctx.font = `${12 * dpr}px "IBM Plex Mono", monospace`; ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillText(t, x + dpr, y + dpr); ctx.fillStyle = col; ctx.fillText(t, x, y); }
@@ -192,6 +197,7 @@
         v.zoom = Math.min(20, Math.max(0.5, v.zoom * Math.exp(-e.deltaY * 0.0015)));
         const T2 = xf(v); v.pan[0] += X - T2.fx(x0); v.pan[1] += Y - T2.fy(y0); redraw(); return;
       }
+      if (v.custom) { v.custom.wheel(v, Math.sign(e.deltaY) * (e.shiftKey ? 5 : 1)); redraw(); return; }
       const ix = st.cur.slice(); ix[v.axis] += Math.sign(e.deltaY) * (e.shiftKey ? 5 : 1); setCursor(ix);
     }, { passive: false });
     c.addEventListener('contextmenu', e => e.preventDefault());
@@ -199,6 +205,8 @@
       if (!S.vol) return; c.setPointerCapture(e.pointerId);
       const [X, Y] = at(e);
       if (e.button === 1 || e.button === 2) { st.drag = { kind: 'pan', v, X, Y, pan: v.pan.slice() }; return; }
+      if (e.shiftKey) { st.drag = { kind: 'wl', v, X, Y, L: st.win.L, W: st.win.W }; return; }
+      if (v.custom) { const T = xf(v); st.drag = { kind: 'custom', v }; v.custom.pick(v, T.ix(X), T.iy(Y)); return; }
       if (window.Measure && Measure.active()) { const T = xf(v); Measure.pick(V(...toWorld(imgToIdx(v, T.ix(X), T.iy(Y)))), null); return; }
       if (window.SegEdit && SegEdit.active()) { const T = xf(v); st.drag = { kind: 'paint', v }; SegEdit.paint(toWorld(imgToIdx(v, T.ix(X), T.iy(Y))), v.axis, true); return; }
       const li = hitLine(v, X, Y);
@@ -210,6 +218,8 @@
       if (!d) { c.style.cursor = hitLine(v, X, Y) >= 0 ? 'grab' : 'crosshair'; return; }
       if (d.kind === 'pan') { v.pan[0] = d.pan[0] + X - d.X; v.pan[1] = d.pan[1] + Y - d.Y; redraw(); }
       else if (d.kind === 'cursor') moveCursor(v, X, Y);
+      else if (d.kind === 'wl') { const k = 1 / Math.min(devicePixelRatio, 2); st.win = { L: Math.round(d.L - (Y - d.Y) * 2 * k), W: Math.max(10, Math.round(d.W + (X - d.X) * 4 * k)) }; customWin(); redraw(); }
+      else if (d.kind === 'custom') { const T = xf(v); v.custom.pick(v, T.ix(X), T.iy(Y)); }
       else if (d.kind === 'plane') dragPlane(v, d.i, X, Y);
       else if (d.kind === 'paint') { const T = xf(v); SegEdit.paint(toWorld(imgToIdx(v, T.ix(X), T.iy(Y))), v.axis, false); }
     });
@@ -243,7 +253,13 @@
   $('vm3d').addEventListener('click', () => { st.mode = '3d'; st.max = null; layout(); });
   $('vmQuad').addEventListener('click', () => { st.mode = 'quad'; st.max = null; layout(); });
   $('vmStrip').addEventListener('click', () => { st.mode = 'strip'; st.max = null; layout(); });
-  $('win').addEventListener('change', e => { st.win = WINDOWS[e.target.value]; redraw(); });
+  $('win').addEventListener('change', e => { if (WINDOWS[e.target.value]) st.win = WINDOWS[e.target.value]; redraw(); });
+  // a dragged window shows as "custom" in the preset list
+  function customWin() {
+    const sel = $('win'); let o = sel.querySelector('option[value="custom"]');
+    if (!o) { o = document.createElement('option'); o.value = 'custom'; sel.appendChild(o); }
+    o.textContent = `Özel (P ${Math.round(st.win.W)} / S ${Math.round(st.win.L)})`; sel.value = 'custom';
+  }
   document.addEventListener('keydown', e => {
     if (/INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName) && document.activeElement.type !== 'range') return;
     if (e.key === 'k' || e.key === 'K') { st.mode = { '3d': 'strip', strip: 'quad', quad: '3d' }[st.mode]; st.max = null; layout(); }
@@ -262,5 +278,5 @@
     if (sel[0] === 'p') { const pw = St.planesWorld()[+sel.slice(1)]; if (pw) jumpTo(pw.p); }
     else { const s = S.screws[+sel.slice(1)]; if (s) { const sw = St.screwWorld(s); if (sw.entry) jumpTo(sw.entry); } }
   });
-  window.MPR = { layout, setCursor, jumpTo, state: st, redraw, views: VIEWS, xf };
+  window.MPR = { layout, setCursor, jumpTo, state: st, redraw, views: VIEWS, xf, label, toIdx, toWorld };
 })();
