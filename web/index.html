@@ -297,6 +297,12 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
 /* scene list */
 .parts li { display: grid; grid-template-columns: 1fr 90px auto; }
 .parts input[type=range] { margin: 0; }
+/* two-stage approval blocks */
+.audit-b { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+.audit-b textarea { font: inherit; resize: vertical; border: 1px solid var(--line-strong); border-radius: 6px; padding: 5px 7px; background: var(--panel); color: var(--fg); }
+.aulog { list-style: none; padding: 0; margin: 4px 0 0; display: flex; flex-direction: column; gap: 6px; }
+.aulog li { font-size: 12.5px; border-left: 2px solid var(--line-strong); padding-left: 8px; }
+.aulog small { display: block; font: 11px var(--font-mono); color: var(--faint); }
 /* guide fit colour legend over the 3D view */
 .fitlegend { position: absolute; left: 14px; bottom: 64px; background: var(--glass); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: var(--shadow); width: 220px; z-index: 3; }
 .fitlegend b { display: block; font-weight: 600; margin-bottom: 5px; }
@@ -499,6 +505,7 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
           <p class="hint">Bir satıra tıklayınca ilgili öğe açılır ve 3B görünümde gösterilir.</p>
           <ul class="review" id="appr"></ul>
           <p class="hint" id="apprMsg"></p>
+          <div id="auditBox" class="col"></div>
           <div class="nav"><button class="primary next" data-next="st8">Teslim<svg class="i"><use href="#i-next"/></svg></button></div>
         </div>
       </details>
@@ -624,3 +631,4 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
 <script src="implant.js"></script>
 <script src="mfg.js"></script>
 <script src="fit.js"></script>
+<script src="audit.js"></script>
