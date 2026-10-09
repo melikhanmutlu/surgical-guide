@@ -274,6 +274,7 @@
     busy(true, 'Yüzey modeli oluşturuluyor…'); await sleep();
     const r = S.red, m = new Uint8Array(S.labels.length);
     for (let i = 0; i < m.length; i++) m[i] = S.selected.has(S.labels[i]) ? 1 : 0;
+    if (window.SegEdit) SegEdit.applyTo(m);
     S.mask = m; S.maskF = G.blur(m, r.nx, r.ny, r.nz);
     await rebuildResection();
     if (frame && parts.bone) fitTo(parts.bone.obj);
@@ -823,6 +824,7 @@
     if (e.clientX - rect.left > rw) return;
     mouse.set(((e.clientX - rect.left) / rw) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
     ray.setFromCamera(mouse, camera);
+    if (window.SegEdit && SegEdit.tool()) return;
     if (window.Tools && Tools.click(e, ray)) return;
     if (S.mode === 'orbit') {
       // click a screw or a cut disc to select it (screws first: they sit inside the discs)
@@ -1102,8 +1104,8 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     const bin = atob(js.stl_b64), u8 = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
     return { stl: u8, watertight: js.watertight, bodies: js.bodies, volume: js.volume_mm3, faces: js.faces, ms: js.ms };
   }
-  const prodKey = () => JSON.stringify([S.source && S.source.fp, S.g, S.anchor && vec(S.anchor.p), S.anchor && vec(S.anchor.n), S.planes.map(p => [p.off, p.yaw, p.pitch, p.w]), S.screws.map(s => [s.u, s.v, s.tiltU, s.tiltV, s.d, s.D, s.sleeveH]), S.segMethod, $('thr').value]);
-  const segThr = () => (/^Eşik/.test(S.segMethod) ? +$('thr').value : null);
+  const prodKey = () => JSON.stringify([S.source && S.source.fp, S.g, S.anchor && vec(S.anchor.p), S.anchor && vec(S.anchor.n), S.planes.map(p => [p.off, p.yaw, p.pitch, p.w]), S.screws.map(s => [s.u, s.v, s.tiltU, s.tiltV, s.d, s.D, s.sleeveH]), S.segMethod, $('thr').value, window.SegEdit ? SegEdit.key() : '']);
+  const segThr = () => (/^Eşik/.test(S.segMethod) && !(window.SegEdit && SegEdit.edited()) ? +$('thr').value : null);
   async function productionSTL() {
     if (!parts.guide || !S.anchor) return;
     const ac = new AbortController();
@@ -1124,6 +1126,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     if (window.Fibula) Fibula.exportFiles(files);
     if (parts.resected) files.push({ name: 'rezeke_parca.stl', data: stlOf(parts.resected.obj) });
     files.push({ name: 'plan.json', data: $('json').textContent }, { name: 'rapor.html', data: reportHTML() });
+    if (window.Report) try { files.push({ name: 'cerrahi_rapor.pdf', data: new Uint8Array(await (await Report.build()).arrayBuffer()) }); } catch (e) { /* the HTML report is still in the package */ }
     await offer('guide_paketi.zip', zip(files));
     emit('exported');
   }
@@ -1140,6 +1143,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
       anchor: S.anchor ? { p: vec(S.anchor.p), n: vec(S.anchor.n), axis: vec(S.anchor.axis) } : null,
       g: clone(S.g), lesion: clone(S.lesion), planes: clone(S.planes), screws: clone(S.screws),
       surgeon: $('surgeon').value.trim(), fibula: S.fib ? clone(S.fib.plan) : null,
+      measures: clone(S.measures || []), ext: window.PlanExt ? Object.fromEntries(Object.entries(PlanExt).map(([k, f]) => [k, f.get()])) : {},
     };
   }
   async function applyPlan(plan) {
@@ -1160,8 +1164,11 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
       if (S.sel && !(S.sel[0] === 'p' ? S.planes : S.screws)[+S.sel.slice(1)]) S.sel = null;
       syncGuideInputs(); syncLesion(); showAnchor(); updateLesionPart();
       if (!S.anchor) { ['guide', 'resected', 'lesion'].forEach(id => setPart(id, null, null)); clearElementParts(); S.result = null; }
+      const ext = plan.ext || {};
+      if (window.PlanExt) for (const k in PlanExt) if (PlanExt[k].pre) await PlanExt[k].set(ext[k] || null);
       await rebuildBone(false);
       if (window.Fibula) await Fibula.apply(plan.fibula || null);
+      if (window.PlanExt) for (const k in PlanExt) if (!PlanExt[k].pre) await PlanExt[k].set(ext[k] || null);
       if (!S.anchor) { updatePanels(); render(); }
       emit('planApplied', plan);
     } finally { S.restoring = false; S.autoAnchor = true; }

@@ -143,6 +143,7 @@
         }
       });
     }
+    (window.SliceOverlays || []).forEach(f => { try { f(v, ctx, T, dpr, overlayAPI()); } catch (e) { /* overlay errors never break the slice view */ } });
     // crosshair
     const cp = idxToImg(v, st.cur);
     ctx.strokeStyle = 'rgba(80,220,200,.55)'; ctx.lineWidth = 1 * dpr; ctx.setLineDash([5 * dpr, 4 * dpr]);
@@ -153,7 +154,9 @@
     label(ctx, v.lab[0], 6 * dpr, h / 2, '#8fa39b', dpr); label(ctx, v.lab[1], w - 14 * dpr, h / 2, '#8fa39b', dpr);
     label(ctx, v.lab[2], w / 2, 30 * dpr, '#8fa39b', dpr); label(ctx, v.lab[3], w / 2, h - 8 * dpr, '#8fa39b', dpr);
   }
-  function label(ctx, t, x, y, col, dpr) { ctx.font = `${11 * dpr}px "JetBrains Mono", monospace`; ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillText(t, x + dpr, y + dpr); ctx.fillStyle = col; ctx.fillText(t, x, y); }
+  // overlays drawn by other modules (measurements, segmentation edits, reference lines)
+  const overlayAPI = () => ({ toIdx, idxToImg, label, st, dims });
+  function label(ctx, t, x, y, col, dpr) { ctx.font = `${12 * dpr}px "IBM Plex Mono", monospace`; ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillText(t, x + dpr, y + dpr); ctx.fillStyle = col; ctx.fillText(t, x, y); }
 
   let raf = 0;
   function redraw() { if (raf) return; raf = requestAnimationFrame(() => { raf = 0; if (st.mode === '3d') return; VIEWS.forEach(v => { v.lines = []; if (!v.cell.hidden && v.canvas.clientWidth) draw(v); }); }); }
@@ -196,6 +199,8 @@
       if (!S.vol) return; c.setPointerCapture(e.pointerId);
       const [X, Y] = at(e);
       if (e.button === 1 || e.button === 2) { st.drag = { kind: 'pan', v, X, Y, pan: v.pan.slice() }; return; }
+      if (window.Measure && Measure.active()) { const T = xf(v); Measure.pick(V(...toWorld(imgToIdx(v, T.ix(X), T.iy(Y)))), null); return; }
+      if (window.SegEdit && SegEdit.active()) { const T = xf(v); st.drag = { kind: 'paint', v }; SegEdit.paint(toWorld(imgToIdx(v, T.ix(X), T.iy(Y))), v.axis, true); return; }
       const li = hitLine(v, X, Y);
       if (li >= 0) { st.drag = { kind: 'plane', v, i: li }; St.select('p' + li); c.style.cursor = 'grabbing'; return; }
       st.drag = { kind: 'cursor', v }; moveCursor(v, X, Y);
@@ -206,8 +211,9 @@
       if (d.kind === 'pan') { v.pan[0] = d.pan[0] + X - d.X; v.pan[1] = d.pan[1] + Y - d.Y; redraw(); }
       else if (d.kind === 'cursor') moveCursor(v, X, Y);
       else if (d.kind === 'plane') dragPlane(v, d.i, X, Y);
+      else if (d.kind === 'paint') { const T = xf(v); SegEdit.paint(toWorld(imgToIdx(v, T.ix(X), T.iy(Y))), v.axis, false); }
     });
-    const end = () => { if (st.drag && st.drag.kind === 'plane') { St.unapprove(S.planes[st.drag.i]); St.schedule(true); } st.drag = null; c.style.cursor = 'crosshair'; };
+    const end = () => { if (st.drag && st.drag.kind === 'plane') { St.unapprove(S.planes[st.drag.i]); St.schedule(true); } if (st.drag && st.drag.kind === 'paint') SegEdit.strokeEnd(); st.drag = null; c.style.cursor = 'crosshair'; };
     c.addEventListener('pointerup', end); c.addEventListener('pointercancel', end);
     c.addEventListener('dblclick', () => { st.max = st.max === v.id ? null : v.id; layout(); });
   }

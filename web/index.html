@@ -148,7 +148,8 @@ input[type=checkbox] { accent-color: var(--accent); }
 .kv { display: grid; grid-template-columns: auto 1fr; gap: 5px 12px; margin: 0; }
 .kv dt { color: var(--muted); } .kv dd { margin: 0; font: 400 12.5px var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; overflow-wrap: anywhere; }
 .col { display: grid; gap: 10px; min-width: 0; }
-.comp { display: flex; gap: 8px; align-items: center; }
+.comp, .chk { display: flex; gap: 8px; align-items: center; }
+.lasso { position: absolute; pointer-events: none; z-index: 3; }
 .comp span { margin-left: auto; font: 12.5px var(--font-mono); color: var(--muted); }
 .el-list { display: flex; flex-wrap: wrap; gap: 5px; }
 .el.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line); }
@@ -593,3 +594,6 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
 <script src="fibula.js"></script>
 <script src="layout.js"></script>
 <script src="ui.js"></script>
+<script src="measure.js"></script>
+<script src="report.js"></script>
+<script src="segedit.js"></script>

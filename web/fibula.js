@@ -462,5 +462,5 @@ window.Fibula = (function () {
   bus.addEventListener('parts', () => { if (active() && !S.restoring) update(); });
   bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring) && S.fib) unload(); });
 
-  return { view: () => view, active, approved, checks, apply, exportFiles, reportHTML, production, setView, state: () => ({ F, last, view }) };
+  return { summary: () => (active() ? summary() : null), view: () => view, active, approved, checks, apply, exportFiles, reportHTML, production, setView, state: () => ({ F, last, view }) };
 })();

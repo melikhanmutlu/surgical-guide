@@ -126,6 +126,8 @@
     diffObj(a.lesion || {}, b.lesion || {}, NAMES.l, '', out);
     if (J(a.fibula) !== J(b.fibula)) out.push(!a.fibula ? 'Fibula planı başlatıldı' : !b.fibula ? 'Fibula planı kaldırıldı' : a.fibula.ok !== b.fibula.ok && b.fibula.ok !== undefined ? (b.fibula.ok ? 'Fibula planı onaylandı' : 'Fibula onayı kaldırıldı') : 'Fibula planı değişti');
     if (a.surgeon !== b.surgeon) out.push('Onaylayan cerrah adı');
+    if (J(a.measures) !== J(b.measures)) out.push((b.measures || []).length > (a.measures || []).length ? 'Ölçüm eklendi' : 'Ölçüm silindi');
+    if (J(a.ext) !== J(b.ext)) Object.keys(Object.assign({}, a.ext, b.ext)).forEach(k => { if (J((a.ext || {})[k]) !== J((b.ext || {})[k])) out.push(window.PlanExt && PlanExt[k] && PlanExt[k].label || k); });
     if (out.length === before && out.length === 0) return 'Değişiklik';
     const t = out.map(capital);
     return t.length > 2 ? `${t[0]} · ${t[1]} +${t.length - 2}` : t.join(' · ');
@@ -248,7 +250,10 @@
   St.bus.addEventListener('planApplied', () => { if (awaitingDicom) { awaitingDicom = false; baseline('Vaka açıldı'); setSave('Açıldı'); } });
 
   // ---------- versions ----------
+  let lastVersionN = 0;
+  function versionLabel() { const e = H.list[H.idx]; if (e && e.cp) return 'Checkpoint ' + e.cp; return lastVersionN ? `Taslak (son checkpoint S${lastVersionN})` : 'Taslak'; }
   function renderVersions(vs) {
+    lastVersionN = vs.length ? vs[0].n : 0;
     $('verList').innerHTML = vs.map(v => `<li><span class="meta"><span>S${v.n}${v.note ? ' · ' + esc(v.note) : ''}</span><small>${esc(v.author || '–')} · ${when(v.created_at)}</small></span><span class="act"><button data-v="${v.n}">Yükle</button></span></li>`).join('') || (caseId ? '<li class="hint">Henüz checkpoint yok.</li>' : '');
     $('verList').querySelectorAll('[data-v]').forEach(b => b.addEventListener('click', () => restoreVersion(+b.dataset.v)));
   }
@@ -299,5 +304,5 @@
     if (pendingSave) { try { flush(); } catch (err) {} }
     if (dirty) { e.preventDefault(); e.returnValue = ''; }
   });
-  window.CaseStore = { history: H, goTo, describe, saveNow, setAutosave, saveVersion };
+  window.CaseStore = { versionLabel, caseName: () => caseName || $('caseName').value.trim(), history: H, goTo, describe, saveNow, setAutosave, saveVersion };
 })();
