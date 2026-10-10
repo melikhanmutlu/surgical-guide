@@ -266,7 +266,7 @@ window.Masks = (function () {
 
   $('maskBox').innerHTML = `<h3 class="sub">Katmanlara ayır</h3>
     <p class="hint">Eşik maskesi birbirine değen kemikleri tek parça gösterebilir (dişler kapalıyken mandibula ile maksilla, fibula ile tibia). Her kemiği kendi renginde birkaç kesitte kısa vuruşlarla işaretleyip "Ayır"a basın: maske temas yüzeyinden katmanlara bölünür.</p>
-    <ul class="layers mk" id="mkLayers"></ul>
+    <ul class="layers mkl" id="mkLayers"></ul>
     <span class="seg" id="mkTools" role="group" aria-label="İşaret aracı">
       <button data-t="paint" aria-pressed="false"><svg class="i"><use href="#i-brush"/></svg>İşaretle</button>
       <button data-t="erase" aria-pressed="false"><svg class="i"><use href="#i-eraser"/></svg>Silgi</button>
