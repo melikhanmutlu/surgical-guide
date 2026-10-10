@@ -156,7 +156,7 @@ window.Lesion = (function () {
     status();
   }
   $('lesPaint').innerHTML = `<p class="hint more">Fırça lezyonu kırmızıyla boyar: kesitlerde ya da 3B görünümde görünen yüzeyin (cilt, yumuşak doku, kemik) üstünde. Kemiği Anatomi adımındaki Katmanlar'dan kapatabilirsiniz. Silgi boyamayı geri alır. Boyadıktan sonra kesiler lezyonu güvenlik payı kadar dışarıda bırakacak şekilde konur.</p>
-    <span class="seg" id="lsTools" role="group" aria-label="Lezyon aracı">
+    <span class="seg tools" id="lsTools" role="group" aria-label="Lezyon aracı">
       <button data-t="paint" aria-pressed="false"><svg class="i"><use href="#i-brush"/></svg>Fırça</button>
       <button data-t="erase" aria-pressed="false"><svg class="i"><use href="#i-eraser"/></svg>Silgi</button>
     </span>

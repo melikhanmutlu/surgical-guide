@@ -134,7 +134,13 @@
     sel._seg = seg;
   }
 
+  // a key-value row whose value is long gets the full width under its label instead of a narrow column
+  function kv(dd) {
+    const w = dd.textContent.trim().length > 16, dt = dd.previousElementSibling;
+    dd.classList.toggle('wide', w); if (dt && dt.tagName === 'DT') dt.classList.toggle('wide', w);
+  }
   function sweep(root) {
+    root.querySelectorAll('.kv dd').forEach(kv);
     root.querySelectorAll('select[data-seg]').forEach(segify);
     root.querySelectorAll('.hint.more').forEach(fold);
     root.querySelectorAll('button').forEach(tier);
@@ -146,7 +152,7 @@
   const roots = ['leftPanel', 'rightPanel', 'dlgSet'].map(id => document.getElementById(id)).filter(Boolean);
   const run = () => roots.forEach(sweep);
   const mo = new MutationObserver(run);
-  roots.forEach(r => mo.observe(r, { childList: true, subtree: true }));
+  roots.forEach(r => mo.observe(r, { childList: true, subtree: true, characterData: true }));
   run();
   window.Panel = { sweep: run };
 })();

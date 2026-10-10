@@ -200,22 +200,22 @@ window.SegEdit = (function () {
   }
   function status(msg) {
     const a = count(add), d = count(del), vox = S.red ? S.red.sp[0] * S.red.sp[1] * S.red.sp[2] / 1000 : 0;
-    $('seStat').innerHTML = (msg ? `<b>${St.esc(msg.replace(/\.$/, ''))}.</b> ` : '') + (a || d ? `Toplam: +${fmt(a * vox, 2)} cm³ eklendi, −${fmt(d * vox, 2)} cm³ çıkarıldı.` : 'Düzeltme yok; otomatik segmentasyon kullanılıyor.');
+    $('seStat').innerHTML = (msg ? `${St.esc(msg.replace(/\.$/, ''))}. ` : '') + (a || d ? `Toplam: +${fmt(a * vox, 2)} cm³ eklendi, −${fmt(d * vox, 2)} cm³ çıkarıldı.` : 'Düzeltme yok; otomatik segmentasyon kullanılıyor.');
     $('seReset').disabled = !(a || d);
   }
   $('segEdit').innerHTML = `<details class="sub-d"><summary>Elle düzeltme</summary>
     <p class="hint more">Otomatik kemik modeli hatalıysa kullanın. Fırça eksik kemiği ekler, Silgi fazlasını siler (kesitlerde ya da 3B'de sürükleyin), Makas 3B'de çevrelediğiniz bölgeyi keser.</p>
-    <span class="seg" id="seTools" role="group" aria-label="Düzeltme aracı">
+    <span class="seg tools" id="seTools" role="group" aria-label="Düzeltme aracı">
       <button data-t="brush" aria-pressed="false"><svg class="i"><use href="#i-brush"/></svg>Fırça</button>
       <button data-t="erase" aria-pressed="false"><svg class="i"><use href="#i-eraser"/></svg>Silgi</button>
       <button data-t="scissors" aria-pressed="false"><svg class="i"><use href="#i-scissors"/></svg>Makas</button>
     </span>
     <div class="ctl"><div class="ctl-row"><label for="seRad">Fırça yarıçapı</label><output id="seRadO">3 mm</output></div><input type="range" id="seRad" min="1" max="12" step="0.5" value="3"></div>
-    <label class="chk"><input type="checkbox" id="seBone" checked> Fırça yalnız kemik yoğunluğunu boyasın</label>
+    <label class="chk"><input type="checkbox" id="seBone" checked> Yalnız kemiği boya</label>
     <div class="ctl"><div class="ctl-row"><label for="seMetal">Metal / diş minesi eşiği</label><output id="seMetalO">2000 HU</output></div><input type="range" id="seMetal" min="1200" max="3500" step="50" value="2000"></div>
     <div class="ctl"><div class="ctl-row"><label for="seFrag">En küçük parça</label><output id="seFragO">0,5 cm³</output></div><input type="range" id="seFrag" min="0.1" max="5" step="0.1" value="0.5"></div>
-    <div class="btns"><button id="seMetalRun"><svg class="i"><use href="#i-spark"/></svg>Metal ve dişleri temizle</button><button id="seFragRun">Küçük parçaları sil</button></div>
-    <div class="btns"><button id="seReset"><svg class="i"><use href="#i-x"/></svg>Düzeltmeleri kaldır</button></div>
+    <div class="btns grid2"><button id="seMetalRun" data-tier="1" title="Metal ve diş minesini modelden temizle"><svg class="i"><use href="#i-spark"/></svg>Metal temizle</button><button id="seFragRun" data-tier="1" title="En küçük parçadan küçük adacıkları kaldır">Parçacık temizle</button></div>
+    <div class="btns end"><button id="seReset" class="ghost danger sm">Tüm düzeltmeleri geri al</button></div>
     <p class="hint" id="seStat"></p></details>`;
   document.querySelectorAll('#seTools [data-t]').forEach(b => b.addEventListener('click', () => setTool(b.dataset.t)));
   $('seRad').addEventListener('input', e => { radius = +e.target.value; $('seRadO').textContent = `${fmt(radius, 1)} mm`; });

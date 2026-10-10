@@ -12,7 +12,7 @@ window.Masks = (function () {
   let layers = defaults(), cur = 1, tool = null, radius = 3, seeds = null, seedRed = null, stroke = null, lastPaint = null;
   let planIdx = new Set([1]), active = false, msg = '';
   const ctxOn = new Set(); let ctxLabels = null;
-  function defaults() { return [{ name: 'Katman A', color: PALETTE[0] }, { name: 'Katman B', color: PALETTE[1] }]; }
+  function defaults() { return [{ name: 'Kemik A', color: PALETTE[0] }, { name: 'Kemik B', color: PALETTE[1] }]; }
 
   const N = () => S.red ? S.red.nx * S.red.ny * S.red.nz : 0;
   function ensure() { if (!seeds || seedRed !== S.red || seeds.length !== N()) { seeds = new Uint8Array(N()); seedRed = S.red; } }
@@ -222,12 +222,12 @@ window.Masks = (function () {
     const c = counts(), vox = S.red ? S.red.sp[0] * S.red.sp[1] * S.red.sp[2] / 1000 : 0;
     $('mkLayers').innerHTML = layers.map((L, i) => `<li class="lay${cur === i + 1 ? ' on' : ''}">
       <label><input type="radio" name="mkCur" value="${i + 1}" ${cur === i + 1 ? 'checked' : ''} aria-label="${St.esc(L.name)} ile işaretle"><i style="background:${hex(L.color)}"></i>
-      <input type="text" class="mk-name" data-n="${i + 1}" value="${St.esc(L.name)}" maxlength="40" aria-label="Katman adı"></label>
+      <input type="text" class="mk-name" data-n="${i + 1}" value="${St.esc(L.name)}" maxlength="40" aria-label="Kemik etiketi adı"></label>
       <span class="hu">${c[i + 1] ? fmt(c[i + 1] * vox, 2) + ' cm³ işaret' : 'işaret yok'}</span>
-      ${layers.length > 1 ? `<button class="x" data-del="${i + 1}" title="Katmanı kaldır" aria-label="${St.esc(L.name)} katmanını kaldır">×</button>` : ''}</li>`).join('');
+      ${layers.length > 1 ? `<button class="x" data-del="${i + 1}" title="Etiketi kaldır" aria-label="${St.esc(L.name)} etiketini kaldır">×</button>` : ''}</li>`).join('');
     $('mkLayers').querySelectorAll('input[type=radio]').forEach(el => el.addEventListener('change', () => { cur = +el.value; setTool('paint', true); renderLayers(); }));
     $('mkLayers').querySelectorAll('.mk-name').forEach(el => el.addEventListener('change', () => {
-      const i = +el.dataset.n, nm = el.value.trim().slice(0, 40) || `Katman ${String.fromCharCode(64 + i)}`;
+      const i = +el.dataset.n, nm = el.value.trim().slice(0, 40) || `Kemik ${String.fromCharCode(64 + i)}`;
       layers[i - 1].name = nm; if (S.compNames && S.compNames[BASE + i] !== undefined) S.compNames[BASE + i] = nm;
       renderList(); St.emit('changed');
     }));
@@ -267,15 +267,16 @@ window.Masks = (function () {
   $('maskBox').innerHTML = `<h3 class="sub">Bitişik kemikleri ayır</h3>
     <p class="hint more">Eşik maskesi birbirine değen kemikleri tek parça gösterebilir (dişler kapalıyken mandibula ile maksilla, fibula ile tibia). Her kemiği kendi renginde birkaç kesitte kısa vuruşlarla işaretleyip "Ayır"a basın: maske temas yüzeyinden katmanlara bölünür.</p>
     <ul class="layers mkl" id="mkLayers"></ul>
-    <span class="seg" id="mkTools" role="group" aria-label="İşaret aracı">
+    <span class="seg tools" id="mkTools" role="group" aria-label="İşaret aracı">
       <button data-t="paint" aria-pressed="false"><svg class="i"><use href="#i-brush"/></svg>İşaretle</button>
       <button data-t="erase" aria-pressed="false"><svg class="i"><use href="#i-eraser"/></svg>Silgi</button>
-      <button data-t="pick" aria-pressed="false"><svg class="i"><use href="#i-target"/></svg>Tıkla, seç</button>
+      <button data-t="pick" aria-pressed="false"><svg class="i"><use href="#i-target"/></svg>Seç</button>
     </span>
     <div class="ctl"><div class="ctl-row"><label for="mkRad">Fırça yarıçapı</label><output id="mkRadO">3 mm</output></div><input type="range" id="mkRad" min="1" max="10" step="0.5" value="3"></div>
-    <div class="btns"><button class="primary" id="mkRun" disabled><svg class="i"><use href="#i-scissors"/></svg>Ayır</button><button id="mkAdd"><svg class="i"><use href="#i-plus"/></svg>Katman ekle</button><button id="mkClear" disabled>İşaretleri temizle</button></div>
+    <div class="btns grid2"><button class="primary" id="mkRun" disabled><svg class="i"><use href="#i-scissors"/></svg>Ayır</button><button id="mkAdd"><svg class="i"><use href="#i-plus"/></svg>Etiket ekle</button></div>
+    <div class="btns end"><button id="mkClear" class="ghost danger sm" disabled>İşaretleri temizle</button></div>
     <p class="hint" id="mkStat"></p>
-    <p class="hint more">"Tıkla, seç": 3B modelde ya da kesitte bir kemiğe tıklayınca o parça planlama kemiği olur (bölge büyütme). Shift ile birden fazla parça seçilir.</p>`;
+    <p class="hint more">"Seç": 3B modelde ya da kesitte bir kemiğe tıklayınca o parça planlama kemiği olur (bölge büyütme). Shift ile birden fazla parça seçilir.</p>`;
   document.querySelectorAll('#mkTools [data-t]').forEach(b => b.addEventListener('click', () => setTool(b.dataset.t)));
   $('mkRad').addEventListener('input', e => { radius = +e.target.value; $('mkRadO').textContent = `${fmt(radius, 1)} mm`; });
   $('mkRun').addEventListener('click', run);
@@ -283,7 +284,7 @@ window.Masks = (function () {
   $('mkAdd').addEventListener('click', () => {
     if (layers.length >= MAXL) return;
     const used = new Set(layers.map(L => L.color));
-    layers.push({ name: `Katman ${String.fromCharCode(65 + layers.length)}`, color: PALETTE.find(c => !used.has(c)) || OTHER });
+    layers.push({ name: `Kemik ${String.fromCharCode(65 + layers.length)}`, color: PALETTE.find(c => !used.has(c)) || OTHER });
     cur = layers.length; setTool('paint', true); status();
   });
   bus.addEventListener('volume', e => {
@@ -302,7 +303,7 @@ window.Masks = (function () {
       const ok = x && S.red && Array.isArray(x.dims) && x.dims.join() === [S.red.nx, S.red.ny, S.red.nz].join() && Array.isArray(x.layers) && Array.isArray(x.seeds);
       const was = active;
       if (!ok) { seeds = null; layers = defaults(); planIdx = new Set([1]); if (was) await St.segment(false); status(); return; }
-      layers = x.layers.slice(0, MAXL).map((L, i) => ({ name: typeof L.name === 'string' ? L.name.slice(0, 40) : `Katman ${String.fromCharCode(65 + i)}`, color: Number.isFinite(+L.color) ? +L.color : PALETTE[i] }));
+      layers = x.layers.slice(0, MAXL).map((L, i) => ({ name: typeof L.name === 'string' ? L.name.slice(0, 40) : `Kemik ${String.fromCharCode(65 + i)}`, color: Number.isFinite(+L.color) ? +L.color : PALETTE[i] }));
       seeds = new Uint8Array(N()); seedRed = S.red;
       x.seeds.slice(0, layers.length).forEach((s, i) => unrle(s, seeds.length, i + 1, seeds));
       planIdx = new Set((Array.isArray(x.plan) ? x.plan : [1]).map(Number).filter(i => i >= 1 && i <= layers.length));

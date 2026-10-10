@@ -446,6 +446,24 @@ label.chk input[type=checkbox] { margin: 0 4px 0 0; width: 15px; height: 15px; f
 .el-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; } .el-row > .el-list { display: contents; }
 .body > [hidden]:first-child + .col:empty + h3.sub, #fibBody > h3.sub:first-child { border-top: 0; padding-top: 0; margin-top: 0; }
 .empty { font-size: 12.5px; color: var(--faint); margin: 0; padding: 6px 0; }
+/* ---- round 2: open sections become cards, tool bars span the width, status reads as status ---- */
+details.sec[open] { border: 1px solid var(--accent-line); border-radius: var(--r); padding: 0 10px 12px; gap: 10px; }
+details.sec[open] > summary { margin: 0 -10px; border: 0; border-bottom: 1px solid var(--accent-line); border-radius: var(--r) var(--r) 0 0; }
+.sub-d[open] { border: 1px solid var(--line-strong); border-radius: var(--r); padding: 0 10px 12px; display: grid; gap: 10px; }
+.sub-d[open] > summary { margin: 0 -10px; border: 0; border-bottom: 1px solid var(--line-strong); border-radius: var(--r) var(--r) 0 0; background: var(--sunken); }
+.seg button[aria-pressed="true"], .seg button[aria-selected="true"], .seg button.on { background: var(--accent-soft); color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent-line); font-weight: 600; }
+.seg.tools { display: flex; width: 100%; box-sizing: border-box; padding: 2px; }
+.seg.tools button { flex: 1; height: 30px; padding: 0 6px; gap: 5px; }
+.btns.grid2 { display: grid; grid-template-columns: 1fr 1fr; }
+.btns.grid2 > button { width: 100%; padding: 0 6px; }
+.btns.end { justify-content: flex-end; }
+button.ghost { color: var(--accent); }
+button.ghost.danger { color: var(--crit); }
+.kv dt.wide, .kv dd.wide { grid-column: 1 / -1; }
+.kv dt.wide { border-bottom: 0; padding-bottom: 0; }
+.kv dd.wide { text-align: left; color: var(--fg); padding-top: 1px; }
+:is(#apprMsg, #auMsg, #expMsg, #fibMirrorMsg, #fibPickMsg, #fibStatus, #guideStat, #imMsg, #lesStatus, #lsStat, #mkStat, #plMsg, #seStat, #verMsg, #xMsg) { color: var(--fg); background: var(--sunken); border-radius: var(--r); padding: 6px 10px; }
+:is(#apprMsg, #auMsg, #expMsg, #fibMirrorMsg, #fibPickMsg, #fibStatus, #guideStat, #imMsg, #lesStatus, #lsStat, #mkStat, #plMsg, #seStat, #verMsg, #xMsg):empty { display: none; }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
