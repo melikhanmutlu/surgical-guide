@@ -199,8 +199,8 @@ window.Ref = (function () {
       <label class="chk"><input type="checkbox" id="rfPlane" ${view.plane ? 'checked' : ''}> Orta düzlemi göster</label>
       <div class="btns"><button data-pk="R"><svg class="i"><use href="#i-target"/></svg>Sağ kondili seç</button><button data-pk="L"><svg class="i"><use href="#i-target"/></svg>Sol kondili seç</button></div>
       <div class="btns"><button id="rfRun">Yeniden hesapla</button></div>
-      <p class="hint">Ayna görüntüsü rekonstrüksiyon için hedef konturdur. Kesitlerde kesikli gri çizgi olarak da görünür.</p>`
-      : `<p class="hint">Orta sagittal düzlem, kemiğin kendi ayna görüntüsüne en iyi oturduğu düzlem olarak bulunur.</p><div class="btns"><button id="rfRun" ${S.mask ? '' : 'disabled'}><svg class="i"><use href="#i-target"/></svg>Simetri ve kondilleri bul</button></div>`}`;
+      <p class="hint more">Ayna görüntüsü rekonstrüksiyon için hedef konturdur. Kesitlerde kesikli gri çizgi olarak da görünür.</p>`
+      : `<p class="hint more">Orta sagittal düzlem, kemiğin kendi ayna görüntüsüne en iyi oturduğu düzlem olarak bulunur.</p><div class="btns"><button id="rfRun" ${S.mask ? '' : 'disabled'}><svg class="i"><use href="#i-target"/></svg>Simetri ve kondilleri bul</button></div>`}`;
     $('rfRun').addEventListener('click', () => compute(true));
     if (!ref) return;
     $('rfMirror').addEventListener('change', e => { view.mirror = e.target.checked; update(); });

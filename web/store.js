@@ -256,30 +256,30 @@
 
   // ---------- versions ----------
   let lastVersionN = 0;
-  function versionLabel() { const e = H.list[H.idx]; if (e && e.cp) return 'Checkpoint ' + e.cp; return lastVersionN ? `Taslak (son checkpoint S${lastVersionN})` : 'Taslak'; }
+  function versionLabel() { const e = H.list[H.idx]; if (e && e.cp) return 'Sürüm ' + e.cp; return lastVersionN ? `Taslak (son sürüm S${lastVersionN})` : 'Taslak'; }
   function renderVersions(vs) {
     lastVersionN = vs.length ? vs[0].n : 0;
-    $('verList').innerHTML = vs.map(v => `<li><span class="meta"><span>S${v.n}${v.note ? ' · ' + esc(v.note) : ''}</span><small>${esc(v.author || '–')} · ${when(v.created_at)}</small></span><span class="act"><button data-v="${v.n}">Yükle</button></span></li>`).join('') || (caseId ? '<li class="hint">Henüz checkpoint yok.</li>' : '');
+    $('verList').innerHTML = vs.map(v => `<li><span class="meta"><span>S${v.n}${v.note ? ' · ' + esc(v.note) : ''}</span><small>${esc(v.author || '–')} · ${when(v.created_at)}</small></span><span class="act"><button data-v="${v.n}">Yükle</button></span></li>`).join('') || (caseId ? '<li class="hint">Henüz sürüm yok.</li>' : '');
     $('verList').querySelectorAll('[data-v]').forEach(b => b.addEventListener('click', () => restoreVersion(+b.dataset.v)));
   }
-  async function loadVersions() { if (!caseId) { renderVersions([]); return; } try { renderVersions(await backend.versions(caseId)); } catch (e) { $('verMsg').textContent = 'Checkpoint\'ler alınamadı: ' + e.message; } }
+  async function loadVersions() { if (!caseId) { renderVersions([]); return; } try { renderVersions(await backend.versions(caseId)); } catch (e) { $('verMsg').textContent = 'Sürümler alınamadı: ' + e.message; } }
   async function saveVersion(note) {
     try {
       await ensureCase(); await flush();
       const plan = St.planOf(), r = await backend.addVersion(caseId, { plan, note: note || '', author: plan.surgeon || '' });
-      $('verMsg').textContent = `Checkpoint S${r.n} oluşturuldu.`; $('verNote').value = ''; dirty = false;
+      $('verMsg').textContent = `Sürüm S${r.n} oluşturuldu.`; $('verNote').value = ''; dirty = false;
       if (H.idx >= 0) { H.list[H.idx].cp = `S${r.n}${note ? ' · ' + note : ''}`; renderHist(); }
       loadVersions(); refreshList();
-    } catch (e) { $('verMsg').textContent = 'Checkpoint oluşturulamadı: ' + e.message; }
+    } catch (e) { $('verMsg').textContent = 'Sürüm oluşturulamadı: ' + e.message; }
   }
   async function restoreVersion(n) {
     try {
       const v = await backend.getVersion(caseId, n);
       const ok = await St.openPlan(v.plan);
       if (!ok) return;
-      lastJSON = null; snapshot(`Checkpoint S${n}${v.note ? ' · ' + v.note : ''} yüklendi`, true); changedPlan(St.planOf());
+      lastJSON = null; snapshot(`Sürüm S${n}${v.note ? ' · ' + v.note : ''} yüklendi`, true); changedPlan(St.planOf());
       $('verMsg').textContent = `S${n} yüklendi ve taslak oldu. Geri almak için Ctrl+Z.`;
-    } catch (e) { $('verMsg').textContent = 'Checkpoint yüklenemedi: ' + e.message; }
+    } catch (e) { $('verMsg').textContent = 'Sürüm yüklenemedi: ' + e.message; }
   }
   $('verSave').addEventListener('click', () => saveVersion($('verNote').value.trim()));
   $('caseNew').addEventListener('click', async () => { await flush(); caseId = null; caseName = ''; $('caseName').value = ''; renderCaseHead(); renderVersions([]); baseline(); setSave(autosave ? 'Yeni vaka; ilk değişiklikte kaydedilir' : 'Yeni vaka'); markCurrent(); });

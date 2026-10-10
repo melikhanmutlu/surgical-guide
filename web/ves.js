@@ -150,18 +150,18 @@ window.Vessels = (function () {
   (window.ExportHooks = window.ExportHooks || []).push(files => { const s = summary(); if (s) files.push({ name: 'damar_pedikul_plani.json', data: JSON.stringify(s, null, 2) }); });
 
   // ---------- panel ----------
-  const F = [['perf', 'Perforatör (distal uçtan)', 40, 300, 1, 'mm'], ['padL', 'Deri adası boyu', 30, 200, 5, 'mm'], ['padW', 'Deri adası eni', 15, 90, 5, 'mm'], ['origin', 'Arter çıkışı (fibula başından)', 30, 120, 1, 'mm']];
+  const F = [['perf', 'Perforatör (distal uçtan)', 40, 300, 1, 'mm'], ['padL', 'Deri adası boyu', 30, 200, 5, 'mm'], ['padW', 'Deri adası eni', 15, 90, 5, 'mm'], ['origin', 'Arter çıkışı', 30, 120, 1, 'mm']];
   function render() {
     const st = fib(), s = summary();
     if (!st) { $('vesBox').innerHTML = ''; return; }
     if (!$('vsDonor')) {
       $('vesBox').innerHTML = `<h3 class="sub">Damar ve pedikül</h3>
-        <div class="ctl"><label for="vsDonor" class="lbl2">Verici bacak</label><select id="vsDonor"><option value="R">Sağ bacak</option><option value="L">Sol bacak</option></select></div>
-        <div class="ctl"><label for="vsRecip" class="lbl2">Alıcı damar tarafı (boyun)</label><select id="vsRecip"><option value="R">Sağ</option><option value="L">Sol</option></select></div>
+        <div class="ctl"><label for="vsDonor" class="lbl2">Verici bacak</label><select id="vsDonor" data-seg><option value="R">Sağ bacak</option><option value="L">Sol bacak</option></select></div>
+        <div class="ctl"><label for="vsRecip" class="lbl2">Alıcı taraf (boyun)</label><select id="vsRecip" data-seg><option value="R">Sağ</option><option value="L">Sol</option></select></div>
         ${F.map(([k, t, mn, mx, stp, un]) => `<div class="ctl"><div class="ctl-row"><label for="vs_${k}">${t}</label><output id="vso_${k}"></output></div><input type="range" id="vs_${k}" min="${mn}" max="${mx}" step="${stp}"></div>`).join('')}
         <div class="btns"><button id="vsPick"><svg class="i"><use href="#i-target"/></svg>Alıcı damar noktasını seç</button><button id="vsAuto">Tahmini noktaya dön</button></div>
         <dl class="kv" id="vsSum"></dl>
-        <p class="hint">Kırmızı: peroneal damarlar ve pedikül. Turuncu: deri adası. Damar konumları kontrastsız BT'de tahminidir; Doppler ya da BT anjiyografi ile doğrulayın.</p>`;
+        <p class="hint more">Kırmızı: peroneal damarlar ve pedikül. Turuncu: deri adası. Damar konumları kontrastsız BT'de tahminidir; Doppler ya da BT anjiyografi ile doğrulayın.</p>`;
       $('vsDonor').addEventListener('change', e => { P.donor = e.target.value; changed(); });
       $('vsRecip').addEventListener('change', e => { P.recip = e.target.value; P.rp = null; changed(); });
       F.forEach(([k, , , , , un]) => $('vs_' + k).addEventListener('input', e => { P[k] = +e.target.value; $('vso_' + k).textContent = `${P[k]} ${un}`; later(); St.emit('changed'); }));

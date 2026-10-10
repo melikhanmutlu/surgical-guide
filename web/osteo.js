@@ -86,7 +86,7 @@ window.Osteo = (function () {
     if (!last || !last.length) { box.innerHTML = ''; return; }
     box.innerHTML = `<h3 class="sub">Osteotomi raporu</h3>
       <div class="tbl"><table><thead><tr><th>Bağlantı</th><th>Açı</th><th>Temas</th><th>Aralık (mm)</th></tr></thead><tbody>${last.map(o => `<tr title="${o.name}"><td>${o.short}</td><td>${angTxt(o)}</td><td>${fmt(o.contact, 0)} mm² %${fmt(o.overlap * 100, 0)}</td><td>${fmt(o.gap)}</td></tr>`).join('')}</tbody></table></div>
-      <p class="hint">M: mandibula güdüğü, S: fibula segmenti (ü: üst namlu). Kama: segmentler arası fibuladan çıkarılan kapama kaması. Eksen: greft ile mandibula güdüğü arasındaki açı. Temas yüzdesi greft kesitine göredir. Aralık testere yuvasının güdükten aldığı paydır; segmentler arasında testere payı fibulada ayrıldığından sıfırdır.</p>`;
+      <p class="hint more">M: mandibula güdüğü, S: fibula segmenti (ü: üst namlu). Kama: segmentler arası fibuladan çıkarılan kapama kaması. Eksen: greft ile mandibula güdüğü arasındaki açı. Temas yüzdesi greft kesitine göredir. Aralık testere yuvasının güdükten aldığı paydır; segmentler arasında testere payı fibulada ayrıldığından sıfırdır.</p>`;
   }
   function summary() {
     return last ? last.map(o => ({ baglanti: o.name, aci_deg: o.angle == null ? null : +o.angle.toFixed(1), aci_turu: o.kind === 'J' ? 'kapama kaması' : 'greft-mandibula ekseni', bukme_deg: o.bend != null ? +o.bend.toFixed(1) : undefined,

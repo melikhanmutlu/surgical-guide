@@ -272,17 +272,17 @@ window.Plate = (function () {
 
   // ---------- panel ----------
   function msg(t) { const el = $('plMsg'); if (el) el.textContent = t; }
-  const F = [['h', 'Yükseklik (guide merkezine göre)', -15, 15, 0.5, 'mm'], ['ext', 'Kesilerin ötesine uzantı', 10, 45, 1, 'mm'], ['shift', 'Delik dizisini kaydır', -4, 4, 0.5, 'mm'], ['w', 'Plak genişliği', 3, 10, 0.5, 'mm'], ['t', 'Plak kalınlığı', 0.6, 3.5, 0.1, 'mm'], ['pitch', 'Delik aralığı', 4, 12, 0.5, 'mm'], ['d', 'Vida çapı', 1.5, 3, 0.1, 'mm']];
+  const F = [['h', 'Plak yüksekliği', -15, 15, 0.5, 'mm'], ['ext', 'Kesi ötesi uzantı', 10, 45, 1, 'mm'], ['shift', 'Delik kaydırma', -4, 4, 0.5, 'mm'], ['w', 'Plak genişliği', 3, 10, 0.5, 'mm'], ['t', 'Plak kalınlığı', 0.6, 3.5, 0.1, 'mm'], ['pitch', 'Delik aralığı', 4, 12, 0.5, 'mm'], ['d', 'Plak vida çapı', 1.5, 3, 0.1, 'mm']];
   function render() {
     const s = summary();
     $('plateBox').innerHTML = `<h3 class="sub">Plak</h3>
-      <label class="chk"><input type="checkbox" id="plOn" ${P.on ? 'checked' : ''}> Rekonstrüksiyon plağı planla</label>
+      <label class="chk"><input type="checkbox" id="plOn" ${P.on ? 'checked' : ''}> Plak planla</label>
       ${P.on ? `<div class="ctl"><label for="plSys" class="lbl2">Plak sistemi</label><select id="plSys">${Object.entries(SYSTEMS).map(([k, x]) => `<option value="${k}" ${P.sys === k ? 'selected' : ''}>${x.name}</option>`).join('')}</select></div>
       ${F.filter(f => P.sys === 'custom' || !['w', 't', 'pitch'].includes(f[0])).map(([k, t, mn, mx, st, un]) => `<div class="ctl"><div class="ctl-row"><label for="pl_${k}">${t}</label><output id="plo_${k}">${fmt(P[k], st < 1 ? 1 : 0)} ${un}</output></div><input type="range" id="pl_${k}" min="${mn}" max="${mx}" step="${st}" value="${P[k]}"></div>`).join('')}
       <div id="plSum">${sumHTML(s)}</div>
-      <div class="btns"><button id="plScrews" ${s ? '' : 'disabled'}><svg class="i"><use href="#i-target"/></svg>Vidaları plak deliklerine taşı</button></div>
-      <div class="btns"><button id="plBend" ${s ? '' : 'disabled'}><svg class="i"><use href="#i-download"/></svg>Bükme modeli STL</button><button id="plTpl" ${s ? '' : 'disabled'}>Plak şablonu STL</button></div>
-      <p class="hint" id="plMsg">Kırmızı delikler kesiye ya da greft eklemine 3 mm'den yakındır, boş bırakılır. Yeşil delikler guide vidalarıyla eşleşir. Vida boyu her delikte karşı kortekse göre ölçülür; sinir kanalı ayrıca kontrol edilmelidir.</p>` : '<p class="hint">Plak hattı kalan kemik ve greftlerin dış yüzeyini izler; guide vidaları plak deliklerine yerleştirilebilir.</p>'}`;
+      <div class="btns"><button id="plScrews" ${s ? '' : 'disabled'}><svg class="i"><use href="#i-target"/></svg>Vidaları plağa hizala</button></div>
+      <div class="btns"><button id="plBend" class="ghost" ${s ? '' : 'disabled'}><svg class="i"><use href="#i-download"/></svg>Bükme modeli STL</button><button id="plTpl" class="ghost" ${s ? '' : 'disabled'}><svg class="i"><use href="#i-download"/></svg>Plak şablonu STL</button></div>
+      <p class="hint more">Kırmızı delikler kesiye ya da greft eklemine 3 mm'den yakındır, boş bırakılır. Yeşil delikler guide vidalarıyla eşleşir. Vida boyu her delikte karşı kortekse göre ölçülür; sinir kanalı ayrıca kontrol edilmelidir.</p><p class="hint" id="plMsg"></p>` : '<p class="hint more">Plak hattı kalan kemik ve greftlerin dış yüzeyini izler; guide vidaları plak deliklerine yerleştirilebilir.</p>'}`;
     wire();
   }
   const sumHTML = s => s ? `<dl class="kv"><dt>Uzunluk</dt><dd>${s.uzunluk_mm} mm · ${s.holes} delik</dd><dt>Kullanılabilir</dt><dd>${s.kullanilabilir.A} · ${s.kullanilabilir.defekt} · ${s.kullanilabilir.B}</dd><dt>Kesiye yakın</dt><dd>${s.kesiye_yakin} delik boş kalır</dd><dt>Bükme</dt><dd>${s.bukme_deg.kalinlik_yonunde}° yüzeye · ${s.bukme_deg.kenar_yonunde}° kenara</dd><dt>Guide ile eşleşen</dt><dd>${s.guide_ile_eslesen}</dd>${s.greft_eklemine_yakin ? `<dt>Greft eklemine yakın</dt><dd>${s.greft_eklemine_yakin} delik boş kalır</dd>` : ''}<dt>Vidalar</dt><dd>${screwText(s)}</dd></dl>` : `<p class="hint">${S.anchor ? 'Plak hattı bulunamadı; yüksekliği değiştirin.' : 'Önce rezeksiyon bölgesini ve kesileri belirleyin.'}</p>`;

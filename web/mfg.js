@@ -13,7 +13,7 @@ window.Mfg = (function () {
     custom: { name: 'Özel', clear: 0.3, slotTol: 0.2, minWall: 2.0, fit: 0.1, note: '' },
   };
   const DEF = { prof: null, blade: 0.6, clear: 0.3, slotTol: 0.2, minWall: 2.0, fit: 0.1 };
-  const F = [['blade', 'Testere ağzı kalınlığı', 0.3, 1.5, 0.05, 'mm'], ['clear', 'Kemik boşluğu', 0, 1, 0.05, 'mm'], ['slotTol', 'Yuva toleransı (testereye ek)', 0, 0.8, 0.05, 'mm'], ['minWall', 'En ince duvar', 0.8, 4, 0.1, 'mm'], ['fit', 'Kovan geçme payı (matkaba ek)', 0, 0.5, 0.05, 'mm']];
+  const F = [['blade', 'Testere ağzı kalınlığı', 0.3, 1.5, 0.05, 'mm'], ['clear', 'Kemik aralığı', 0, 1, 0.05, 'mm'], ['slotTol', 'Yuva toleransı (testereye ek)', 0, 0.8, 0.05, 'mm'], ['minWall', 'En ince duvar', 0.8, 4, 0.1, 'mm'], ['fit', 'Kovan geçme payı (matkaba ek)', 0, 0.5, 0.05, 'mm']];
   let M = Object.assign({}, DEF);
   const slot = () => Math.round((M.blade + M.slotTol) * 100) / 100;
 
@@ -65,7 +65,7 @@ window.Mfg = (function () {
     box.innerHTML = `<h3 class="sub">Üretim profili</h3>
       <div class="ctl"><label for="mfProf" class="lbl2">Malzeme ve süreç</label><select id="mfProf"><option value="">Seçilmedi</option>${Object.entries(PRESETS).map(([k, x]) => `<option value="${k}" ${M.prof === k ? 'selected' : ''}>${x.name}</option>`).join('')}</select></div>
       ${M.prof ? F.map(([k, t, mn, mx, st, un]) => `<div class="ctl"><div class="ctl-row"><label for="mf_${k}">${t}</label><output id="mfo_${k}">${fmt(M[k], 2)} ${un}</output></div><input type="range" id="mf_${k}" min="${mn}" max="${mx}" step="${st}" value="${M[k]}" ${M.prof !== 'custom' && k !== 'blade' ? 'disabled' : ''}></div>`).join('') +
-        `<p class="hint">Kesi yuvası ${fmt(slot(), 2)} mm olur. Profil uygulanınca boşluk, geçme payı, yuvalar ve en ince duvar tasarıma yazılır; değişen kesilerin onayı kalkar. ${PRESETS[M.prof].note}</p>` : '<p class="hint">Profil seçilince guide toleransları üretim yöntemine göre ayarlanır.</p>'}`;
+        `<p class="hint">Kesi yuvası ${fmt(slot(), 2)} mm olur.</p><p class="hint more">Profil uygulanınca boşluk, geçme payı, yuvalar ve en ince duvar tasarıma yazılır; değişen kesilerin onayı kalkar. ${PRESETS[M.prof].note}</p>` : '<p class="hint more">Profil seçilince guide toleransları üretim yöntemine göre ayarlanır.</p>'}`;
     $('mfProf').addEventListener('change', e => { const k = e.target.value || null; M = Object.assign({}, M, k ? PRESETS[k] : {}, { prof: k }); delete M.name; delete M.note; apply(); render(); St.emit('changed'); });
     F.forEach(([k, , , , , un]) => { const el = $('mf_' + k); if (!el) return;
       el.addEventListener('input', () => { M[k] = +el.value; $('mfo_' + k).textContent = `${fmt(M[k], 2)} ${un}`; });

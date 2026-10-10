@@ -5,8 +5,8 @@
 window.FibGuide = (function () {
   const St = window.Studio; if (!St || !window.Fibula) return null;
   const { S, fmt, bus } = St, $ = id => document.getElementById(id);
-  const BODY = [['Lm', 'Uç payı (segmentlerin ötesinde)', 3, 20, 0.5, 'mm'], ['W', 'Genişlik', 10, 30, 0.5, 'mm'], ['wrap', 'Sarma derinliği', 0, 15, 0.5, 'mm'], ['wall', 'Duvar kalınlığı', 1.5, 5, 0.1, 'mm'], ['clear', 'Kemik boşluğu', 0, 1, 0.05, 'mm']];
-  const SCREW = [['off', 'Konum (segment ortasından)', -25, 25, 0.5, 'mm'], ['ang', 'Açı (fibula ekseni etrafında)', -40, 40, 1, '°'], ['d', 'Matkap çapı', 1.2, 3.5, 0.1, 'mm'], ['D', 'Kovan dış çapı', 3, 8, 0.1, 'mm'], ['sleeveH', 'Kovan yüksekliği', 0, 12, 0.5, 'mm'], ['len', 'Vida boyu', 6, 30, 1, 'mm']];
+  const BODY = [['Lm', 'Uç uzantısı', 3, 20, 0.5, 'mm'], ['W', 'Genişlik', 10, 30, 0.5, 'mm'], ['wrap', 'Sarma derinliği', 0, 15, 0.5, 'mm'], ['wall', 'Duvar kalınlığı', 1.5, 5, 0.1, 'mm'], ['clear', 'Kemik aralığı', 0, 1, 0.05, 'mm']];
+  const SCREW = [['off', 'Konum (orta = 0)', -25, 25, 0.5, 'mm'], ['ang', 'Eksen etrafı açı', -40, 40, 1, '°'], ['d', 'Matkap çapı', 1.2, 3.5, 0.1, 'mm'], ['D', 'Kovan dış çapı', 3, 8, 0.1, 'mm'], ['sleeveH', 'Kovan yüksekliği', 0, 12, 0.5, 'mm'], ['len', 'Vida boyu', 6, 30, 1, 'mm']];
   let sel = 0;
   const dec = st => (st < 0.1 ? 2 : st < 1 ? 1 : 0);
   const ctl = (id, t, mn, mx, st, v, un) => `<div class="ctl"><div class="ctl-row"><label for="${id}">${t}</label><output id="${id}O">${fmt(v, dec(st))} ${un}</output></div><input type="range" id="${id}" min="${mn}" max="${mx}" step="${st}" value="${v}"></div>`;
@@ -26,11 +26,11 @@ window.FibGuide = (function () {
     const sc = list[sel], R = S.fib.guide && S.fib.guide.result, edited = !!(P().fg || P().fsc);
     box.innerHTML = `<h3 class="sub">Fibula guide'ı</h3>
       ${BODY.map(([k, t, mn, mx, st, un]) => ctl('fg_' + k, t, mn, mx, st, b[k], un)).join('')}
-      <p class="hint">Guide boyu ${fmt(info.body.L, 0)} mm${R ? ` · temas ${fmt(R.contact, 0)} mm²` : Fibula.building() ? ' · üretiliyor' : ''}. Kesi yuvaları testere payı kadar açılır.</p>
-      <div class="ctl"><span class="lbl2">Guide vidaları</span><div class="el-list" id="fgList">${list.map((s, i) => `<button class="el ${i === sel ? 'on' : ''}" data-i="${i}" aria-pressed="${i === sel}">Vida ${i + 1}</button>`).join('')}</div></div>
-      ${sc ? `<div class="ctl"><label for="fgSeg" class="lbl2">Segment</label><select id="fgSeg">${info.segs.map((g, i) => `<option value="${i}" ${i === sc.seg ? 'selected' : ''}>Segment ${i + 1}${g.barrel ? ' (üst)' : ''}</option>`).join('')}</select></div>
+      <p class="hint">Guide boyu ${fmt(info.body.L, 0)} mm${R ? ` · temas ${fmt(R.contact, 0)} mm²` : Fibula.building() ? ' · üretiliyor' : ''}.</p><p class="hint more">Kesi yuvaları testere payı kadar açılır.</p>
+      <div class="ctl"><span class="lbl2">Guide vidaları</span><div class="el-list" id="fgList" role="group" aria-label="Guide vidaları">${list.map((s, i) => `<button class="el ${i === sel ? 'on' : ''}" data-i="${i}" aria-pressed="${i === sel}">Vida ${i + 1}</button>`).join('')}</div></div>
+      ${sc ? `<div class="ctl"><label for="fgSeg" class="lbl2">Hangi segment</label><select id="fgSeg">${info.segs.map((g, i) => `<option value="${i}" ${i === sc.seg ? 'selected' : ''}>Segment ${i + 1}${g.barrel ? ' (üst)' : ''}</option>`).join('')}</select></div>
       ${SCREW.map(([k, t, mn, mx, st, un]) => ctl('fs_' + k, t, mn, mx, st, sc[k], un)).join('')}` : ''}
-      <div class="btns"><button id="fgAdd"><svg class="i"><use href="#i-plus"/></svg>Vida ekle</button>${list.length > 1 ? '<button id="fgDel"><svg class="i"><use href="#i-trash"/></svg>Vidayı sil</button>' : ''}${edited ? '<button id="fgAuto">Otomatik değerlere dön</button>' : ''}</div>`;
+      <div class="btns"><button id="fgAdd" class="ghost"><svg class="i"><use href="#i-plus"/></svg>Vida ekle</button>${list.length > 1 ? '<button id="fgDel" class="sm"><svg class="i"><use href="#i-trash"/></svg>Vidayı sil</button>' : ''}${edited ? '<button id="fgAuto">Otomatik değerlere dön</button>' : ''}</div>`;
     BODY.forEach(([k, , , , st, un]) => wire('fg_' + k, v => setBody(k, v), st, un));
     if (sc) {
       SCREW.forEach(([k, , , , st, un]) => wire('fs_' + k, v => { screws()[sel][k] = v; }, st, un));

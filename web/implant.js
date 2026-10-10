@@ -164,7 +164,7 @@ window.Implants = (function () {
   (window.ExportHooks = window.ExportHooks || []).push(files => { const s = summary(); if (s) files.push({ name: 'implant_plani.json', data: JSON.stringify(s, null, 2) }); });
 
   // ---------- panel ----------
-  const F = [['t', 'Konum (segment başından)', 0, 60, 0.5, 'mm'], ['d', 'Çap', 3, 6, 0.1, 'mm'], ['len', 'Boy', 6, 16, 0.5, 'mm'], ['tb', 'Eğim (bukkal-lingual)', -89, 89, 1, '°'], ['tm', 'Eğim (mezial-distal)', -89, 89, 1, '°']];
+  const F = [['t', 'Konum (baştan)', 0, 60, 0.5, 'mm'], ['d', 'Çap', 3, 6, 0.1, 'mm'], ['len', 'Boy', 6, 16, 0.5, 'mm'], ['tb', 'Eğim (bukkal-lingual)', -89, 89, 1, '°'], ['tm', 'Eğim (mezial-distal)', -89, 89, 1, '°']];
   function render() {
     const box = $('implBox'); if (!box) return;
     const st = fib();
@@ -172,16 +172,15 @@ window.Implants = (function () {
     if (box.contains(document.activeElement) && document.activeElement.type === 'range') { renderTable(); return; }
     if (sel >= list.length) sel = list.length - 1;
     const im = list[sel], segs = st.last.segs;
-    box.innerHTML = `<h3 class="sub">Dental implant planı</h3>
-      <div class="btns"><button id="imAdd"><svg class="i"><use href="#i-plus"/></svg>İmplant ekle</button><button id="imPick"><svg class="i"><use href="#i-target"/></svg>Greft üzerinde seç</button></div>
-      <div class="btns"><button id="imAuto"><svg class="i"><use href="#i-target"/></svg>Otomatik yerleştir</button></div>
+    box.innerHTML = `<h3 class="sub">Dental implant</h3>
+      <div class="btns"><button id="imAuto" class="accent"><svg class="i"><use href="#i-spark"/></svg>Otomatik yerleştir</button><button id="imPick"><svg class="i"><use href="#i-target"/></svg>Grefte tıkla</button></div>
       <p class="hint" id="imMsg">${msgText}</p>
-      <div class="el-list" id="imList">${list.map((x, i) => `<button class="el ${i === sel ? 'on' : ''}" data-i="${i}" aria-pressed="${i === sel}">İmplant ${i + 1}</button>`).join('')}</div>
-      ${im ? `<div class="ctl"><label for="imSeg" class="lbl2">Segment</label><select id="imSeg">${segs.map((g, i) => `<option value="${i}" ${i === im.seg ? 'selected' : ''}>Segment ${i + 1}${g.barrel ? ' (üst)' : ''} · ${fmt(g.L)} mm</option>`).join('')}</select></div>
+      <div class="el-row"><div class="el-list" id="imList" role="group" aria-label="İmplantlar">${list.map((x, i) => `<button class="el ${i === sel ? 'on' : ''}" data-i="${i}" aria-pressed="${i === sel}">İmplant ${i + 1}</button>`).join('')}</div><button id="imAdd" class="ghost sm" title="İmplant ekle"><svg class="i"><use href="#i-plus"/></svg>İmplant</button></div>
+      ${im ? `<div class="ctl"><label for="imSeg" class="lbl2">Hangi segment</label><select id="imSeg">${segs.map((g, i) => `<option value="${i}" ${i === im.seg ? 'selected' : ''}>Segment ${i + 1}${g.barrel ? ' (üst)' : ''} · ${fmt(g.L)} mm</option>`).join('')}</select></div>
       ${F.map(([k, t, mn, mx, stp, un]) => `<div class="ctl"><div class="ctl-row"><label for="im_${k}">${t}</label><output id="imo_${k}">${fmt(im[k], stp < 1 ? 1 : 0)} ${un}</output></div><input type="range" id="im_${k}" min="${mn}" max="${k === 't' ? Math.ceil(segs[Math.min(im.seg, segs.length - 1)].L) : mx}" step="${stp}" value="${im[k]}"></div>`).join('')}
-      <div class="btns"><button id="imDel"><svg class="i"><use href="#i-trash"/></svg>İmplantı sil</button></div>` : ''}
+      <div class="btns"><button id="imDel" class="sm"><svg class="i"><use href="#i-trash"/></svg>İmplantı sil</button></div>` : ''}
       <div id="imTbl"></div>
-      <p class="hint">İmplant ekseni varsayılan olarak oklüzal yöndedir. Kemik örtüsü implant yüzeyinde, duvar 1 mm dışında greft ve kalan mandibula içinde örneklenir.</p>`;
+      <p class="hint more">İmplant ekseni varsayılan olarak oklüzal yöndedir. Kemik örtüsü implant yüzeyinde, duvar 1 mm dışında greft ve kalan mandibula içinde örneklenir.</p>`;
     renderTable();
     $('imAdd').addEventListener('click', () => add(freeSpot()));
     $('imAuto').addEventListener('click', () => {

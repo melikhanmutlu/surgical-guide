@@ -391,7 +391,7 @@ window.Fibula = (function () {
     if (!c) return [['warn', 'Uyarı', 'Fibula: mandibulada iki kesi ve rezeke parça olmadan segment planı kurulamaz.']];
     c.segs.forEach(g => { if (g.L < MIN_LEN) out.push(['crit', 'Kritik', `Fibula segmenti ${g.i + 1} ${fmt(g.L)} mm; en az ${MIN_LEN} mm olmalı (kanlanma riski).`]); });
     c.segs.forEach(g => [['başlangıç', g.a0], ['bitiş', g.a1]].forEach(([w, a]) => { if (a > ANGLE_WARN) out.push(['warn', 'Uyarı', `Fibula segmenti ${g.i + 1} ${w} kesisi ${fmt(a)}°; ${ANGLE_WARN}° üstü temas yüzeyini azaltır.`]); }));
-    if (c.dev > DEV_WARN) out.push(['warn', 'Uyarı', `Greftler defekt hattından ${fmt(c.dev)} mm sapıyor (eşik ${DEV_WARN} mm). Segment ekleyin ya da kırılma noktalarını önerin.`]);
+    if (c.dev > DEV_WARN) out.push(['warn', 'Uyarı', `Greftler defekt hattından ${fmt(c.dev)} mm sapıyor (eşik ${DEV_WARN} mm). Segment ekleyin ya da "Kesileri öner"i kullanın.`]);
     if (P0.distal < DISTAL_MIN) out.push(['crit', 'Kritik', `Distal korunan fibula ${fmt(P0.distal, 0)} mm; ayak bileği stabilitesi için en az ${DISTAL_MIN} mm.`]);
     if (c.proxLeft < PROX_KEEP) out.push(['crit', 'Kritik', `Fibula yetmiyor: proksimalde ${fmt(Math.max(c.proxLeft, 0), 0)} mm kalıyor, en az ${PROX_KEEP} mm gerekli.`]);
     const R = S.fib.guide && S.fib.guide.result;
@@ -410,8 +410,8 @@ window.Fibula = (function () {
     if (!active()) return;
     const P0 = plan(), D = last && last.D, Ld = D ? D.L : 0;
     document.querySelectorAll('#fibN button').forEach(b => b.setAttribute('aria-pressed', +b.dataset.n === P0.n));
-    $('fibKnots').innerHTML = P0.knots.map((f, i) => `<div class="ctl"><div class="ctl-row"><label for="fk${i}">Kırılma noktası ${i + 1}</label><output>${fmt(f * Ld)} mm</output></div><input type="range" id="fk${i}" min="0.08" max="0.92" step="0.005" value="${f}"></div>`).join('');
-    $('fibRolls').innerHTML = P0.roll.map((r, i) => `<div class="ctl"><div class="ctl-row"><label for="fr${i}">Segment ${i + 1} rotasyonu</label><output>${fmt(r, 0)}°</output></div><input type="range" id="fr${i}" min="-180" max="180" step="1" value="${r}"></div>`).join('');
+    $('fibKnots').innerHTML = P0.knots.map((f, i) => `<div class="ctl"><div class="ctl-row"><label for="fk${i}">Kesi ${i + 1} konumu</label><output>${fmt(f * Ld)} mm</output></div><input type="range" id="fk${i}" min="0.08" max="0.92" step="0.005" value="${f}"></div>`).join('');
+    $('fibRolls').innerHTML = P0.roll.map((r, i) => `<div class="ctl"><div class="ctl-row"><label for="fr${i}">Segment ${i + 1} dönüşü</label><output>${fmt(r, 0)}°</output></div><input type="range" id="fr${i}" min="-180" max="180" step="1" value="${r}"></div>`).join('');
     $('fibJointBox').hidden = P0.n < 2;
     const js = $('fibJoint'), jv = Math.min(+js.value || 1, P0.n - 1) || 1;
     js.innerHTML = Array.from({ length: P0.n - 1 }, (_, j) => `<option value="${j + 1}">Segment ${j + 1}–${j + 2}</option>`).join(''); js.value = jv;
@@ -433,7 +433,7 @@ window.Fibula = (function () {
     if (!active()) { $('tag6').hidden = true; return; }
     const c = last, R = S.fib.guide && S.fib.guide.result;
     $('fibRows').innerHTML = c ? c.segs.map(g => `<tr><td>${g.i + 1}${g.barrel ? ' (üst)' : ''}</td><td>${fmt(g.L)} mm</td><td>${fmt(g.s0 - F.c.smin, 0)} mm</td><td>${fmt(g.a0, 0)}° / ${fmt(g.a1, 0)}°</td><td>${fmt(g.crest)} mm</td></tr>`).join('') : '<tr><td colspan="5">Defekt yok</td></tr>';
-    const mm = $('fibMirrorMsg'); if (mm) mm.textContent = plan().mirror && c ? (c.D.mirrored ? `Defekt hattının ${c.D.mirrored}/${c.D.nmid} noktası sağlam taraftan aynalandı${window.Ref && Ref.get && Ref.get() ? '' : ' (orta hat kemiğin ortasından tahmin edildi)'}.` : 'Karşı tarafta eşleşen sağlam kemik bulunamadı (defekt orta hatta olabilir); mevcut kemik kullanılıyor.') : 'Tümör kemiği bozduysa greftler bozuk kemiğe değil, karşı taraftaki sağlam kemiğin aynadaki şekline göre dizilir.';
+    const mm = $('fibMirrorMsg'); if (mm) { mm.hidden = !(plan().mirror && c); mm.textContent = plan().mirror && c ? (c.D.mirrored ? `Defekt hattının ${c.D.mirrored}/${c.D.nmid} noktası sağlam taraftan aynalandı${window.Ref && Ref.get && Ref.get() ? '' : ' (orta hat kemiğin ortasından tahmin edildi)'}.` : 'Karşı tarafta eşleşen sağlam kemik bulunamadı (defekt orta hatta olabilir); mevcut kemik kullanılıyor.') : ''; }
     $('fibSum').innerHTML = c ? `<dt>Defekt boyu (hat boyunca)</dt><dd>${fmt(c.D.L)} mm</dd><dt>Greftlerin hattan sapması</dt><dd>${fmt(c.dev, 2)} mm</dd><dt>Kullanılan fibula</dt><dd>${fmt(c.used)} mm</dd><dt>Proksimalde kalan</dt><dd>${fmt(c.proxLeft, 0)} mm</dd><dt>Fibula guide'ı</dt><dd>${R ? `${fmt(S.fib.guide.ctx.g.L, 0)} mm, temas ${fmt(R.contact, 0)} mm²` : building ? 'üretiliyor' : '–'}</dd>` : '';
     const ck = checks(); $('fibChecks').innerHTML = (ck.length ? ck : [['ok', 'Uygun', 'Fibula kontrolleri geçti.']]).map(([k, t, m]) => `<li class="${k}"><b>${t}</b><span>${m}</span></li>`).join('');
     const crit = ck.some(x => x[0] === 'crit'), ok = approved();
@@ -572,6 +572,7 @@ window.Fibula = (function () {
   function focusBox(id) {
     if (window.UI) UI.openStep('st4');
     const el = $(id); if (!el) return;
+    for (let d = el.closest('details'); d; d = d.parentElement.closest('details')) d.open = true;   // folded sections open to show it
     requestAnimationFrame(() => { el.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); });
   }
   let down = null;
@@ -592,7 +593,7 @@ window.Fibula = (function () {
     const dk = hits.find(h => h.object.userData.disc), sg = hits.find(h => h.object.userData.legSeg !== undefined), gd = hits.find(h => h.object.userData.guide);
     if (dk) { selectJoint(dk.object.userData.joint); return; }
     if (gd && (!sg || gd.distance <= sg.distance)) { fsel.joint = fsel.seg = null; draw(last); focusBox('fgBox'); note('Fibula guide\'ı seçildi; gövde ve vida ayarları aşağıda.'); return; }
-    if (sg) { const i = sg.object.userData.legSeg; fsel.seg = i; fsel.joint = null; draw(last); focusBox(plan().roll.length > i ? 'fr' + i : 'fibRows'); note(`Segment ${i + 1} seçildi; rotasyonunu ve kırılma noktalarını ayarlayabilirsiniz.`); return; }
+    if (sg) { const i = sg.object.userData.legSeg; fsel.seg = i; fsel.joint = null; draw(last); focusBox(plan().roll.length > i ? 'fr' + i : 'fibRows'); note(`Segment ${i + 1} seçildi; dönüşünü ve kesi konumlarını ayarlayabilirsiniz.`); return; }
     fsel.joint = fsel.seg = null; draw(last); note('');
   }
   function selectJoint(j) {

@@ -335,8 +335,8 @@ window.PostOp = (function () {
     const cutRow = c => (c.ok ? `<tr><td>${c.name}</td><td>${sgn(c.pos)} mm${Math.abs(c.pos) >= 0.3 ? ` (${c.pos > 0 ? 'dar' : 'geniş'})` : ''}</td><td>${fmt(c.ang)}°</td></tr>` : `<tr><td>${c.name}</td><td colspan="2">${c.why}</td></tr>`).replace('<tr>', c.joined > 0.1 ? `<tr title="Işınların %${fmt(c.joined * 100, 0)}'i greftle birleşik; bunlar ölçüme katılmadı.">` : '<tr>');
     const grRow = g => (g.ok ? `<tr><td>${g.no}${g.barrel ? ' (üst)' : ''}</td><td>${fmt(g.disp)} mm</td><td>${fmt(g.ang)}°</td><td>${fmt(g.end0)} / ${fmt(g.end1)} mm</td></tr>` : `<tr><td>${g.no}</td><td colspan="3">yeterli yüzey yok</td></tr>`);
     const pc = v => `%${fmt(v * 100, 0)}`;
-    box.innerHTML = `<h3 class="sub">Ameliyat sonrası karşılaştırma</h3>
-      <p class="hint">Ameliyat sonrası BT plana hizalanır. Kesi, greft ve yüzey sapması ölçülür.</p>
+    box.innerHTML = `<h3 class="sub">Ameliyat sonrası</h3>
+      <p class="hint more">Ameliyat sonrası BT plana hizalanır. Kesi, greft ve yüzey sapması ölçülür.</p>
       <span class="btns"><label class="filebtn"><svg class="i"><use href="#i-folder"/></svg>Post-op BT<input type="file" id="postDir" webkitdirectory multiple></label>${sample ? `<button id="postSim" ${hasPlan ? '' : 'disabled'} title="Plandan üretilen sentetik ameliyat sonrası BT: kesi 1 2 mm geniş, greft 1 kaydırılmış, tarama döndürülmüş">Sentetik deneme</button>` : ''}${post ? '<button id="postClr">Kaldır</button>' : ''}</span>
       ${msg ? `<p class="hint">${msg}</p>` : ''}
       ${R ? `${R.stale ? '<p class="hint">Plan değişti. <button class="link" id="postRe">Yeniden hesapla</button></p>' : ''}
@@ -346,7 +346,7 @@ window.PostOp = (function () {
       ${R.grafts.length ? `<div class="tbl"><table><thead><tr><th>Greft</th><th>Kayma</th><th>Eksen</th><th>Uçlar</th></tr></thead><tbody>${R.grafts.map(grRow).join('')}</tbody></table></div>` : ''}
       <label class="chk"><input type="checkbox" id="postMap" ${view.map ? 'checked' : ''}> Sapma haritasını göster</label>
       <label class="chk"><input type="checkbox" id="postOnly" ${view.only ? 'checked' : ''}> Diğer modelleri gizle</label>` : ''}
-      <p class="hint">Hizalama, plandaki kalan kemiğe göre yapılır. Post-op BT plan BT'sine yakın konumda olmalı; büyük dönmeler hizalanmaz. Kesi konumu güdük yüzeyinden ölçülür: + kemik planlanandan fazla kalmış (rezeksiyon dar), − fazla alınmış. Greft güdüğe kaynamışsa kesi ölçülemez; greft tablosuna bakın. Greftin kendi ekseni boyunca kayması ve dönmesi zayıf ölçülür. Metal (plaka, vida) ayrılır. Sınırlar (${LIM.pos} mm, ${LIM.ang}°) örnek değerlerdir.</p>`;
+      <p class="hint more">Hizalama, plandaki kalan kemiğe göre yapılır. Post-op BT plan BT'sine yakın konumda olmalı; büyük dönmeler hizalanmaz. Kesi konumu güdük yüzeyinden ölçülür: + kemik planlanandan fazla kalmış (rezeksiyon dar), − fazla alınmış. Greft güdüğe kaynamışsa kesi ölçülemez; greft tablosuna bakın. Greftin kendi ekseni boyunca kayması ve dönmesi zayıf ölçülür. Metal (plaka, vida) ayrılır. Sınırlar (${LIM.pos} mm, ${LIM.ang}°) örnek değerlerdir.</p>`;
     $('postDir').addEventListener('change', async e => {
       const files = [...e.target.files]; e.target.value = ''; if (!files.length) return;
       const r = await St.readDicom(files); St.busy(false);

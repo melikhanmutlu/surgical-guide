@@ -92,8 +92,8 @@ window.Audit = (function () {
   }
   function block(role, h) {
     const s = status(role, h), name = role === 'sur' ? $('surgeon').value.trim() : engName;
-    return `<div class="audit-b"><b>${role === 'eng' ? '1. Mühendis (teknik) onayı' : '2. Cerrah (klinik) onayı'}</b><p class="hint">${stTxt(role, h)}</p>
-      <div class="ctl"><label for="au_${role}_n" class="lbl2">${role === 'eng' ? 'Biyomedikal mühendis' : 'Cerrah'}</label><input id="au_${role}_n" type="text" placeholder="Ad Soyad" autocomplete="off" value="${esc(name)}"></div>
+    return `<div class="audit-b"><b>${role === 'eng' ? '1 · Teknik onay (mühendis)' : '2 · Klinik onay (cerrah)'}</b><p class="hint">${stTxt(role, h)}</p>
+      ${role === 'eng' ? `<div class="ctl"><label for="au_eng_n" class="lbl2">Mühendis</label><input id="au_eng_n" type="text" placeholder="Ad Soyad" autocomplete="off" value="${esc(name)}"></div>` : `<p class="hint">Cerrah: ${name ? `<b>${esc(name)}</b>` : 'adı adımın başındaki "Cerrah" alanına yazın'}</p>`}
       <div class="ctl"><label for="au_${role}_c" class="lbl2">Yorum</label><textarea id="au_${role}_c" rows="2" placeholder="${role === 'eng' ? 'Üretilebilirlik, tolerans, malzeme' : 'Klinik değerlendirme'}"></textarea></div>
       <div class="btns">${s.ok ? `<button data-a="geri" data-r="${role}">Onayı geri çek</button>` : `<button class="primary" data-a="onay" data-r="${role}"><svg class="i"><use href="#i-check"/></svg>${role === 'eng' ? 'Teknik onay ver' : 'Klinik onay ver'}</button>`}<button data-a="not" data-r="${role}">Not ekle</button></div></div>`;
   }
@@ -102,23 +102,22 @@ window.Audit = (function () {
     if (box.contains(document.activeElement) && /INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;
     if (!S.anchor) { box.innerHTML = ''; return; }
     const h = planHash(), lastH = log.length ? log[log.length - 1].hash : '';
-    box.innerHTML = `<h3 class="sub">İki aşamalı plan onayı</h3>
-      <p class="hint">Önce mühendis teknik onayı, sonra cerrah klinik onayı verilir. Planda sonradan yapılan her değişiklik iki onayı da geçersiz kılar. Üretim paketi iki onay da geçerliyken alınır.</p>
+    box.innerHTML = `<h3 class="sub">Plan onayı</h3>
+      <p class="hint more">Önce mühendis teknik onayı, sonra cerrah klinik onayı verilir. Planda sonradan yapılan her değişiklik iki onayı da geçersiz kılar. Üretim paketi iki onay da geçerliyken alınır.</p>
       ${block('eng', h)}${block('sur', h)}
       <p class="hint" id="auMsg">${esc(note)}</p>
-      <details class="sub-d"><summary>Onay kaydı (${log.length})</summary>
+      <details class="sub-d"><summary>Onay geçmişi (${log.length})</summary>
         <p class="hint">${chain.ok ? `Zincir doğrulandı${log.length ? ` · son özet ${esc(String(lastH).slice(0, 16))}` : ''}.` : `<b style="color:var(--crit)">Zincir ${chain.bad + 1}. kayıtta bozuk.</b>`} Plan özeti ${h.slice(0, 16)}.</p>
         <ol class="aulog">${log.slice().reverse().map(e => `<li>${esc(when(e.at))} · ${esc(ROLE[e.role] || '')} ${esc(e.name)} ${esc(ACT[e.action] || '')}${e.comment ? `: “${esc(e.comment)}”` : ''}<small>#${Number(e.n) || 0} ${esc(String(e.hash || '').slice(0, 12))} · plan ${esc(String(e.plan || '').slice(0, 8))}</small></li>`).join('') || '<li>Kayıt yok.</li>'}</ol>
       </details>`;
     box.querySelectorAll('[data-a]').forEach(b => b.addEventListener('click', () => act(b.dataset.r, b.dataset.a)));
     $('au_eng_n').addEventListener('input', e => { engName = e.target.value; });
-    $('au_sur_n').addEventListener('input', e => { $('surgeon').value = e.target.value; $('surgeon').dispatchEvent(new Event('input')); });
   }
   function act(role, action) {
-    const name = $(`au_${role}_n`).value.trim(), comment = $(`au_${role}_c`).value.trim(), msg = t => { note = t; $('auMsg').textContent = t; };
+    const nameEl = role === 'sur' ? $('surgeon') : $('au_eng_n'), name = nameEl.value.trim(), comment = $(`au_${role}_c`).value.trim(), msg = t => { note = t; $('auMsg').textContent = t; };
     note = '';
-    if (!name) { msg('Önce adınızı yazın.'); $(`au_${role}_n`).focus(); return; }
-    if (!chain.ok) { msg('Kayıt zinciri bozuk; yeni onay eklenemez. Planın kayıtlı bir checkpoint\'ini açın.'); return; }
+    if (!name) { msg('Önce adınızı yazın.'); nameEl.focus(); return; }
+    if (!chain.ok) { msg('Kayıt zinciri bozuk; yeni onay eklenemez. Planın kayıtlı bir sürümünü açın.'); return; }
     if (action === 'onay') { const why = can(role); if (why) { msg(why); return; } }
     if (action === 'not' && !comment) { msg('Not için yorum yazın.'); return; }
     if (role === 'eng') engName = name;

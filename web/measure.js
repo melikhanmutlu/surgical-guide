@@ -92,11 +92,10 @@ window.Measure = (function () {
   }
   function render() {
     draw();
-    $('userMeasures').innerHTML = `<h3 class="sub">Serbest ölçümler</h3>
-      <span class="seg" id="mType" role="group" aria-label="Ölçüm türü">${Object.keys(NAMES).map(k => `<button data-mt="${k}" aria-pressed="${k === type}">${NAMES[k]}</button>`).join('')}</span>
+    $('userMeasures').innerHTML = `<h3 class="sub">Ölçüm aracı</h3>
+      <span class="seg full" id="mType" role="group" aria-label="Ölçüm türü">${Object.keys(NAMES).map(k => `<button data-mt="${k}" aria-pressed="${k === type}">${NAMES[k]}</button>`).join('')}</span>
       <div class="btns"><button id="mToggle" class="${on ? '' : 'primary'}"><svg class="i"><use href="#i-ruler"/></svg>${on ? 'Ölçümü bitir' : 'Ölçmeye başla'}</button></div>
-      ${S.measures.length ? `<div class="tbl"><table><thead><tr><th>#</th><th>Tür</th><th>Değer</th><th></th></tr></thead><tbody>${S.measures.map((m, i) => `<tr><td>${i + 1}</td><td>${NAMES[m.type]}</td><td>${val(m)}</td><td><button class="link" data-del="${i}" aria-label="Ölçüm ${i + 1}'i sil">Sil</button></td></tr>`).join('')}</tbody></table></div>` : '<p class="hint">Mesafe ve açı için noktalara, kalınlık için kemik yüzeyine tıklayın. Kesitlerde de nokta seçilebilir.</p>'}
-      <h3 class="sub">Plan ölçümleri</h3>`;
+      ${S.measures.length ? `<div class="tbl"><table><thead><tr><th>#</th><th>Tür</th><th>Değer</th><th></th></tr></thead><tbody>${S.measures.map((m, i) => `<tr><td>${i + 1}</td><td>${NAMES[m.type]}</td><td>${val(m)}</td><td><button class="link" data-del="${i}" aria-label="Ölçüm ${i + 1}'i sil">Sil</button></td></tr>`).join('')}</tbody></table></div>` : '<p class="hint more">Mesafe ve açı için noktalara, kalınlık için kemik yüzeyine tıklayın. Kesitlerde de nokta seçilebilir.</p>'}`;
     $('userMeasures').querySelectorAll('[data-mt]').forEach(b => b.addEventListener('click', () => { setType(b.dataset.mt); render(); }));
     $('mToggle').addEventListener('click', () => { setOn(!on); render(); });
     $('userMeasures').querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', () => { S.measures.splice(+b.dataset.del, 1); render(); St.emit('changed'); }));

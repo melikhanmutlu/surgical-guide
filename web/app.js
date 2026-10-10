@@ -505,7 +505,7 @@
     if ($('gRotBox')) $('gRotBox').hidden = !S.guideOn;
     const has = !!S.anchor && S.planes.length > 0, gOn = S.guideOn && !!S.anchor;
     $('resRemove').disabled = !has;
-    $('resRemove').innerHTML = S.resRemoved ? '<svg class="i"><use href="#i-eye"/></svg>Rezeke parçayı geri göster' : '<svg class="i"><use href="#i-trash"/></svg>Rezeksiyon bölgesini sil';
+    $('resRemove').innerHTML = S.resRemoved ? '<svg class="i"><use href="#i-eye"/></svg>Rezeke parçayı göster' : '<svg class="i"><use href="#i-eye"/></svg>Rezeke parçayı gizle';
     $('guideMake').disabled = !has; $('guideMake').hidden = gOn;
     $('guideDel').hidden = !gOn;
     $('planReset').disabled = !S.anchor;
@@ -951,7 +951,13 @@
     pt.obj.traverse(c => { if (!c.material) return; const m = c.material; if (m.userData.baseOpacity === undefined) m.userData.baseOpacity = m.opacity; m.opacity = m.userData.baseOpacity * a; m.transparent = m.opacity < 1; m.depthWrite = m.opacity >= 1 && m.userData.baseOpacity >= 1; m.needsUpdate = true; });
   }
   function renderParts() {
-    $('parts').innerHTML = Object.values(parts).map(pt => `<li><label><input type="checkbox" data-p="${pt.id}" ${pt.visible ? 'checked' : ''}><i style="background:#${pt.color.toString(16).padStart(6, '0')}"></i>${pt.label}</label><input type="range" min="0.1" max="1" step="0.05" value="${pt.opacity ?? 1}" data-o="${pt.id}" aria-label="${pt.label} saydamlığı" title="Saydamlık"><button data-iso="${pt.id}" title="Yalnız bunu ve kemiği göster">Yalnız</button></li>`).join('');
+    const row = pt => `<li><label><input type="checkbox" data-p="${pt.id}" ${pt.visible ? 'checked' : ''}><i style="background:#${pt.color.toString(16).padStart(6, '0')}"></i><span>${pt.label}</span></label><input type="range" min="0.1" max="1" step="0.05" value="${pt.opacity ?? 1}" data-o="${pt.id}" aria-label="${pt.label} saydamlığı" title="Saydamlık"><button class="ghost sm" data-iso="${pt.id}" title="Yalnız bunu göster" aria-label="${pt.label}: yalnız bunu göster"><svg class="i"><use href="#i-eye"/></svg></button></li>`;
+    // grouped so a long list reads by role: anatomy, the cuts, the guide and its screws, the reconstruction
+    const GROUPS = [['Anatomi', id => /^(bone|resected|mirror|lesion|lesionPaint|postop|ctx_|layer)/.test(id)], ['Plan', id => /^(plane|anchor)/.test(id)], ['Guide', id => /^(guide|screw)/.test(id)], ['Rekonstrüksiyon', id => /^(grafts|implants|plate)/.test(id)], ['Diğer', () => true]];
+    const all = Object.values(parts), seen = new Set();
+    $('parts').innerHTML = GROUPS.map(([name, test]) => { const mine = all.filter(pt => !seen.has(pt.id) && test(pt.id)); mine.forEach(pt => seen.add(pt.id)); return mine.length ? `<li class="grp">${name}</li>` + mine.map(row).join('') : ''; }).join('');
+    const vis = all.filter(pt => pt.visible).map(pt => pt.id), gOnly = all.every(pt => pt.visible === (/guide/.test(pt.id) || pt.id.startsWith('screw')));
+    $('showAll').setAttribute('aria-pressed', String(vis.length === all.length)); $('guideOnly').setAttribute('aria-pressed', String(!!all.length && gOnly && vis.length < all.length));
     $('parts').querySelectorAll('input[type=checkbox]').forEach(el => el.addEventListener('change', () => { const pt = parts[el.dataset.p]; pt.visible = el.checked; pt.obj.visible = el.checked; render(); }));
     $('parts').querySelectorAll('input[type=range]').forEach(el => el.addEventListener('input', () => { setOpacity(parts[el.dataset.o], +el.value); render(); }));
     $('parts').querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
@@ -976,25 +982,29 @@
       : [['u', 'Konum (eksen boyunca)', -45, 45, 0.5, 'mm'], ['v', 'Konum (yanal)', -15, 15, 0.5, 'mm'], ['tiltU', 'Eğim (eksen yönünde)', -89, 89, 1, '°'], ['tiltV', 'Eğim (yanal)', -89, 89, 1, '°'],
          ['d', 'Matkap çapı', 1.2, 4, 0.1, 'mm'], ['D', 'Kovan dış çapı', 3, 8, 0.1, 'mm'], ['sleeveH', 'Kovan yüksekliği', 0, 12, 0.5, 'mm'], ['len', 'Vida boyu', 6, 40, 1, 'mm']];
     box.innerHTML = `<h3 class="sub">${isP ? 'Kesi' : 'Vida'} ${i + 1}</h3>` + fields.map(([k, t, mn, mx, st, unit]) => `<div class="ctl"><div class="ctl-row"><label for="f_${k}">${t}</label><output id="o_${k}">${fmt(o[k], st < 1 ? 1 : 0)} ${unit}</output></div><input type="range" id="f_${k}" min="${mn}" max="${mx}" step="${st}" value="${o[k]}"></div>`).join('') +
-      `<p class="hint">${apprText(o)}</p><p class="hint">3B görünümde kesiyi ya da vidayı tutup sürükleyebilir, tutamaçla da taşıyabilirsiniz (W taşı, E döndür).</p>` +
-      `<div class="btns"><button id="delEl"><svg class="i"><use href="#i-trash"/></svg>${isP ? 'Kesiyi sil' : 'Vidayı sil'}</button></div>`;
+      `<p class="hint">${apprText(o)}</p><p class="hint more">3B görünümde kesiyi ya da vidayı tutup sürükleyebilir, tutamaçla da taşıyabilirsiniz (W taşı, E döndür).</p>` +
+      `<div class="btns end"><button id="delEl" class="sm"><svg class="i"><use href="#i-trash"/></svg>${isP ? 'Kesiyi sil' : 'Vidayı sil'}</button></div>`;
     fields.forEach(([k, , , , st, unit]) => $('f_' + k).addEventListener('input', e => { o[k] = +e.target.value; unapprove(o); $('o_' + k).textContent = `${fmt(o[k], st < 1 ? 1 : 0)} ${unit}`; schedule(isP, true); }));
     $('delEl').addEventListener('click', () => { (isP ? S.planes : S.screws).splice(i, 1); S.sel = null; schedule(isP); });
   }
   function renderMeasures() {
     const R = S.result; if (!R) { $('measures').innerHTML = ''; return; }
     const { u } = frameAxes();
-    const rows = R.pls.map((pw, i) => `<tr><td>Kesi ${i + 1}</td><td>${fmt(pw.off)} mm</td><td>${fmt(THREE.MathUtils.radToDeg(Math.acos(Math.min(1, Math.abs(pw.N.dot(u))))))}°</td><td>${fmt(pw.w)} mm</td></tr>`).join('');
-    const srows = R.screwInfo.map((si, i) => si.ok ? `<tr><td>Vida ${i + 1}</td><td>${fmt(si.s.sc.d)} mm</td><td>${fmt(si.inBone)} / ${fmt(si.s.sc.len)} mm</td><td>${fmt(THREE.MathUtils.radToDeg(si.s.dir.angleTo(S.anchor.n.clone().negate())))}°</td></tr>` : `<tr><td>Vida ${i + 1}</td><td colspan="3">kemiğe ulaşmıyor</td></tr>`).join('');
+    // one card per cut and screw instead of four-column tables, which do not fit the panel
+    const rows = R.pls.map((pw, i) => `<div class="rowcard"><b>Kesi ${i + 1}</b><span class="v">${fmt(pw.off)} mm</span><small>eğim ${fmt(THREE.MathUtils.radToDeg(Math.acos(Math.min(1, Math.abs(pw.N.dot(u))))))}° · yuva ${fmt(pw.w)} mm</small></div>`).join('');
+    const srows = R.screwInfo.map((si, i) => si.ok ? `<div class="rowcard"><b>Vida ${i + 1}</b><span class="v">Ø ${fmt(si.s.sc.d)} mm</span><small>kemikte ${fmt(si.inBone)} / ${fmt(si.s.sc.len)} mm · yüzey açısı ${fmt(THREE.MathUtils.radToDeg(si.s.dir.angleTo(S.anchor.n.clone().negate())))}°</small></div>` : `<div class="rowcard warn"><b>Vida ${i + 1}</b><span class="v">kemiğe ulaşmıyor</span></div>`).join('');
     const sorted = R.pls.slice().sort((a, b) => a.off - b.off);
-    $('measures').innerHTML = `<div class="tbl"><table><thead><tr><th>Kesi</th><th>Konum</th><th>Eksene dikten sapma</th><th>Yuva</th></tr></thead><tbody>${rows || '<tr><td colspan="4">Kesi yok</td></tr>'}</tbody></table></div>
-      <div class="tbl"><table><thead><tr><th>Vida</th><th>Çap</th><th>Kemik içinde</th><th>Yüzey normaline açı</th></tr></thead><tbody>${srows || '<tr><td colspan="4">Vida yok</td></tr>'}</tbody></table></div>
-      <dl class="kv"><dt>Rezeksiyon boyu (eksende)</dt><dd>${sorted.length >= 2 ? fmt(sorted.at(-1).off - sorted[0].off) + ' mm' : '–'}</dd><dt>Rezeke parça hacmi</dt><dd>${S.resectedVolume ? fmt(S.resectedVolume / 1000, 2) + ' cm³' : '–'}</dd><dt>Guide temas alanı (yaklaşık)</dt><dd>${fmt(R.contact, 0)} mm²</dd><dt>Guide hacmi</dt><dd>${fmt(R.volume / 1000, 2)} cm³</dd><dt>Üretim süresi (tarayıcı)</dt><dd>${fmt(R.ms / 1000, 1)} sn</dd></dl>
-      ${R.seat && R.seat.ok ? `<dl class="kv"><dt>Takma yönü</dt><dd>${R.seat.free ? (R.seat.best.tilt ? fmt(R.seat.best.tilt, 0) + '° eğik' : 'dik') : 'yok'}</dd><dt>Uygun takma yönü</dt><dd>${R.seat.free}/${R.seat.dirs.length}</dd><dt>Kayma direnci (en zayıf)</dt><dd>%${fmt(R.seat.worstSlide.r * 100, 0)}</dd><dt>Dönme direnci (en zayıf)</dt><dd>%${fmt(R.seat.worstRot.r * 100, 0)} · ${({ u: 'eksen', v: 'yanal', n: 'oturma' })[R.seat.worstRot.axis]}</dd></dl>` : ''}`;
+    $('measures').innerHTML = `<h3 class="sub">Kesiler</h3><p class="hint more">Konum guide ekseni boyuncadır. Eğim kesinin guide eksenine dik konumdan sapmasıdır.</p><div>${rows || '<p class="empty">Kesi yok</p>'}</div>
+      <h3 class="sub">Vidalar</h3><div>${srows || '<p class="empty">Vida yok</p>'}</div>
+      <h3 class="sub">Rezeksiyon ve guide</h3>
+      <dl class="kv"><dt>Rezeksiyon boyu (eksende)</dt><dd>${sorted.length >= 2 ? fmt(sorted.at(-1).off - sorted[0].off) + ' mm' : '–'}</dd><dt>Rezeke parça hacmi</dt><dd>${S.resectedVolume ? fmt(S.resectedVolume / 1000, 2) + ' cm³' : '–'}</dd><dt>Guide temas alanı (yaklaşık)</dt><dd>${fmt(R.contact, 0)} mm²</dd><dt>Guide hacmi</dt><dd>${fmt(R.volume / 1000, 2)} cm³</dd></dl>
+      ${R.seat && R.seat.ok ? '<h3 class="sub">Takma ve stabilite</h3>' : ''}
+      ${R.seat && R.seat.ok ? `<dl class="kv"><dt>Takma yönü</dt><dd>${R.seat.free ? (R.seat.best.tilt ? fmt(R.seat.best.tilt, 0) + '° eğik' : 'dik') : 'yok'}</dd><dt>Uygun yönler</dt><dd>${R.seat.free}/${R.seat.dirs.length}</dd><dt>Kayma direnci (en zayıf)</dt><dd>%${fmt(R.seat.worstSlide.r * 100, 0)}</dd><dt>Dönme direnci (en zayıf)</dt><dd>%${fmt(R.seat.worstRot.r * 100, 0)} · ${({ u: 'eksen', v: 'yanal', n: 'oturma' })[R.seat.worstRot.axis]}</dd></dl>` : ''}
+      <p class="hint" style="color:var(--faint)">Hesaplama süresi ${fmt(R.ms / 1000, 1)} sn</p>`;
   }
   function renderChecks() {
     const R = S.result, out = [];
-    if (!R) { $('checks').innerHTML = ''; return; }
+    if (!R) { $('checks').innerHTML = ''; $('checksInfo').innerHTML = ''; $('chkInfo').hidden = $('chkSum').hidden = true; return; }
     const want = S.g.split && S.planes.length >= 2 ? 2 : 1;
     // every cut slot and screw sleeve has to be on the guide body, or the guide guides nothing there
     if (S.anchor) {
@@ -1044,9 +1054,16 @@
     (window.ExtraChecks || []).forEach(f => f().forEach(c => out.push(c)));
     S.crit = out.filter(o => o[0] === 'crit').length;
     S.checkList = out.slice();
-    if (!out.length) out.push(['ok', 'Uygun', 'Tüm kontroller geçti.']);
+    const rank = { crit: 0, warn: 1, ok: 2 }, infos = out.filter(o => o[0] === 'info'), main = out.filter(o => o[0] !== 'info').sort((a, b) => (rank[a[0]] ?? 3) - (rank[b[0]] ?? 3));
+    if (!main.length) main.push(['ok', 'Uygun', 'Tüm kontroller geçti.']);
     const li = ([c, t, m, ref]) => `<li class="${c}"${ref ? ` data-go="${ref}" title="İlgili öğeye git" tabindex="0" role="button"` : ''}><b>${t}</b><span>${m}</span></li>`;
-    $('checks').innerHTML = out.map(li).join('');
+    const n = c => out.filter(o => o[0] === c).length;
+    $('chkSum').innerHTML = n('crit') || n('warn') ? (n('crit') ? `<span class="tag crit">${n('crit')} kritik</span>` : '') + (n('warn') ? `<span class="tag warn">${n('warn')} uyarı</span>` : '') + (infos.length ? `<span class="tag">${infos.length} bilgi</span>` : '') : '';
+    $('chkSum').hidden = !$('chkSum').innerHTML;
+    $('checks').innerHTML = main.map(li).join('');
+    $('checksInfo').innerHTML = infos.map(li).join('');
+    $('chkInfoN').textContent = infos.length || '';
+    $('chkInfo').hidden = !infos.length;
     // the same warnings inside the step they belong to
     const stepOf = ref => ref === 'guide' ? 'guide' : ref === 'fib' ? 'fib' : ref === 'lesion' || /^p\d/.test(ref) ? 'res' : /^s\d/.test(ref) ? 'scr' : ref === 'anat' ? 'anat' : 'data';
     document.querySelectorAll('.stepwarn').forEach(box => {
@@ -1512,8 +1529,13 @@
   }
 
   // ---------- controls wiring ----------
-  const gFields = [['rot', 'Guide ekseni dönüşü', -180, 180, 1, '°'], ['roll', 'Kemik etrafında konum', -180, 180, 1, '°'], ['L', 'Uzunluk', 16, 100, 1, 'mm'], ['W', 'Genişlik', 10, 40, 1, 'mm'], ['wrap', 'Sarma derinliği', 2, 20, 0.5, 'mm'], ['wall', 'Duvar kalınlığı', 1.5, 5, 0.1, 'mm'], ['clear', 'Kemik boşluğu', 0, 1, 0.05, 'mm'], ['bridge', 'Köprü genişliği', 2, 10, 0.5, 'mm'], ['flange', 'Yakalama kenarı (kesi ötesinde)', 2, 8, 0.5, 'mm'], ['peri', 'Periost payı (boşluğa eklenir)', 0, 1, 0.05, 'mm']];
-  $('gCtl').innerHTML = gFields.map(([k, t, mn, mx, st]) => `<div class="ctl" id="gc_${k}"><div class="ctl-row"><label for="g_${k}">${t}</label><output id="go_${k}"></output></div><input type="range" id="g_${k}" min="${mn}" max="${mx}" step="${st}"></div>`).join('');
+  const gFields = [['rot', 'Yüzeyde döndür', -180, 180, 1, '°'], ['roll', 'Kemik etrafında kaydır', -180, 180, 1, '°'], ['L', 'Uzunluk', 16, 100, 1, 'mm'], ['W', 'Genişlik', 10, 40, 1, 'mm'], ['wrap', 'Sarma derinliği', 2, 20, 0.5, 'mm'], ['wall', 'Duvar kalınlığı', 1.5, 5, 0.1, 'mm'], ['clear', 'Kemik aralığı', 0, 1, 0.05, 'mm'], ['bridge', 'Köprü genişliği', 2, 10, 0.5, 'mm'], ['flange', 'Kesi ötesi kenar', 2, 8, 0.5, 'mm'], ['peri', 'Periost payı', 0, 1, 0.05, 'mm']];
+  $('gCtl').innerHTML = gFields.map(([k, t, mn, mx, st]) => `<div class="ctl" id="gc_${k}"><div class="ctl-row"><label for="g_${k}">${t}</label><output id="go_${k}"></output></div><input type="range" id="g_${k}" min="${mn}" max="${mx}" step="${st}"></div>`).join('') +
+    '<h3 class="sub">Gövde</h3><details class="sub-d" id="secGFine"><summary>İnce ayar: duvar, aralık, periost</summary><div class="col" id="gFine"></div></details>';
+  // placement first, then body size; wall and clearances rarely change, so they sit folded at the end
+  ['L', 'W', 'wrap', 'bridge', 'flange'].forEach(k => $('gCtl').insertBefore($('gc_' + k), $('secGFine')));
+  ['wall', 'clear', 'peri'].forEach(k => $('gFine').appendChild($('gc_' + k)));
+  $('gc_peri').insertAdjacentHTML('beforeend', '<p class="hint more" data-for="g_peri">Periost kalınlığı kemik aralığına eklenir.</p>');
   function syncGuideInputs() {
     if ($('gScrewD')) { const d = S.screws.length ? S.screws[0].d : (SCREW_DEFAULT[S.kind] || SCREW_DEFAULT.dicom).d; $('gScrewD').value = d; $('gScrewDO').textContent = `${fmt(d)} mm`; }
     if ($('gRoll3')) { $('gRoll3').value = S.g.roll || 0; $('gRoll3O').textContent = `${fmt(S.g.roll || 0, 0)}°`; }
@@ -1642,7 +1664,7 @@
     const miss = pending(), draft = miss.length || S.crit, when = new Date().toLocaleString('tr-TR');
     const st = o => o.ok ? `Onaylı${o.by ? ' · ' + esc(o.by) : ''}${o.at ? ' · ' + new Date(o.at).toLocaleString('tr-TR') : ''}` : 'Bekliyor';
     const li = arr => arr.map(([, t, m]) => `<li><b>${t}:</b> ${esc(m)}</li>`).join('');
-    const checks = [...$('checks').querySelectorAll('li')].map(l => `<li>${esc(l.innerText.replace(/\n/g, ' '))}</li>`).join('');
+    const checks = [...$('checks').querySelectorAll('li'), ...$('checksInfo').querySelectorAll('li')].map(l => `<li>${esc(l.innerText.replace(/\n/g, ' '))}</li>`).join('');
     const R = S.result, gp = [['Uzunluk', S.g.L, 'mm'], ['Genişlik', S.g.W, 'mm'], ['Sarma derinliği', S.g.wrap, 'mm'], ['Duvar', S.g.wall, 'mm'], ['Kemik boşluğu', S.g.clear, 'mm'], ['Köprü', S.g.bridge, 'mm'], ['Eksen dönüşü', S.g.rot, '°']];
     return `<!doctype html><html lang="tr"><meta charset="utf-8"><title>Guide planı raporu</title>
 <style>body{font:14px/1.5 system-ui,sans-serif;max-width:860px;margin:24px auto;padding:0 16px;color:#1c2421}h1{font-size:22px}h2{font-size:16px;margin-top:24px}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #ccd;padding:4px 6px;text-align:left}.st{display:inline-block;padding:4px 10px;border-radius:6px;font-weight:600;background:${draft ? '#fbf0dc;color:#a06200' : '#e5f2ea;color:#2f7d4f'}}small{color:#5c6964}</style>

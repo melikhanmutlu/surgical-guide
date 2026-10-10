@@ -250,7 +250,7 @@ window.Masks = (function () {
     if (!S.red || !S.comps) { $('comps').innerHTML = ''; return; }
     const vox = S.red.sp[0] * S.red.sp[1] * S.red.sp[2] / 1000;
     $('comps').innerHTML = `<h3 class="sub">Planlama kemiği</h3>
-      <p class="hint">İşaretli parçalar planlama kemiğidir: kesi, rezeksiyon, vida ve guide yalnız bunlardan hesaplanır. Diğerleri silinmez, gizlenir; göz düğmesiyle açılıp kapanır.</p>
+      <p class="hint more">İşaretli parçalar planlama kemiğidir: kesi, rezeksiyon, vida ve guide yalnız bunlardan hesaplanır. Diğerleri silinmez, gizlenir; göz düğmesiyle açılıp kapanır.</p>
       <ul class="layers">` + (S.comps.map(c => { const sel = S.selected.has(c.label), on = ctxOn.has(c.label);
       return `<li class="lay"><label><input type="checkbox" data-l="${c.label}" ${sel ? 'checked' : ''}><i style="background:${hex(sel ? St.COLORS.bone : colorOf(c.label))}"></i>${St.esc(nameOf(c.label))}</label>
         <span class="hu">${fmt(c.size * vox)} cm³ <button class="eye" data-eye="${c.label}" aria-pressed="${sel || on}" ${sel ? 'disabled title="Planlama kemiği her zaman görünür"' : `title="${on ? 'Gizle' : 'Göster'}"`} aria-label="${St.esc(nameOf(c.label))} ${on ? 'gizle' : 'göster'}"><svg class="i"><use href="#i-eye"/></svg></button></span></li>`; }).join('')
@@ -264,8 +264,8 @@ window.Masks = (function () {
     $('comps').querySelectorAll('[data-eye]').forEach(el => el.addEventListener('click', () => showCtx(+el.dataset.eye, !ctxOn.has(+el.dataset.eye))));
   }
 
-  $('maskBox').innerHTML = `<h3 class="sub">Katmanlara ayır</h3>
-    <p class="hint">Eşik maskesi birbirine değen kemikleri tek parça gösterebilir (dişler kapalıyken mandibula ile maksilla, fibula ile tibia). Her kemiği kendi renginde birkaç kesitte kısa vuruşlarla işaretleyip "Ayır"a basın: maske temas yüzeyinden katmanlara bölünür.</p>
+  $('maskBox').innerHTML = `<h3 class="sub">Bitişik kemikleri ayır</h3>
+    <p class="hint more">Eşik maskesi birbirine değen kemikleri tek parça gösterebilir (dişler kapalıyken mandibula ile maksilla, fibula ile tibia). Her kemiği kendi renginde birkaç kesitte kısa vuruşlarla işaretleyip "Ayır"a basın: maske temas yüzeyinden katmanlara bölünür.</p>
     <ul class="layers mkl" id="mkLayers"></ul>
     <span class="seg" id="mkTools" role="group" aria-label="İşaret aracı">
       <button data-t="paint" aria-pressed="false"><svg class="i"><use href="#i-brush"/></svg>İşaretle</button>
@@ -275,7 +275,7 @@ window.Masks = (function () {
     <div class="ctl"><div class="ctl-row"><label for="mkRad">Fırça yarıçapı</label><output id="mkRadO">3 mm</output></div><input type="range" id="mkRad" min="1" max="10" step="0.5" value="3"></div>
     <div class="btns"><button class="primary" id="mkRun" disabled><svg class="i"><use href="#i-scissors"/></svg>Ayır</button><button id="mkAdd"><svg class="i"><use href="#i-plus"/></svg>Katman ekle</button><button id="mkClear" disabled>İşaretleri temizle</button></div>
     <p class="hint" id="mkStat"></p>
-    <p class="hint">"Tıkla, seç": 3B modelde ya da kesitte bir kemiğe tıklayınca o parça planlama kemiği olur (bölge büyütme). Shift ile birden fazla parça seçilir.</p>`;
+    <p class="hint more">"Tıkla, seç": 3B modelde ya da kesitte bir kemiğe tıklayınca o parça planlama kemiği olur (bölge büyütme). Shift ile birden fazla parça seçilir.</p>`;
   document.querySelectorAll('#mkTools [data-t]').forEach(b => b.addEventListener('click', () => setTool(b.dataset.t)));
   $('mkRad').addEventListener('input', e => { radius = +e.target.value; $('mkRadO').textContent = `${fmt(radius, 1)} mm`; });
   $('mkRun').addEventListener('click', run);

@@ -111,12 +111,12 @@ window.Fit = (function () {
   function render() {
     const box = $('fitBox'); if (!box) return;
     const st = S.result && S.result.seat;
-    box.innerHTML = `<h3 class="sub">Oturma ve uyum</h3>
-      <div class="ctl"><label for="fitMap" class="lbl2">Guide renk haritası</label><select id="fitMap"><option value="none">Yok</option><option value="gap">Kemiğe aralık</option><option value="wall">Duvar kalınlığı</option></select></div>
-      <label class="chk"><input type="checkbox" id="fitSeat" ${view.seat ? 'checked' : ''}> Takma yönünü ve engelleyen kemiği göster</label>
+    box.innerHTML = `<h3 class="sub">Oturma kontrolü</h3>
+      <div class="ctl"><label for="fitMap" class="lbl2">Renk haritası</label><select id="fitMap" data-seg><option value="none">Yok</option><option value="gap" data-short="Aralık">Kemiğe aralık</option><option value="wall" data-short="Duvar">Duvar kalınlığı</option></select></div>
+      <label class="chk"><input type="checkbox" id="fitSeat" ${view.seat ? 'checked' : ''}> Takma yönünü göster</label>
       <dl class="kv" id="fitStats"></dl>
       ${st && st.ok ? `<dl class="kv"><dt>Takma yönü</dt><dd>${st.free ? (st.best.tilt ? fmt(st.best.tilt, 0) + '° eğik' : 'dik') : 'yok'} · ${st.free}/${st.dirs.length} yön uygun</dd>${st.best.block > 0 ? `<dt>Engelleyen kemik</dt><dd>${fmt(st.best.block, 0)} mm²</dd>` : ''}</dl>` : ''}
-      <p class="hint">Ok guide'ın takılacağı yönü gösterir (yeşil: takılabilir, kırmızı: takılamaz). Kırmızı noktalar bu yönde guide'ın üstünde kalan kemiktir. Periost payı Guide gövdesi ayarlarındadır ve kemik boşluğuna eklenir.</p>`;
+      <p class="hint more">Ok guide'ın takılacağı yönü gösterir (yeşil: takılabilir, kırmızı: takılamaz). Kırmızı noktalar bu yönde guide'ın üstünde kalan kemiktir.</p>`;
     $('fitMap').value = view.map;
     $('fitMap').addEventListener('change', e => { view.map = e.target.value; St.busy(true, 'Renk haritası hesaplanıyor…'); setTimeout(() => { try { refresh(); } finally { St.busy(false); St.render(); } }, 20); });
     $('fitSeat').addEventListener('change', e => { view.seat = e.target.checked; drawSeat(); });

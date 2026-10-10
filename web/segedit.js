@@ -203,8 +203,8 @@ window.SegEdit = (function () {
     $('seStat').innerHTML = (msg ? `<b>${St.esc(msg.replace(/\.$/, ''))}.</b> ` : '') + (a || d ? `Toplam: +${fmt(a * vox, 2)} cm³ eklendi, −${fmt(d * vox, 2)} cm³ çıkarıldı.` : 'Düzeltme yok; otomatik segmentasyon kullanılıyor.');
     $('seReset').disabled = !(a || d);
   }
-  $('segEdit').innerHTML = `<details class="sub-d"><summary>Kemik modelini elle düzelt (gerekirse)</summary>
-    <p class="hint">Otomatik kemik modeli hatalıysa kullanın. Fırça eksik kemiği ekler, Silgi fazlasını siler (kesitlerde ya da 3B'de sürükleyin), Makas 3B'de çevrelediğiniz bölgeyi keser.</p>
+  $('segEdit').innerHTML = `<details class="sub-d"><summary>Elle düzeltme</summary>
+    <p class="hint more">Otomatik kemik modeli hatalıysa kullanın. Fırça eksik kemiği ekler, Silgi fazlasını siler (kesitlerde ya da 3B'de sürükleyin), Makas 3B'de çevrelediğiniz bölgeyi keser.</p>
     <span class="seg" id="seTools" role="group" aria-label="Düzeltme aracı">
       <button data-t="brush" aria-pressed="false"><svg class="i"><use href="#i-brush"/></svg>Fırça</button>
       <button data-t="erase" aria-pressed="false"><svg class="i"><use href="#i-eraser"/></svg>Silgi</button>

@@ -88,8 +88,8 @@ window.Layers = (function () {
     box.querySelectorAll('[data-op]').forEach(el => el.addEventListener('input', () => { const L = byId(el.dataset.op); L.opacity = +el.value; opacity(L); St.render(); }));
     box.querySelectorAll('[data-del]').forEach(el => el.addEventListener('click', () => remove(byId(el.dataset.del))));
   }
-  $('layerBox').innerHTML = `<h3 class="sub">Katmanlar</h3>
-    <p class="hint">Her katman bir HU aralığının yüzeyidir. Kemiği kapatıp yumuşak doku üstünde lezyonu işaretleyebilirsiniz; planlama her zaman kemik modeliyle yapılır.</p>
+  $('layerBox').innerHTML = `<h3 class="sub">Görüntü katmanları</h3>
+    <p class="hint more">Her katman bir HU aralığının yüzeyidir. Kemiği kapatıp yumuşak doku üstünde lezyonu işaretleyebilirsiniz; planlama her zaman kemik modeliyle yapılır.</p>
     <ul class="layers" id="layerList"></ul>
     <div class="btns"><select id="layerKind" aria-label="Eklenecek katman">${Object.entries(PRESETS).map(([k, p]) => `<option value="${k}">${p.name} (${p.min} – ${p.max} HU)</option>`).join('')}</select><button id="layerAdd">Katman ekle</button></div>`;
   $('layerAdd').addEventListener('click', () => {
