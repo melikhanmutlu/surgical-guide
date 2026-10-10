@@ -19,7 +19,15 @@ window.UI = (function () {
   document.querySelectorAll('button.next').forEach(b => b.addEventListener('click', () => openStep(b.dataset.next, true)));
 
   // ---------- completion and status tags ----------
-  const tag = (el, cls, text) => { if (!el) return; el.className = 'tag' + (cls ? ' ' + cls : ''); el.textContent = text; el.hidden = !text; };
+  // step rows show only an icon and a count ("0/3", "6"); the full wording is the tooltip. A plain "ok" with no
+  // count is left to the tick beside the title, so the row does not show the same mark twice.
+  const tag = (el, cls, text) => {
+    if (!el) return;
+    const num = (text.match(/\d+(\/\d+)?/) || [''])[0];
+    el.className = 'tag' + (cls ? ' ' + cls : ''); el.textContent = num;
+    el.title = text; if (text) el.setAttribute('aria-label', text); else el.removeAttribute('aria-label');
+    el.hidden = !text || (cls === 'ok' && !num);
+  };
   let exported = false;
   bus.addEventListener('exported', () => { exported = true; sync(); });
   bus.addEventListener('volume', () => { exported = false; });

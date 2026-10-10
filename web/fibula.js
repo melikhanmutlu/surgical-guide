@@ -440,7 +440,7 @@ window.Fibula = (function () {
     $('fibApprove').textContent = ok ? 'Fibula onayını kaldır' : 'Fibula planını onayla';
     $('fibApprove').disabled = !ok && (crit || !c || !R);
     $('fibStatus').textContent = ok ? `Fibula planı onaylandı${plan().by ? ' · ' + plan().by : ''}.` : plan().ok ? 'Plan onaydan sonra değişti; yeniden onay gerekli.' : crit ? 'Kritik kontrol varken onaylanamaz.' : 'Fibula planı cerrah onayı bekliyor.';
-    const t = $('tag6'); t.hidden = false; t.className = 'tag ' + (ok ? 'ok' : crit ? 'crit' : 'warn'); t.textContent = ok ? 'Onaylı' : crit ? 'Kritik' : 'Bekliyor';
+    const t = $('tag6'), tx = ok ? 'Onaylı' : crit ? 'Kritik' : 'Onay bekliyor'; t.hidden = ok; t.className = 'tag ' + (ok ? 'ok' : crit ? 'crit' : 'warn'); t.textContent = ''; t.title = tx; t.setAttribute('aria-label', tx);
   }
   // recompute the plan from the current mandible and fibula state; user edits also create a history entry
   function update() {

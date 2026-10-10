@@ -85,7 +85,11 @@ body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 var(--
 .step[open] > summary .n { color: var(--accent); }
 .step > summary .chev { margin-left: 2px; width: 12px; height: 12px; color: var(--faint); transition: transform .15s; flex: none; }
 .step[open] > summary .chev { transform: rotate(90deg); }
-.step > summary .tag { margin-left: auto; }
+.step > summary .tag { margin-left: auto; font: 600 12px var(--font-body); font-variant-numeric: tabular-nums; gap: 4px; }
+.step > summary .tag:empty { display: inline-flex; }
+.step > summary .tag.ok::before { display: none; }
+.step > summary .chev { margin-left: auto; }
+.step > summary .tag:not([hidden]) + .chev { margin-left: 8px; }
 .step > summary:hover { background: var(--hover); }
 .body { padding: 2px 14px 16px 38px; display: grid; gap: 10px; }
 
