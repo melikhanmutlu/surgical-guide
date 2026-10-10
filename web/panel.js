@@ -33,7 +33,7 @@
     return null;
   }
   // hovering the "i" shows the explanation itself, not a generic word
-  const tip = (b, ts) => { const t = ts.map(x => x.textContent.replace(/\s+/g, ' ').trim()).join('\n\n'); b.title = t; b.setAttribute('aria-label', 'Açıklama: ' + t); };
+  const tip = (b, ts) => { const t = ts.map(x => x.textContent.replace(/\s+/g, ' ').trim()).join('\n\n'); b.title = t; b.setAttribute('aria-label', t); };
   function fold(h) {
     if (h.dataset.folded) return;
     h.dataset.folded = '1';

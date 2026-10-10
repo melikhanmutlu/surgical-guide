@@ -475,6 +475,8 @@ button.ghost.danger { color: var(--crit); }
 <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/TransformControls.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/dicom-parser@1.8.21/dist/dicomParser.min.js"></script>
+<script src="i18n_en.js"></script>
+<script src="i18n.js"></script>
 <script src="codecs.js"></script>
 <script src="unzip.js"></script>
 
@@ -808,6 +810,7 @@ button.ghost.danger { color: var(--crit); }
 <dialog id="dlgSet" aria-labelledby="dlgSetT">
   <form method="dialog" class="dlg">
     <header><h2 id="dlgSetT">Ayarlar</h2><button class="ibtn" value="close" aria-label="Kapat"><svg><use href="#i-x"/></svg></button></header>
+    <div class="ctl"><label for="langSel" class="lbl2">Dil · Language</label><select id="langSel" data-seg><option value="tr">Türkçe</option><option value="en">English</option></select></div>
     <h3 class="sub">Kayıt</h3>
     <input id="aiUrl" type="hidden" value="">
     <dl class="kv"><dt>Kayıt yeri</dt><dd id="stBackend">–</dd><dt>Durum</dt><dd id="stSave">–</dd><dt>Sunucu</dt><dd id="stConn">–</dd></dl>

@@ -153,9 +153,9 @@ window.UI = (function () {
     const sc = new THREE.Scene(), cam = new THREE.OrthographicCamera(-1.6, 1.6, 1.6, -1.6, 0.1, 10);
     const faces = [['Sol', [1, 0, 0]], ['Sağ', [-1, 0, 0]], ['Arka', [0, 1, 0]], ['Ön', [0, -1, 0]], ['Üst', [0, 0, 1]], ['Alt', [0, 0, -1]]];
     const dark = () => (document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')) === 'dark';
-    const tex = t => { const c = document.createElement('canvas'); c.width = c.height = 128; const g = c.getContext('2d');
+    const tex = t => { t = window.I18N ? I18N.t(t) : t; const c = document.createElement('canvas'); c.width = c.height = 128; const g = c.getContext('2d');
       g.fillStyle = dark() ? '#1b2025' : '#f7f8f9'; g.fillRect(0, 0, 128, 128); g.strokeStyle = dark() ? '#3a424a' : '#c5ccd3'; g.lineWidth = 6; g.strokeRect(3, 3, 122, 122);
-      g.fillStyle = dark() ? '#e5e8eb' : '#14181c'; g.font = '600 34px IBM Plex Sans, system-ui, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(t, 64, 66);
+      g.fillStyle = dark() ? '#e5e8eb' : '#14181c'; g.font = (t.length > 3 ? '600 26px' : '600 34px') + ' Inter, system-ui, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(t, 64, 66);
       const tx = new THREE.CanvasTexture(c); tx.anisotropy = 4; return tx; };
     // BoxGeometry material order: +x, -x, +y, -y, +z, -z
     let mats = faces.map(f => new THREE.MeshBasicMaterial({ map: tex(f[0]) }));
@@ -163,7 +163,8 @@ window.UI = (function () {
     // the texts must read upright from outside: rotate the maps per face
     const fixUV = () => { const uv = box.geometry.attributes.uv; /* default UVs read correctly for side faces with z up */ uv.needsUpdate = true; };
     fixUV();
-    window.addEventListener('themechange', () => { mats.forEach((m, i) => { m.map.dispose(); m.map = tex(faces[i][0]); m.needsUpdate = true; }); draw(); });
+    const relabel = () => { mats.forEach((m, i) => { m.map.dispose(); m.map = tex(faces[i][0]); m.needsUpdate = true; }); draw(); };
+    window.addEventListener('themechange', relabel); window.addEventListener('langchange', relabel);
     function draw() {
       const c = St.camera, d = c.position.clone().sub(St.controls.target).normalize();
       cam.position.copy(d.multiplyScalar(4)); cam.up.copy(c.up); cam.lookAt(0, 0, 0); r.render(sc, cam);
