@@ -55,9 +55,17 @@
   const lightStore = { get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} } };
   let light = { preset: LIGHT[lightStore.get('gs.light')] ? lightStore.get('gs.light') : 'balanced', k: +(lightStore.get('gs.lightK') || 1) };
   if (!(light.k >= 0.4 && light.k <= 1.6)) light.k = 1;
+  // each view is lit only by the lights riding on its own camera; the other camera's pair is switched off while it draws
+  // (intensity rather than visibility, so the light count and the compiled shaders stay the same)
+  let lightI = [0, 0];
+  function useLights(cam) {
+    const m = cam !== camF;
+    key.intensity = m ? lightI[0] : 0; fill.intensity = m ? lightI[1] : 0;
+    keyF.intensity = m ? 0 : lightI[0]; fillF.intensity = m ? 0 : lightI[1];
+  }
   function applyLight() {
     const [h, k, f] = LIGHT[light.preset];
-    hemi.intensity = h * light.k; key.intensity = keyF.intensity = k * light.k; fill.intensity = fillF.intensity = f * light.k;
+    hemi.intensity = h * light.k; lightI = [k * light.k, f * light.k]; useLights(camera);
     lightStore.set('gs.light', light.preset); lightStore.set('gs.lightK', String(light.k));
     if ($('lightK')) { $('lightK').value = light.k; $('lightKO').textContent = `%${Math.round(light.k * 100)}`; $('lightP').value = light.preset; }
   }
@@ -74,10 +82,11 @@
     if (S.split) {
       const hw = Math.floor(w / 2);
       renderer.setScissorTest(true);
-      renderer.setViewport(0, 0, hw, h); renderer.setScissor(0, 0, hw, h); renderer.render(scene, camera);
-      renderer.setViewport(hw, 0, w - hw, h); renderer.setScissor(hw, 0, w - hw, h); renderer.render(scene, camF);
+      renderer.setViewport(0, 0, hw, h); renderer.setScissor(0, 0, hw, h); useLights(camera); renderer.render(scene, camera);
+      renderer.setViewport(hw, 0, w - hw, h); renderer.setScissor(hw, 0, w - hw, h); useLights(camF); renderer.render(scene, camF);
+      useLights(camera);
       renderer.setScissorTest(false); renderer.setViewport(0, 0, w, h);
-    } else renderer.render(scene, camera);
+    } else { useLights(camera); renderer.render(scene, camera); }
     placeMarkers();
     if (window.UI && UI.onRender) UI.onRender();
   }
