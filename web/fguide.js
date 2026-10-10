@@ -26,7 +26,7 @@ window.FibGuide = (function () {
     const sc = list[sel], R = S.fib.guide && S.fib.guide.result, edited = !!(P().fg || P().fsc);
     box.innerHTML = `<h3 class="sub">Fibula guide'ı</h3>
       ${BODY.map(([k, t, mn, mx, st, un]) => ctl('fg_' + k, t, mn, mx, st, b[k], un)).join('')}
-      <p class="hint">Guide boyu ${fmt(info.body.L, 0)} mm${R ? ` · temas ${fmt(R.contact, 0)} mm²` : Fibula.building() ? ' · üretiliyor' : ''}.</p><p class="hint more">Kesi yuvaları testere payı kadar açılır.</p>
+      <p class="hint more">Kesi yuvaları testere payı kadar açılır.</p>
       <div class="ctl"><span class="lbl2">Guide vidaları</span><div class="el-list" id="fgList" role="group" aria-label="Guide vidaları">${list.map((s, i) => `<button class="el ${i === sel ? 'on' : ''}" data-i="${i}" aria-pressed="${i === sel}">Vida ${i + 1}</button>`).join('')}</div></div>
       ${sc ? `<div class="ctl"><label for="fgSeg" class="lbl2">Hangi segment</label><select id="fgSeg">${info.segs.map((g, i) => `<option value="${i}" ${i === sc.seg ? 'selected' : ''}>Segment ${i + 1}${g.barrel ? ' (üst)' : ''}</option>`).join('')}</select></div>
       ${SCREW.map(([k, t, mn, mx, st, un]) => ctl('fs_' + k, t, mn, mx, st, sc[k], un)).join('')}` : ''}

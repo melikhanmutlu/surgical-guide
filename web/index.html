@@ -463,7 +463,7 @@ button.ghost.danger { color: var(--crit); }
 .kv dt.wide { border-bottom: 0; padding-bottom: 0; }
 .kv dd.wide { text-align: left; color: var(--fg); padding-top: 1px; }
 :is(#apprMsg, #auMsg, #expMsg, #fibMirrorMsg, #fibPickMsg, #fibStatus, #guideStat, #imMsg, #lesStatus, #lsStat, #mkStat, #plMsg, #seStat, #verMsg, #xMsg) { color: var(--fg); background: var(--sunken); border-radius: var(--r); padding: 6px 10px; }
-:is(#apprMsg, #auMsg, #expMsg, #fibMirrorMsg, #fibPickMsg, #fibStatus, #guideStat, #imMsg, #lesStatus, #lsStat, #mkStat, #plMsg, #seStat, #verMsg, #xMsg):empty { display: none; }
+:is(#apprMsg, #auMsg, #expMsg, #fibMirrorMsg, #fibPickMsg, #fibStatus, #guideStat, #imMsg, #lesStatus, #lsStat, #mkStat, #oneMsg, #prodMsg, #plMsg, #seStat, #verMsg, #xMsg):empty { display: none; }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
@@ -722,17 +722,17 @@ button.ghost.danger { color: var(--crit); }
         <summary><span class="n">8</span>Teslim<span class="tag" id="tag8"></span><svg class="chev"><use href="#i-chev"/></svg></summary>
         <div class="body">
           <ol class="deliver">
-            <li><div><b>Guide STL'i</b><p class="hint" id="prodMsg">Su geçirmez üretim STL'i sunucuda Manifold ile üretilir.</p></div><button id="expSrv" title="Sunucuda yüzey tabanlı (Manifold) boolean ile su geçirmez STL"><svg class="i"><use href="#i-server"/></svg>Üret</button></li>
-            <li><div><b>Üretim paketi</b><p class="hint">STL'ler, plan ve rapor tek .zip dosyasında.</p></div><button class="primary" id="expZip"><svg class="i"><use href="#i-download"/></svg>İndir</button></li>
-            <li><div><b>Ayrı STL'ler</b><p class="hint" id="oneMsg">Kemik modelleri her zaman indirilebilir; guide ise plan onaylanınca indirilir.</p></div><span class="btns" id="oneStl"><button data-one="full" title="Rezeksiyon öncesi, kesilmemiş kemik">Tam kemik</button><button data-one="bone" title="Rezeksiyondan sonra kalan kemik">Kalan kemik</button><button data-one="res" title="Rezeke edilecek parça">Rezeke parça</button><button data-one="guide" title="Üretim STL'i alındıysa o, yoksa önizleme">Guide</button></span></li>
-            <li><div><b>Diğer biçimler</b><p class="hint" title="3MF: guide'lar ve modeller. DICOM SEG: kalan kemik ve rezeke parça, kaynak BT ile aynı koordinatta (yalnız DICOM vaka). Navigasyon: nokta, düzlem, vida ve implant eksenleri (LPS mm).">3MF, DICOM SEG ve navigasyon. Pakette de vardır.</p><p class="hint" id="xMsg"></p></div><span class="btns"><button id="x3mf"><svg class="i"><use href="#i-download"/></svg>3MF</button><button id="xSeg">DICOM SEG</button><button id="xNav">Navigasyon</button></span></li>
-            <li><div><b>Cerrahi rapor</b><p class="hint">Görüntüler, kesim tablosu, montaj sırası ve imza alanı.</p></div><span class="btns"><button id="expPdf"><svg class="i"><use href="#i-download"/></svg>PDF</button><button id="expRep" class="ghost">HTML</button></span></li>
+            <li><div><b title="Su geçirmez üretim STL'i sunucuda Manifold ile üretilir.">Guide STL'i</b><p class="hint" id="prodMsg"></p></div><button id="expSrv" title="Sunucuda yüzey tabanlı (Manifold) boolean ile su geçirmez STL"><svg class="i"><use href="#i-server"/></svg>Üret</button></li>
+            <li><div><b title="STL'ler, plan ve rapor tek .zip dosyasında.">Üretim paketi</b></div><button class="primary" id="expZip"><svg class="i"><use href="#i-download"/></svg>İndir</button></li>
+            <li><div><b title="Kemik modelleri her zaman indirilebilir; guide plan onaylanınca indirilir.">Ayrı STL'ler</b><p class="hint" id="oneMsg"></p></div><span class="btns" id="oneStl"><button data-one="full" title="Rezeksiyon öncesi, kesilmemiş kemik">Tam kemik</button><button data-one="bone" title="Rezeksiyondan sonra kalan kemik">Kalan kemik</button><button data-one="res" title="Rezeke edilecek parça">Rezeke parça</button><button data-one="guide" title="Üretim STL'i alındıysa o, yoksa önizleme">Guide</button></span></li>
+            <li><div><b title="3MF: guide'lar ve modeller. DICOM SEG: kalan kemik ve rezeke parça, kaynak BT ile aynı koordinatta (yalnız DICOM vaka). Navigasyon: nokta, düzlem, vida ve implant eksenleri (LPS mm). Hepsi pakette de vardır.">Diğer biçimler</b><p class="hint" id="xMsg"></p></div><span class="btns"><button id="x3mf"><svg class="i"><use href="#i-download"/></svg>3MF</button><button id="xSeg">DICOM SEG</button><button id="xNav">Navigasyon</button></span></li>
+            <li><div><b title="Görüntüler, kesim tablosu, montaj sırası ve imza alanı.">Cerrahi rapor</b></div><span class="btns"><button id="expPdf"><svg class="i"><use href="#i-download"/></svg>PDF</button><button id="expRep" class="ghost">HTML</button></span></li>
           </ol>
           <p class="hint" id="expMsg"></p>
           <details class="sec" id="secPost"><summary>Ameliyat sonrası</summary><div id="postBox" class="postbox col"></div></details>
         </div>
       </details>
-      <div class="body foot"><p class="note">Araştırma prototipi, klinik kullanım için değildir. Guide tarayıcıda 0,4 mm çözünürlükte üretilir.</p></div>
+      <div class="body foot"><p class="note">Araştırma prototipi · klinik kullanım için değil</p></div>
     </aside>
 
     <section class="stagewrap" aria-label="3B görünüm">

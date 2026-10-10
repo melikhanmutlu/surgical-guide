@@ -186,7 +186,7 @@ window.Implants = (function () {
     $('imAuto').addEventListener('click', () => {
       if (list.length && !confirm('Mevcut implantlar silinip otomatik yerleşimle değiştirilsin mi?')) return;
       St.busy(true, 'İmplantlar yerleştiriliyor…');
-      setTimeout(() => { try { const r = autoPlace(); msgText = r.placed ? `${r.placed} implant yerleştirildi${r.tried > r.placed ? `; ${r.tried - r.placed} diş konumunda kontrolleri geçen implant bulunamadı` : ''}. Çap ve boy greft kalınlığına göre seçildi, plak vidalarından uzak tutuldu.` : 'Greft üzerinde kontrolleri geçen implant konumu bulunamadı.'; render(); } finally { St.busy(false); } }, 30);
+      setTimeout(() => { try { const r = autoPlace(); msgText = r.placed ? `${r.placed} implant yerleştirildi${r.tried > r.placed ? ` · ${r.tried - r.placed} konum uygun değil` : ''}.` : 'Greft üzerinde kontrolleri geçen implant konumu bulunamadı.'; render(); } finally { St.busy(false); } }, 30);
     });
     $('imPick').addEventListener('click', () => { picking = true; const mb = $('modeBadge'); mb.hidden = false; mb.textContent = 'İmplant yeri için mandibula görünümünde bir fibula greftine tıklayın. Vazgeçmek için Esc.'; if (Fibula.view() !== 'm') $('scM').click(); });
     box.querySelectorAll('#imList button').forEach(b => b.addEventListener('click', () => { sel = +b.dataset.i; render(); draw(); }));

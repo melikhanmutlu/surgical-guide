@@ -27,8 +27,9 @@
     }
     const par = h.parentElement;
     if (par && par.matches('details')) return { at: par.querySelector(':scope > summary'), after: par.querySelector(':scope > summary') };
-    const sec = h.closest('details.sec');
-    if (sec && par && par.parentElement === sec) return { at: sec.querySelector(':scope > summary'), after: null };
+    // otherwise the nearest collapsible section's summary carries the "i"; the text stays where it is
+    const sec = h.closest('details.sec, details.sub-d, details.sub');
+    if (sec) return { at: sec.querySelector(':scope > summary'), after: null };
     return null;
   }
   // hovering the "i" shows the explanation itself, not a generic word

@@ -518,8 +518,8 @@
     busy(true, 'Rezeksiyon güncelleniyor…'); await sleep(); await rebuildResection();
     busy(true, 'Guide oluşturuluyor…'); await sleep();
     const f = await fitWrap();
-    $('guideStat').textContent = !f ? '' : !f.ok ? 'Guide bu yerleşimde takılamıyor; kesileri ya da guide ayarlarını kontrol edin.'
-      : `Guide oluşturuldu, ${S.screws.length} vida yerleştirildi.` + (f.split ? ' Kavisli kemik nedeniyle iki ayrı guide seçildi.' : '') + (f.wrap < (S.kind === 'leg' ? 6 : 5) ? ` Takılabilsin diye sarma derinliği ${fmt(f.wrap, 1)} mm'ye indirildi.` : '');
+    $('guideStat').textContent = !f ? '' : !f.ok ? 'Guide bu yerleşimde takılamıyor; kesileri ya da ayarları kontrol edin.'
+      : `Guide hazır · ${S.screws.length} vida` + (f.split ? ' · iki parça (kavisli kemik)' : '') + (f.wrap < (S.kind === 'leg' ? 6 : 5) ? ` · sarma ${fmt(f.wrap, 1)} mm'ye indirildi` : '');
     syncSeq();
   }
   // one button: region (sample spot, painted lesion, or one click on the model), cuts, resected piece removed, guide
@@ -767,7 +767,7 @@
   function syncLesion() {
     lFields.forEach(([k, , , , , unit]) => { $('l_' + k).value = S.lesion[k]; $('lo_' + k).textContent = `${fmt(S.lesion[k])} ${unit}`; });
     $('resType').value = S.lesion.condyle || ''; $('resTypeHint').hidden = !S.lesion.condyle;
-    $('lesStatus').textContent = !S.anchor ? '' : S.lesion.ok ? `Sınır onaylandı${S.lesion.by ? ' · ' + S.lesion.by : ''}.` : 'Sınır cerrah onayı bekliyor (İnceleme ve onay adımında).';
+    $('lesStatus').textContent = !S.anchor ? '' : S.lesion.ok ? `Sınır onaylandı${S.lesion.by ? ' · ' + S.lesion.by : ''}.` : 'Sınır onayı bekliyor (7. adım).';
   }
   lFields.forEach(([k]) => $('l_' + k).addEventListener('input', e => { S.lesion[k] = +e.target.value; unapprove(S.lesion); syncLesion(); updateLesionPart(); renderAppr(); render(); emit('parts'); emit('changed'); }));
   syncLesion();
@@ -973,10 +973,10 @@
     $('scList').innerHTML = S.screws.map((s, i) => btn('s', s, i, 'Vida')).join('');
     ['plList', 'scList'].forEach(id => $(id).querySelectorAll('button').forEach(b => b.addEventListener('click', () => select(b.dataset.s))));
     const isP = S.sel && S.sel[0] === 'p', i = S.sel ? +S.sel.slice(1) : -1, o = !S.sel ? null : isP ? S.planes[i] : S.screws[i];
-    $('plProps').innerHTML = S.planes.length ? '' : '<p class="hint">Kesi yok. "Bölgeyi modelde seç" ile modelde bölgeye tıklayın.</p>';
-    $('scProps').innerHTML = S.screws.length ? '' : (S.guideOn ? '<p class="hint">Vida yok. "Vida ekle" ile guide üzerine tıklayın.</p>' : '<p class="hint">Vidalar 3. adımda "Guide oluştur" ile otomatik konur.</p>');
+    $('plProps').innerHTML = S.planes.length ? '' : '<p class="hint">Henüz kesi yok.</p>';
+    $('scProps').innerHTML = S.screws.length ? '' : (S.guideOn ? '<p class="hint">Vida yok.</p>' : '<p class="hint">Vidalar guide ile birlikte konur.</p>');
     if (S.sel && !o) S.sel = null;
-    if (!o) { if (S.planes.length) $('plProps').innerHTML = '<p class="hint">Düzenlemek için bir kesi seçin ya da 3B görünümde kesiye tıklayın.</p>'; if (S.screws.length) $('scProps').innerHTML = '<p class="hint">Düzenlemek için bir vida seçin ya da 3B görünümde vidaya tıklayın.</p>'; return; }
+    if (!o) return;
     const box = $(isP ? 'plProps' : 'scProps');
     const fields = isP ? [['off', 'Konum (guide ekseni boyunca)', -45, 45, 0.5, 'mm'], ['yaw', 'Yatay açı', -89, 89, 0.5, '°'], ['pitch', 'Dikey açı', -89, 89, 0.5, '°'], ['w', 'Yuva genişliği (testere + tolerans)', 0.6, 2.5, 0.1, 'mm']]
       : [['u', 'Konum (eksen boyunca)', -45, 45, 0.5, 'mm'], ['v', 'Konum (yanal)', -15, 15, 0.5, 'mm'], ['tiltU', 'Eğim (eksen yönünde)', -89, 89, 1, '°'], ['tiltV', 'Eğim (yanal)', -89, 89, 1, '°'],
@@ -1127,8 +1127,8 @@
     if (!name) why.push('onaylayan cerrahın adı girilmedi');
     if (S.crit || qcCrit) why.push(`${S.crit + (qcCrit ? 1 : 0)} kritik kontrol var`);
     if (missing.length) why.push(`onay bekleyen: ${missing.join(', ')}`);
-    $('expMsg').textContent = ready ? 'Plan onaylı; üretim paketi hazırlanabilir.' : `Üretim paketi için: ${why.join('; ') || 'guide henüz üretilmedi'}. Rapor taslak olarak alınabilir.`;
-    $('expZip').title = ready ? '' : $('expMsg').textContent;
+    $('expMsg').textContent = ready ? 'Plan onaylı; paket hazır.' : `Paket için: ${[!name && 'cerrah adı', (S.crit || qcCrit) && `${S.crit + (qcCrit ? 1 : 0)} kritik kontrol`, missing.length && `${missing.length} onay`].filter(Boolean).join(', ') || 'guide gerekli'}. Rapor taslak alınabilir.`;
+    $('expMsg').title = $('expZip').title = ready ? '' : `Üretim paketi için: ${why.join('; ') || 'guide henüz üretilmedi'}.`;
   }
   // ---------- navigation from checks, review rows and 3D markers to the item ----------
   const STEP_OF = { data: 'st1', anat: 'st2', lesion: 'st3', res: 'st3', fib: 'st4', guide: 'st5', scr: 'st6' };
