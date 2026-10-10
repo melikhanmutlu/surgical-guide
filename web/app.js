@@ -122,7 +122,7 @@
   const S = {
     vol: null, red: null, labels: null, comps: [], selected: new Set(), mask: null,
     anchor: null,             // {p:Vector3, n:Vector3, axis:Vector3}
-    g: { rot: 0, L: 36, W: 22, wrap: 6, wall: 2.5, clear: 0.3, bridge: 4, side: 1, split: 0, flange: 3, peri: 0, fit: 0, stopT: 0, stopB: 0, stopL: 6, stopD: 5 },
+    g: { rot: 0, roll: 0, L: 36, W: 22, wrap: 6, wall: 2.5, clear: 0.3, bridge: 4, side: 1, split: 0, flange: 3, peri: 0, fit: 0, stopT: 0, stopB: 0, stopL: 6, stopD: 5 },
     planes: [], screws: [], sel: null, explode: 0, mode: 'orbit', result: null,
     guideOn: false,           // the guide is built only after 'Guide oluştur', never on its own
     resRemoved: false,        // 'Rezeksiyon bölgesini sil': the resected piece is hidden
@@ -576,6 +576,7 @@
       for (let it = 0; it < 50; it++) e = V(C[0][0] * e.x + C[0][1] * e.y + C[0][2] * e.z, C[1][0] * e.x + C[1][1] * e.y + C[1][2] * e.z, C[2][0] * e.x + C[2][1] * e.y + C[2][2] * e.z).normalize();
       S.anchor = { p: p.clone(), n, axis: e };
     } else S.anchor = { p: p.clone(), n, axis: Math.abs(n.z) < 0.9 ? V(0, 0, 1) : V(1, 0, 0) };
+    S.g.roll = 0;
     showAnchor();
   }
   // guide frame: u along the bone axis (rotated by g.rot about n), v = n x u, n = seating normal
@@ -1181,15 +1182,20 @@
       if (live.resDirty) { live.planes = live.resDirty = false; busy(true, 'Rezeksiyon güncelleniyor…'); await sleep(); await rebuildResection(); }
       if (S.screwRefit) { S.screwRefit = false; if (S.guideOn && S.anchor) { placeScrews(); S.sel = null; renderElements(); } }
       await regenerate();
+      // after a re-fit the message says what the final guide does, not what the trial builds did
+      if (S.fitReport) {
+        const f = S.fitReport, R = S.result, want = S.g.split && S.planes.length >= 2 ? 2 : 1; S.fitReport = null;
+        const ok = R && R.pieces === want && !(R.seat && R.seat.ok && !R.seat.free);
+        if ($('guideStat')) $('guideStat').textContent = ok ? `Guide yeni konuma göre yeniden şekillendi (sarma ${fmt(S.g.wrap, 1)} mm${f.split ? ', iki parça' : ''}).` : 'Bu konumda guide kemiğe takılamıyor; açıyı ya da konumu değiştirin veya sarma derinliğini düşürün.';
+      }
       // a new angle or size: the guide is re-formed to seat on the bone where it now lies (wrap depth, one or two pieces)
       if (S.refit) {
         S.refit = false;
         const R = S.result, want = S.g.split && S.planes.length >= 2 ? 2 : 1;
         if (S.guideOn && R && (R.pieces !== want || (R.seat && R.seat.ok && !R.seat.free))) {
           busy(true, 'Guide yeni açıda kemiğe oturtuluyor…'); await sleep();
-          const f = await fitWrap();
-          if (f && $('guideStat')) $('guideStat').textContent = f.ok ? `Guide yeni konuma göre yeniden şekillendi (sarma ${fmt(f.wrap, 1)} mm${f.split ? ', iki parça' : ''}).` : 'Bu açıda guide kemiğe takılamıyor; açıyı azaltın ya da sarma derinliğini düşürün.';
-        }
+          const f = await fitWrap(); if (f) S.fitReport = f;
+        } else if (S.guideOn && R && $('guideStat')) $('guideStat').textContent = 'Guide yeni konumda kemiğe oturuyor.';
       }
     }, liveEdit ? 400 : 120);
   }
@@ -1293,11 +1299,59 @@
     return st;
   }
   const clampR = (x, a, b, st) => Math.max(a, Math.min(b, Math.round(x / st) * st));
-  function setGuideRot(r) {
-    r = Math.round(((r + 180) % 360 + 360) % 360 - 180); if (r === -180) r = 180; if (r === S.g.rot) return false;
-    S.g.rot = r; unapproveAll(); updateLesionPart();
+  const wrap180 = r => { r = Math.round(((r + 180) % 360 + 360) % 360 - 180); return r === -180 ? 180 : r; };
+  // the cuts stay where they are in the jaw while the guide turns or moves around the bone: they are written again
+  // in the new guide frame. A cut almost parallel to the new guide axis cannot be written that way and turns with it.
+  function keepCuts(change) {
+    const before = planesWorld().map(w => ({ p: w.p.clone(), N: w.N.clone() })), p0 = S.anchor.p.clone(), u0 = frameAxes().u;
+    change();
+    const { u, v, n } = frameAxes(); let turned = 0;
+    S.planes.forEach((pl, i) => {
+      let { p: c, N } = before[i]; if (N.dot(u) < 0) N = N.clone().negate();
+      if (N.dot(u) < 0.2) { turned++; return; }
+      pl.off = Math.max(-45, Math.min(45, N.dot(c.clone().sub(S.anchor.p)) / N.dot(u)));
+      pl.yaw = THREE.MathUtils.radToDeg(Math.atan2(N.dot(v), N.dot(u))); pl.pitch = THREE.MathUtils.radToDeg(-Math.asin(Math.max(-1, Math.min(1, N.dot(n)))));
+    });
+    // the lesion range is measured along the guide axis from the anchor
+    const sh = p0.clone().addScaledVector(u0, (S.lesion.from + S.lesion.to) / 2).sub(S.anchor.p).dot(u) - (S.lesion.from + S.lesion.to) / 2;
+    S.lesion.from += sh; S.lesion.to += sh;
+    S.cutsTurned = turned;
+    return turned;
+  }
+  function afterGuideMove() {
+    unapproveAll(); updateLesionPart();
     if (S.guideOn && S.screws.length) S.screwRefit = true;
-    S.refit = true; syncGuideInputs(); schedule(true, true); return true;
+    S.refit = true; syncGuideInputs(); schedule(true, true);
+  }
+  function setGuideRot(r) {
+    r = wrap180(r); if (r === S.g.rot || !S.anchor) return false;
+    keepCuts(() => { S.g.rot = r; }); afterGuideMove(); return true;
+  }
+  // move the guide around the bone (buccal face towards the lower border or the crest): the anchor turns about the bone
+  // axis through the centre of the bone cross-section and lands on the surface in that direction
+  function boneCentre(p, a) {
+    const r = S.red, ix = [-18, 18].flatMap(dx => [-18, 18].flatMap(dy => [-18, 18].map(dz => G.indexOf(r, [p.x + dx, p.y + dy, p.z + dz]))));
+    const lo = [0, 1, 2].map(k => Math.max(0, Math.floor(Math.min(...ix.map(q => q[k]))))), hi = [0, 1, 2].map(k => Math.min([r.nx, r.ny, r.nz][k] - 1, Math.ceil(Math.max(...ix.map(q => q[k])))));
+    const c = V(); let cnt = 0; const q = V();
+    for (let k = lo[2]; k <= hi[2]; k++) for (let j = lo[1]; j <= hi[1]; j++) for (let i = lo[0]; i <= hi[0]; i++) {
+      if (!S.mask[i + r.nx * (j + r.ny * k)]) continue;
+      q.set(...G.worldOf(r, i, j, k)).sub(p); const along = q.dot(a);
+      if (Math.abs(along) > 2 || q.lengthSq() - along * along > 18 * 18) continue;
+      c.add(q); cnt++;
+    }
+    return cnt > 10 ? c.multiplyScalar(1 / cnt).add(p) : null;
+  }
+  function setGuideRoll(r) {
+    r = wrap180(r); if (!S.anchor || r === (S.g.roll || 0)) return false;
+    const an = S.anchor, base = an.base || { p: an.p.clone(), n: an.n.clone() };
+    const a = an.axis.clone().sub(base.n.clone().multiplyScalar(an.axis.dot(base.n))).normalize();
+    if (!base.c) base.c = boneCentre(base.p, a) || base.p.clone().addScaledVector(base.n, -6);
+    const n1 = base.n.clone().applyAxisAngle(a, deg(r)).normalize();
+    let p1 = null; const q = V();
+    for (let t = 30; t > 0; t -= 0.25) { q.copy(base.c).addScaledVector(n1, t); if (boneAt(q)) { p1 = q.clone().addScaledVector(n1, 0.25); break; } }
+    if (!p1) { if ($('guideStat')) $('guideStat').textContent = 'Bu yönde kemik yüzeyi bulunamadı; guide yerinde bırakıldı.'; return false; }
+    keepCuts(() => { an.base = base; an.p = p1; an.n = n1; an.axis = a; S.g.roll = r; });
+    showAnchor(); afterGuideMove(); return true;
   }
   function gizmoApply() {
     if (gz.start.guide) {
@@ -1458,10 +1512,11 @@
   }
 
   // ---------- controls wiring ----------
-  const gFields = [['rot', 'Guide ekseni dönüşü', -180, 180, 1, '°'], ['L', 'Uzunluk', 16, 100, 1, 'mm'], ['W', 'Genişlik', 10, 40, 1, 'mm'], ['wrap', 'Sarma derinliği', 2, 20, 0.5, 'mm'], ['wall', 'Duvar kalınlığı', 1.5, 5, 0.1, 'mm'], ['clear', 'Kemik boşluğu', 0, 1, 0.05, 'mm'], ['bridge', 'Köprü genişliği', 2, 10, 0.5, 'mm'], ['flange', 'Yakalama kenarı (kesi ötesinde)', 2, 8, 0.5, 'mm'], ['peri', 'Periost payı (boşluğa eklenir)', 0, 1, 0.05, 'mm']];
+  const gFields = [['rot', 'Guide ekseni dönüşü', -180, 180, 1, '°'], ['roll', 'Kemik etrafında konum', -180, 180, 1, '°'], ['L', 'Uzunluk', 16, 100, 1, 'mm'], ['W', 'Genişlik', 10, 40, 1, 'mm'], ['wrap', 'Sarma derinliği', 2, 20, 0.5, 'mm'], ['wall', 'Duvar kalınlığı', 1.5, 5, 0.1, 'mm'], ['clear', 'Kemik boşluğu', 0, 1, 0.05, 'mm'], ['bridge', 'Köprü genişliği', 2, 10, 0.5, 'mm'], ['flange', 'Yakalama kenarı (kesi ötesinde)', 2, 8, 0.5, 'mm'], ['peri', 'Periost payı (boşluğa eklenir)', 0, 1, 0.05, 'mm']];
   $('gCtl').innerHTML = gFields.map(([k, t, mn, mx, st]) => `<div class="ctl" id="gc_${k}"><div class="ctl-row"><label for="g_${k}">${t}</label><output id="go_${k}"></output></div><input type="range" id="g_${k}" min="${mn}" max="${mx}" step="${st}"></div>`).join('');
   function syncGuideInputs() {
     if ($('gScrewD')) { const d = S.screws.length ? S.screws[0].d : (SCREW_DEFAULT[S.kind] || SCREW_DEFAULT.dicom).d; $('gScrewD').value = d; $('gScrewDO').textContent = `${fmt(d)} mm`; }
+    if ($('gRoll3')) { $('gRoll3').value = S.g.roll || 0; $('gRoll3O').textContent = `${fmt(S.g.roll || 0, 0)}°`; }
     if ($('gRot3')) { $('gRot3').value = S.g.rot; $('gRot3O').textContent = `${fmt(S.g.rot, 0)}°`; $('gRotBox').hidden = !S.guideOn; }
     gFields.forEach(([k, , , , st, unit]) => { $('g_' + k).value = S.g[k]; $('go_' + k).textContent = `${fmt(S.g[k], st < 1 ? (st < 0.1 ? 2 : 1) : 0)} ${unit}`; });
     $('g_side').value = String(S.g.side); $('g_split').value = String(S.g.split ? 1 : 0);
@@ -1480,6 +1535,8 @@
     });
   }
   gFields.forEach(([k]) => $('g_' + k).addEventListener('input', e => {
+    if (k === 'rot') { setGuideRot(+e.target.value); return; }
+    if (k === 'roll') { setGuideRoll(+e.target.value); return; }
     S.g[k] = +e.target.value;
     if (k === 'rot') { unapproveAll(); updateLesionPart(); if (S.guideOn && S.screws.length) S.screwRefit = true; }
     if (k === 'rot' || k === 'L' || k === 'W') S.refit = true;
@@ -1488,6 +1545,7 @@
   }));
   $('g_side').addEventListener('change', e => { S.g.side = +e.target.value; schedule(false); });
   $('gRot3').addEventListener('input', e => setGuideRot(+e.target.value));
+  $('gRoll3').addEventListener('input', e => setGuideRoll(+e.target.value));
   // one drill diameter for every guide screw (and for screws placed later); each screw can still be changed on its own
   $('gScrewD').addEventListener('input', e => {
     const d = Math.round(+e.target.value * 10) / 10; $('gScrewDO').textContent = `${fmt(d)} mm`;
@@ -1701,7 +1759,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     return {
       schema: 1, source: S.source ? clone(S.source) : null,
       seg: { thr: +$('thr').value, method: S.segMethod || '', sel: r ? S.comps.filter(c => S.selected.has(c.label)).map(c => G.worldOf(r, ...c.centroid).map(x => Math.round(x * 10) / 10)) : [] },
-      anchor: S.anchor ? { p: vec(S.anchor.p), n: vec(S.anchor.n), axis: vec(S.anchor.axis) } : null,
+      anchor: S.anchor ? { p: vec(S.anchor.p), n: vec(S.anchor.n), axis: vec(S.anchor.axis), ...(S.anchor.base ? { base: { p: vec(S.anchor.base.p), n: vec(S.anchor.base.n), c: vec(S.anchor.base.c) } } : {}) } : null,
       g: clone(S.g), lesion: clone(S.lesion), planes: clone(S.planes), screws: clone(S.screws),
       perSide: +$('perSide').value || 2, guideOn: !!S.guideOn, resRemoved: !!S.resRemoved, surgeon: $('surgeon').value.trim(), fibula: S.fib ? clone(S.fib.plan) : null,
       measures: clone(S.measures || []), ext: window.PlanExt ? Object.fromEntries(Object.entries(PlanExt).map(([k, f]) => [k, f.get()])) : {},
@@ -1724,9 +1782,11 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
       const an = plan.anchor && { p: v3(plan.anchor.p), n: v3(plan.anchor.n), axis: v3(plan.anchor.axis) };
       S.anchor = an && an.p && an.n && an.n.lengthSq() > 1e-6 && an.axis && an.axis.lengthSq() > 1e-6 && an.axis.clone().normalize().cross(an.n.clone().normalize()).lengthSq() > 1e-4
         ? { p: an.p, n: an.n.normalize(), axis: an.axis.normalize() } : null;
+      const ab = S.anchor && plan.anchor.base && { p: v3(plan.anchor.base.p), n: v3(plan.anchor.base.n), c: v3(plan.anchor.base.c) };
+      if (ab && ab.p && ab.c && ab.n && ab.n.lengthSq() > 1e-6) S.anchor.base = { p: ab.p, n: ab.n.normalize(), c: ab.c };
       const num = (o, keys, d) => { const r = {}; keys.forEach(k => { const v = Number(o && o[k]); r[k] = Number.isFinite(v) ? v : d[k]; }); return r; };
       const who = o => ({ ok: !!(o && o.ok), ...(o && o.ok && typeof o.by === 'string' ? { by: o.by.slice(0, 120) } : {}), ...(o && o.ok && typeof o.at === 'string' ? { at: o.at.slice(0, 40) } : {}) });
-      const G0 = { rot: 0, L: 36, W: 22, wrap: 6, wall: 2.5, clear: 0.3, bridge: 4, side: 1, split: 0, flange: 3, peri: 0, fit: 0, stopT: 0, stopB: 0, stopL: 6, stopD: 5 };
+      const G0 = { rot: 0, roll: 0, L: 36, W: 22, wrap: 6, wall: 2.5, clear: 0.3, bridge: 4, side: 1, split: 0, flange: 3, peri: 0, fit: 0, stopT: 0, stopB: 0, stopL: 6, stopD: 5 };
       Object.assign(S.g, num(plan.g, Object.keys(G0), G0));
       // keep every value inside the range its control allows (a hand-edited or damaged plan cannot hang the app)
       const clampTo = (o, k, a, b) => { o[k] = Math.max(a, Math.min(b, o[k])); };
@@ -1775,7 +1835,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   }
   function serverUrl() { return ($('aiUrl').value || '').trim().replace(/\/+$/, ''); }
   function select(sel) { if (sel) S.guideSel = false; S.sel = sel; emit('select', sel); renderElements(); rebuildElementParts(S.result ? S.result.pls : planesWorld(), S.result ? S.result.screwInfo : []); applyExplode(); render(); }
-  window.Studio = { renderComps, setGuideRot, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, resEnds, splitGap, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr };
+  window.Studio = { renderComps, setGuideRot, setGuideRoll, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, resEnds, splitGap, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr };
   bus.addEventListener('planeDragged', () => { renderElements(); schedule(true, true); });
   emit('ready');
 

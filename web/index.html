@@ -500,7 +500,8 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
               <div class="ctl"><label for="perSide" class="lbl2">Her tarafta vida</label><select id="perSide"><option value="1">1 vida</option><option value="2" selected>2 vida</option></select></div>
               <div class="ctl"><div class="ctl-row"><label for="gScrewD">Vida çapı (matkap, tüm guide vidaları)</label><output id="gScrewDO">2,0 mm</output></div><input type="range" id="gScrewD" min="1.2" max="4" step="0.1" value="2"></div>
               <div class="ctl" id="gRotBox" hidden><div class="ctl-row"><label for="gRot3">Guide açısı (kemik üzerinde)</label><output id="gRot3O">0°</output></div><input type="range" id="gRot3" min="-180" max="180" step="1" value="0">
-                <p class="hint">3B görünümde guide'a tıklayıp halkayla, kesitlerde de mor tutamakla döndürebilirsiniz. Guide her açıda kemiğe yeniden oturtulur.</p></div>
+                <div class="ctl-row"><label for="gRoll3">Kemik etrafında konum (yanaktan alt kenara)</label><output id="gRoll3O">0°</output></div><input type="range" id="gRoll3" min="-180" max="180" step="1" value="0">
+                <p class="hint">Üstteki ayar guide'ı kemik yüzeyinde döndürür, alttaki guide'ı kemiğin etrafında kaydırıp başka bir yüzüne oturtur. 3B görünümde guide'a tıklayıp halkayla, kesitlerde de mor tutamakla da döndürebilirsiniz. Kesiler yerinde kalır, guide her konumda kemiğe yeniden oturtulur.</p></div>
               <div class="btns"><button class="primary" id="guideMake" disabled><svg class="i"><use href="#i-spark"/></svg>Guide oluştur</button><button id="guideDel" hidden><svg class="i"><use href="#i-trash"/></svg>Guide'ı sil</button></div>
               <p class="hint" id="guideStat"></p>
             </li>
