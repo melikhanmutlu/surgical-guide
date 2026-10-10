@@ -498,7 +498,7 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
             </li>
             <li id="sq3"><h3 class="sub"><span class="sn">c</span>Guide oluştur</h3>
               <div class="ctl"><label for="perSide" class="lbl2">Her tarafta vida</label><select id="perSide"><option value="1">1 vida</option><option value="2" selected>2 vida</option></select></div>
-              <div class="ctl" id="gRotBox" hidden><div class="ctl-row"><label for="gRot3">Guide açısı (kemik üzerinde)</label><output id="gRot3O">0°</output></div><input type="range" id="gRot3" min="-90" max="90" step="1" value="0">
+              <div class="ctl" id="gRotBox" hidden><div class="ctl-row"><label for="gRot3">Guide açısı (kemik üzerinde)</label><output id="gRot3O">0°</output></div><input type="range" id="gRot3" min="-180" max="180" step="1" value="0">
                 <p class="hint">3B görünümde guide'a tıklayıp halkayla, kesitlerde de mor tutamakla döndürebilirsiniz. Guide her açıda kemiğe yeniden oturtulur.</p></div>
               <div class="btns"><button class="primary" id="guideMake" disabled><svg class="i"><use href="#i-spark"/></svg>Guide oluştur</button><button id="guideDel" hidden><svg class="i"><use href="#i-trash"/></svg>Guide'ı sil</button></div>
               <p class="hint" id="guideStat"></p>
@@ -525,8 +525,8 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
             <div id="fibRolls" class="col"></div>
             <div id="fibJointBox" class="col">
               <div class="ctl"><label for="fibJoint" class="lbl2">Eklem kesisi</label><select id="fibJoint"></select></div>
-              <div class="ctl"><div class="ctl-row"><label for="fibYaw">Eklem açısı (yan)</label><output id="fibYawO"></output></div><input type="range" id="fibYaw" min="-60" max="60" step="1"></div>
-              <div class="ctl"><div class="ctl-row"><label for="fibPitch">Eklem açısı (dik)</label><output id="fibPitchO"></output></div><input type="range" id="fibPitch" min="-60" max="60" step="1"></div>
+              <div class="ctl"><div class="ctl-row"><label for="fibYaw">Eklem açısı (yan)</label><output id="fibYawO"></output></div><input type="range" id="fibYaw" min="-180" max="180" step="1"></div>
+              <div class="ctl"><div class="ctl-row"><label for="fibPitch">Eklem açısı (dik)</label><output id="fibPitchO"></output></div><input type="range" id="fibPitch" min="-180" max="180" step="1"></div>
             </div>
             <div class="ctl"><div class="ctl-row"><label for="fibKerf">Testere payı</label><output id="fibKerfO"></output></div><input type="range" id="fibKerf" min="0.5" max="2" step="0.1"></div>
             <div class="ctl"><div class="ctl-row"><label for="fibDistal">Distal korunan fibula</label><output id="fibDistalO"></output></div><input type="range" id="fibDistal" min="40" max="140" step="1"></div>

@@ -126,7 +126,7 @@ window.Implants = (function () {
   (window.ExportHooks = window.ExportHooks || []).push(files => { const s = summary(); if (s) files.push({ name: 'implant_plani.json', data: JSON.stringify(s, null, 2) }); });
 
   // ---------- panel ----------
-  const F = [['t', 'Konum (segment başından)', 0, 60, 0.5, 'mm'], ['d', 'Çap', 3, 6, 0.1, 'mm'], ['len', 'Boy', 6, 16, 0.5, 'mm'], ['tb', 'Eğim (bukkal-lingual)', -30, 30, 1, '°'], ['tm', 'Eğim (mezial-distal)', -30, 30, 1, '°']];
+  const F = [['t', 'Konum (segment başından)', 0, 60, 0.5, 'mm'], ['d', 'Çap', 3, 6, 0.1, 'mm'], ['len', 'Boy', 6, 16, 0.5, 'mm'], ['tb', 'Eğim (bukkal-lingual)', -89, 89, 1, '°'], ['tm', 'Eğim (mezial-distal)', -89, 89, 1, '°']];
   function render() {
     const box = $('implBox'); if (!box) return;
     const st = fib();

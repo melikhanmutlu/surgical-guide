@@ -411,7 +411,7 @@ window.Fibula = (function () {
     const P0 = plan(), D = last && last.D, Ld = D ? D.L : 0;
     document.querySelectorAll('#fibN button').forEach(b => b.setAttribute('aria-pressed', +b.dataset.n === P0.n));
     $('fibKnots').innerHTML = P0.knots.map((f, i) => `<div class="ctl"><div class="ctl-row"><label for="fk${i}">Kırılma noktası ${i + 1}</label><output>${fmt(f * Ld)} mm</output></div><input type="range" id="fk${i}" min="0.08" max="0.92" step="0.005" value="${f}"></div>`).join('');
-    $('fibRolls').innerHTML = P0.roll.map((r, i) => `<div class="ctl"><div class="ctl-row"><label for="fr${i}">Segment ${i + 1} rotasyonu</label><output>${fmt(r, 0)}°</output></div><input type="range" id="fr${i}" min="-90" max="90" step="1" value="${r}"></div>`).join('');
+    $('fibRolls').innerHTML = P0.roll.map((r, i) => `<div class="ctl"><div class="ctl-row"><label for="fr${i}">Segment ${i + 1} rotasyonu</label><output>${fmt(r, 0)}°</output></div><input type="range" id="fr${i}" min="-180" max="180" step="1" value="${r}"></div>`).join('');
     $('fibJointBox').hidden = P0.n < 2;
     const js = $('fibJoint'), jv = Math.min(+js.value || 1, P0.n - 1) || 1;
     js.innerHTML = Array.from({ length: P0.n - 1 }, (_, j) => `<option value="${j + 1}">Segment ${j + 1}–${j + 2}</option>`).join(''); js.value = jv;

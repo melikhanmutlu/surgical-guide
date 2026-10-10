@@ -40,7 +40,6 @@
       if (!base) return;
       const d = V(...w).sub(S.anchor.p); d.addScaledVector(base.n, -d.dot(base.n)); if (d.lengthSq() < 4) return;
       let a = deg(Math.atan2(d.dot(base.v0), d.dot(base.u0)));
-      if (a > 90) a -= 180; else if (a < -90) a += 180;
       St.setGuideRot(a);
     },
     end() { base = null; },

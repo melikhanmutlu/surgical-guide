@@ -971,8 +971,8 @@
     if (S.sel && !o) S.sel = null;
     if (!o) { if (S.planes.length) $('plProps').innerHTML = '<p class="hint">Düzenlemek için bir kesi seçin ya da 3B görünümde kesiye tıklayın.</p>'; if (S.screws.length) $('scProps').innerHTML = '<p class="hint">Düzenlemek için bir vida seçin ya da 3B görünümde vidaya tıklayın.</p>'; return; }
     const box = $(isP ? 'plProps' : 'scProps');
-    const fields = isP ? [['off', 'Konum (guide ekseni boyunca)', -45, 45, 0.5, 'mm'], ['yaw', 'Yatay açı', -80, 80, 0.5, '°'], ['pitch', 'Dikey açı', -80, 80, 0.5, '°'], ['w', 'Yuva genişliği (testere + tolerans)', 0.6, 2.5, 0.1, 'mm']]
-      : [['u', 'Konum (eksen boyunca)', -45, 45, 0.5, 'mm'], ['v', 'Konum (yanal)', -15, 15, 0.5, 'mm'], ['tiltU', 'Eğim (eksen yönünde)', -60, 60, 1, '°'], ['tiltV', 'Eğim (yanal)', -60, 60, 1, '°'],
+    const fields = isP ? [['off', 'Konum (guide ekseni boyunca)', -45, 45, 0.5, 'mm'], ['yaw', 'Yatay açı', -89, 89, 0.5, '°'], ['pitch', 'Dikey açı', -89, 89, 0.5, '°'], ['w', 'Yuva genişliği (testere + tolerans)', 0.6, 2.5, 0.1, 'mm']]
+      : [['u', 'Konum (eksen boyunca)', -45, 45, 0.5, 'mm'], ['v', 'Konum (yanal)', -15, 15, 0.5, 'mm'], ['tiltU', 'Eğim (eksen yönünde)', -89, 89, 1, '°'], ['tiltV', 'Eğim (yanal)', -89, 89, 1, '°'],
          ['d', 'Matkap çapı', 1.2, 4, 0.1, 'mm'], ['D', 'Kovan dış çapı', 3, 8, 0.1, 'mm'], ['sleeveH', 'Kovan yüksekliği', 0, 12, 0.5, 'mm'], ['len', 'Vida boyu', 6, 40, 1, 'mm']];
     box.innerHTML = `<h3 class="sub">${isP ? 'Kesi' : 'Vida'} ${i + 1}</h3>` + fields.map(([k, t, mn, mx, st, unit]) => `<div class="ctl"><div class="ctl-row"><label for="f_${k}">${t}</label><output id="o_${k}">${fmt(o[k], st < 1 ? 1 : 0)} ${unit}</output></div><input type="range" id="f_${k}" min="${mn}" max="${mx}" step="${st}" value="${o[k]}"></div>`).join('') +
       `<p class="hint">${apprText(o)}</p><p class="hint">3B görünümde kesiyi ya da vidayı tutup sürükleyebilir, tutamaçla da taşıyabilirsiniz (W taşı, E döndür).</p>` +
@@ -1294,7 +1294,7 @@
   }
   const clampR = (x, a, b, st) => Math.max(a, Math.min(b, Math.round(x / st) * st));
   function setGuideRot(r) {
-    r = clampR(r, -90, 90, 1); if (r === S.g.rot) return false;
+    r = Math.round(((r + 180) % 360 + 360) % 360 - 180); if (r === -180) r = 180; if (r === S.g.rot) return false;
     S.g.rot = r; unapproveAll(); updateLesionPart();
     if (S.guideOn && S.screws.length) S.screwRefit = true;
     S.refit = true; syncGuideInputs(); schedule(true, true); return true;
@@ -1311,15 +1311,15 @@
       if (gz.mode === 'translate') o.off = clampR(o0.off + d.dot(u), -45, 45, 0.5);
       else {
         const N = gz.start.N0.clone().applyQuaternion(dq);
-        o.yaw = clampR(THREE.MathUtils.radToDeg(Math.atan2(N.dot(v), N.dot(u))), -80, 80, 0.5);
-        o.pitch = clampR(THREE.MathUtils.radToDeg(-Math.asin(Math.max(-1, Math.min(1, N.dot(n))))), -80, 80, 0.5);
+        o.yaw = clampR(THREE.MathUtils.radToDeg(Math.atan2(N.dot(v), N.dot(u))), -89, 89, 0.5);
+        o.pitch = clampR(THREE.MathUtils.radToDeg(-Math.asin(Math.max(-1, Math.min(1, N.dot(n))))), -89, 89, 0.5);
       }
     } else {
       if (gz.mode === 'translate') { o.u = clampR(o0.u + d.dot(u), -45, 45, 0.5); o.v = clampR(o0.v + d.dot(v), -15, 15, 0.5); }
       else {
         const D = gz.start.d0.clone().applyQuaternion(dq), a = Math.asin(Math.max(-1, Math.min(1, -D.dot(u))));
-        o.tiltU = clampR(THREE.MathUtils.radToDeg(a), -60, 60, 1);
-        o.tiltV = clampR(THREE.MathUtils.radToDeg(Math.atan2(D.dot(v), -D.dot(n))), -60, 60, 1);
+        o.tiltU = clampR(THREE.MathUtils.radToDeg(a), -89, 89, 1);
+        o.tiltV = clampR(THREE.MathUtils.radToDeg(Math.atan2(D.dot(v), -D.dot(n))), -89, 89, 1);
       }
     }
     const key = [o.off, o.yaw, o.pitch, o.u, o.v, o.tiltU, o.tiltV].join();
@@ -1367,7 +1367,7 @@
     const { u, v, n } = frameAxes(); if (N.dot(u) < 0) N = N.clone().negate();
     const yaw = THREE.MathUtils.radToDeg(Math.atan2(N.dot(v), N.dot(u))), pitch = THREE.MathUtils.radToDeg(-Math.asin(Math.max(-1, Math.min(1, N.dot(n)))));
     const off = N.dot(c.clone().sub(S.anchor.p)) / (N.dot(u) || 1e-6);
-    o.off = clampR(off, -45, 45, 0.5); o.yaw = clampR(yaw, -80, 80, 0.5); o.pitch = clampR(pitch, -80, 80, 0.5);
+    o.off = clampR(off, -45, 45, 0.5); o.yaw = clampR(yaw, -89, 89, 0.5); o.pitch = clampR(pitch, -89, 89, 0.5);
   }
   renderer.domElement.addEventListener('pointerdown', e => {
     if (e.button !== 0 || S.mode !== 'orbit' || !S.anchor || (gizmo && (gizmo.dragging || gizmo.axis)) || (window.SegEdit && SegEdit.tool()) || (window.Lesion && Lesion.active()) || (window.Masks && Masks.tool())) return;
@@ -1458,7 +1458,7 @@
   }
 
   // ---------- controls wiring ----------
-  const gFields = [['rot', 'Guide ekseni dönüşü', -90, 90, 1, '°'], ['L', 'Uzunluk', 16, 100, 1, 'mm'], ['W', 'Genişlik', 10, 40, 1, 'mm'], ['wrap', 'Sarma derinliği', 2, 20, 0.5, 'mm'], ['wall', 'Duvar kalınlığı', 1.5, 5, 0.1, 'mm'], ['clear', 'Kemik boşluğu', 0, 1, 0.05, 'mm'], ['bridge', 'Köprü genişliği', 2, 10, 0.5, 'mm'], ['flange', 'Yakalama kenarı (kesi ötesinde)', 2, 8, 0.5, 'mm'], ['peri', 'Periost payı (boşluğa eklenir)', 0, 1, 0.05, 'mm']];
+  const gFields = [['rot', 'Guide ekseni dönüşü', -180, 180, 1, '°'], ['L', 'Uzunluk', 16, 100, 1, 'mm'], ['W', 'Genişlik', 10, 40, 1, 'mm'], ['wrap', 'Sarma derinliği', 2, 20, 0.5, 'mm'], ['wall', 'Duvar kalınlığı', 1.5, 5, 0.1, 'mm'], ['clear', 'Kemik boşluğu', 0, 1, 0.05, 'mm'], ['bridge', 'Köprü genişliği', 2, 10, 0.5, 'mm'], ['flange', 'Yakalama kenarı (kesi ötesinde)', 2, 8, 0.5, 'mm'], ['peri', 'Periost payı (boşluğa eklenir)', 0, 1, 0.05, 'mm']];
   $('gCtl').innerHTML = gFields.map(([k, t, mn, mx, st]) => `<div class="ctl" id="gc_${k}"><div class="ctl-row"><label for="g_${k}">${t}</label><output id="go_${k}"></output></div><input type="range" id="g_${k}" min="${mn}" max="${mx}" step="${st}"></div>`).join('');
   function syncGuideInputs() {
     if ($('gRot3')) { $('gRot3').value = S.g.rot; $('gRot3O').textContent = `${fmt(S.g.rot, 0)}°`; $('gRotBox').hidden = !S.guideOn; }
@@ -1731,8 +1731,8 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
       // older versions could save an empty (null) screw when no position reached bone: drop it, re-place the screws
       const rawScrews = (Array.isArray(plan.screws) ? plan.screws : []).slice(0, 16), lostScrew = rawScrews.some(c => !c || typeof c !== 'object');
       S.screws = rawScrews.filter(c => c && typeof c === 'object').map(c => Object.assign(num(c, Object.keys(C0), C0), who(c)));
-      S.planes.forEach(p => { clampTo(p, 'off', -45, 45); clampTo(p, 'yaw', -80, 80); clampTo(p, 'pitch', -80, 80); clampTo(p, 'w', 0.6, 2.5); });
-      S.screws.forEach(c => { clampTo(c, 'u', -45, 45); clampTo(c, 'v', -15, 15); clampTo(c, 'tiltU', -60, 60); clampTo(c, 'tiltV', -60, 60); clampTo(c, 'd', 0.5, 6); clampTo(c, 'D', c.d, 12); clampTo(c, 'sleeveH', 0, 20); clampTo(c, 'len', 2, 40); });
+      S.planes.forEach(p => { clampTo(p, 'off', -45, 45); clampTo(p, 'yaw', -89, 89); clampTo(p, 'pitch', -89, 89); clampTo(p, 'w', 0.6, 2.5); });
+      S.screws.forEach(c => { clampTo(c, 'u', -45, 45); clampTo(c, 'v', -15, 15); clampTo(c, 'tiltU', -89, 89); clampTo(c, 'tiltV', -89, 89); clampTo(c, 'd', 0.5, 6); clampTo(c, 'D', c.d, 12); clampTo(c, 'sleeveH', 0, 20); clampTo(c, 'len', 2, 40); });
       ['from', 'to'].forEach(k => clampTo(S.lesion, k, -45, 45)); clampTo(S.lesion, 'margin', 0, 15);
       if (plan.perSide === 1 || plan.perSide === 2) $('perSide').value = String(plan.perSide);
       // plans from before the explicit 'Guide oluştur' step always had a guide when they had screws
