@@ -1,7 +1,8 @@
-// Design-style preview: ?style=f1|f2|f3 (or the switcher in the corner) loads one of the alternative style sheets on top
+// Design-style preview: ?style=k1|f1|f2|f3 (or the switcher in the corner) loads one of the alternative style sheets on top
 // of the base design; ?font= (or the second switcher) tries another typeface on top of the chosen style. The choice is remembered per browser. Without it the base design is shown unchanged.
 (() => {
-  const STY = { f1: 'Ferah · Deniz', f2: 'Ferah · Gök', f3: 'Ferah · Adaçayı' };
+  const STY = { k1: 'Temiz kart', f1: 'Ferah · Deniz', f2: 'Ferah · Gök', f3: 'Ferah · Adaçayı' };
+  const CSS = { k1: 'kart', f1: 'ferah', f2: 'ferah', f3: 'ferah' };
   let cur = new URLSearchParams(location.search).get('style');
   try { if (!cur) cur = localStorage.getItem('sg.style'); } catch (e) { /* storage blocked */ }
   const FONTS = { inter: 'Inter', roboto: 'Roboto', source: 'Source Sans', geist: 'Geist' };
@@ -10,11 +11,11 @@
   const link = document.createElement('link'); link.rel = 'stylesheet'; document.head.appendChild(link);
   function set(s) {
     cur = STY[s] ? s : '';
-    if (cur) { document.documentElement.dataset.style = cur; link.href = 'styles/ferah.css'; }
+    if (cur) { document.documentElement.dataset.style = cur; link.href = `styles/${CSS[cur]}.css`; }
     else { delete document.documentElement.dataset.style; link.removeAttribute('href'); }
     try { localStorage.setItem('sg.style', cur); } catch (e) { /* storage blocked */ }
     bar.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.s === cur)));
-    fbar.hidden = !cur;
+    fbar.hidden = !cur || CSS[cur] !== 'ferah';
     window.dispatchEvent(new Event('resize'));
   }
   function setFont(f) {
