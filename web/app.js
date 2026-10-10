@@ -318,37 +318,10 @@
     ['guide', 'resected', 'anchor', 'lesion'].forEach(id => setPart(id, null, null));
     clearElementParts();
     await segment(true);
-    await buildSoft(); renderSeries();
+    renderSeries();
     emit('volume', { restoring: S.autoAnchor === false });
     if (S.pendingPlan && S.source && S.pendingPlan.source && S.pendingPlan.source.fp === S.source.fp) { const p = S.pendingPlan; S.pendingPlan = null; await applyPlan(p); }
     S.autoAnchor = true;
-  }
-
-  // soft tissue (skin surface) as a see-through layer: the body above -350 HU on a 2x coarser grid, airway filled
-  async function buildSoft() {
-    setPart('soft', null, null);
-    const r = S.red; if (!r || !r.hu) return;
-    busy(true, 'Yumuşak doku yüzeyi oluşturuluyor…'); await sleep();
-    try { softSurface(r); } finally { busy(false); }
-  }
-  function softSurface(r) {
-    const f = 2, nx = Math.ceil(r.nx / f), ny = Math.ceil(r.ny / f), nz = Math.ceil(r.nz / f), m = new Uint8Array(nx * ny * nz);
-    for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++)
-      m[i + nx * (j + ny * k)] = r.hu[Math.min(r.nx - 1, i * f) + r.nx * (Math.min(r.ny - 1, j * f) + r.ny * Math.min(r.nz - 1, k * f))] > -350 ? 1 : 0;
-    const { labels, comps } = G.components(m, nx, ny, nz, 50);
-    if (!comps.length) return;
-    const top = comps[0].label; for (let v = 0; v < m.length; v++) m[v] = labels[v] === top ? 1 : 0;
-    const ext = G.exterior(m, nx, ny, nz), body = new Uint8Array(m.length);
-    let n = 0; for (let v = 0; v < m.length; v++) if (!ext[v]) { body[v] = 1; n++; }
-    // a volume with no soft tissue (bone only, as in the synthetic samples) has nothing to show here
-    let bone = 0; if (S.mask) for (let v = 0; v < S.mask.length; v++) bone += S.mask[v];
-    if (n * f * f * f < bone * 1.5) return;
-    const net = G.surfaceNets(G.blur(body, nx, ny, nz), nx, ny, nz);
-    const mesh = meshFromNets(net, (x, y, z) => G.worldOf(r, x * f, y * f, z * f), mat(0xe2a48c, { transparent: true, opacity: 1, depthWrite: false }));
-    mesh.renderOrder = 2;
-    setPart('soft', 'Yumuşak doku', mesh, 0xe2a48c);
-    parts.soft.visible = $('softOn').checked; mesh.visible = parts.soft.visible;
-    setOpacity(parts.soft, 0.22);
   }
 
   // ---------- image quality control (thresholds from published guide workflows; clinical team sets the final values) ----------
@@ -1203,6 +1176,7 @@
     mouse.set(((e.clientX - rect.left) / rw) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
     ray.setFromCamera(mouse, camera);
     if (window.SegEdit && SegEdit.tool()) return;
+    if (window.Lesion && Lesion.active()) return;
     if (window.Tools && Tools.click(e, ray)) return;
     if (S.mode === 'orbit') {
       // click a screw or a cut disc to select it (screws first: they sit inside the discs)
@@ -1473,7 +1447,6 @@
   $('expRep').addEventListener('click', () => exportReport());
   $('thr').addEventListener('input', e => { $('thrO').textContent = e.target.value + ' HU'; });
   $('thr').addEventListener('change', () => { unapproveAll(); segment(false); });
-  $('softOn').addEventListener('change', e => { if (parts.soft) { parts.soft.visible = e.target.checked; parts.soft.obj.visible = e.target.checked; renderParts(); render(); } });
   $('serSel').addEventListener('change', e => switchSeries(+e.target.value));
   $('pickAnchor').addEventListener('click', () => { S.autoAfter = false; if (S.red) setMode('anchor'); });
   $('resRemove').addEventListener('click', () => { S.resRemoved = !S.resRemoved; showResected(); syncSeq(); renderParts(); render(); emit('changed'); });

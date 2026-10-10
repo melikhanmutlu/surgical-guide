@@ -62,6 +62,28 @@ window.Lesion = (function () {
     St.setPart('lesionPaint', 'Lezyon (boyanan)', m, COLOR);
   }
 
+  // ---------- 3D: paint on whatever surface is showing (skin, soft tissue or another layer, or bone); Alt orbits ----------
+  const cv = St.renderer.domElement, mouse = new THREE.Vector2();
+  function hit3D(e) {
+    const rect = cv.getBoundingClientRect(), rw = S.split ? rect.width / 2 : rect.width;
+    if (e.clientX - rect.left > rw) return null;
+    mouse.set(((e.clientX - rect.left) / rw) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+    St.ray.setFromCamera(mouse, St.camera);
+    const t = ['bone', 'resected'].filter(k => St.parts[k] && St.parts[k].visible).map(k => St.parts[k].obj).concat(window.Layers ? Layers.targets() : []);
+    const h = St.ray.intersectObjects(t, false)[0];
+    return h ? h.point.clone() : null;
+  }
+  let down3 = false;
+  cv.addEventListener('pointerdown', e => {
+    if (!tool || e.altKey || e.button !== 0) return;
+    const p = hit3D(e); if (!p) return;
+    down3 = true; cv.setPointerCapture(e.pointerId); paint(p.toArray(), null, true);
+  });
+  cv.addEventListener('pointermove', e => { if (!down3) return; const p = hit3D(e); if (p) paint(p.toArray(), null, false); });
+  cv.addEventListener('pointerup', () => { if (!down3) return; down3 = false; strokeEnd(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Alt' && tool) St.controls.enabled = true; });
+  document.addEventListener('keyup', e => { if (e.key === 'Alt' && tool) St.controls.enabled = false; });
+
   // ---------- slices: painted voxels red, brush outline while painting ----------
   (window.SliceOverlays = window.SliceOverlays || []).push((v, ctx, T, dpr, A) => {
     if (!S.red || (!mask && !lastPaint)) return;
@@ -95,9 +117,10 @@ window.Lesion = (function () {
       // on narrower screens give the slices the room: close the review panel while painting
       if (window.innerWidth < 1280 && window.Layout) Layout.setRight(false);
     }
+    St.controls.enabled = !tool;
     document.querySelectorAll('#lsTools [data-t]').forEach(b => b.setAttribute('aria-pressed', b.dataset.t === tool));
     const b = $('modeBadge');
-    if (tool) { b.hidden = false; b.textContent = `Lezyon ${tool === 'erase' ? 'silgisi' : 'fırçası'}: kesitlerde sürükleyin · Esc ile bitir`; }
+    if (tool) { b.hidden = false; b.textContent = `Lezyon ${tool === 'erase' ? 'silgisi' : 'fırçası'}: kesitlerde ya da 3B görünümde sürükleyin · döndürmek için Alt · Esc ile bitir`; }
     else if (/^Lezyon/.test(b.textContent)) b.hidden = true;
   }
   function status() {
@@ -131,7 +154,7 @@ window.Lesion = (function () {
     if (pl.length) planMsg = ` Kesiler ${pl.map(q => `${fmt(q.off, 1)} mm${ang(q)}`).join(' ve ')}.${S.guideOn ? ` ${S.screws.length} vida yerleştirildi.` : ''}${wrapNote}`;
     status();
   }
-  $('lesPaint').innerHTML = `<p class="hint">Fırça kesit görüntülerinde lezyonu kırmızıyla boyar, Silgi boyamayı geri alır. Boyadıktan sonra kesiler lezyonu güvenlik payı kadar dışarıda bırakacak şekilde konur.</p>
+  $('lesPaint').innerHTML = `<p class="hint">Fırça lezyonu kırmızıyla boyar: kesitlerde ya da 3B görünümde görünen yüzeyin (cilt, yumuşak doku, kemik) üstünde. Kemiği Anatomi adımındaki Katmanlar'dan kapatabilirsiniz. Silgi boyamayı geri alır. Boyadıktan sonra kesiler lezyonu güvenlik payı kadar dışarıda bırakacak şekilde konur.</p>
     <span class="seg" id="lsTools" role="group" aria-label="Lezyon aracı">
       <button data-t="paint" aria-pressed="false"><svg class="i"><use href="#i-brush"/></svg>Fırça</button>
       <button data-t="erase" aria-pressed="false"><svg class="i"><use href="#i-eraser"/></svg>Silgi</button>

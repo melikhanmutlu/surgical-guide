@@ -54,7 +54,7 @@ window.Measure = (function () {
   window.Tools = {
     click(e, ray) {
       if (!on) return false;
-      const targets = Object.values(St.parts).filter(pt => pt.visible && pt.obj.isMesh && !/^(plane|lesion|anchor|mirror|guide|soft)/.test(pt.id)).map(pt => pt.obj);
+      const targets = Object.values(St.parts).filter(pt => pt.visible && pt.obj.isMesh && !/^(plane|lesion|anchor|mirror|guide|layer_)/.test(pt.id)).map(pt => pt.obj);
       const g = St.parts.grafts; if (g && g.visible) g.obj.traverse(c => { if (c.isMesh) targets.push(c); });
       const h = ray.intersectObjects(targets, false)[0];
       if (!h) return true;
