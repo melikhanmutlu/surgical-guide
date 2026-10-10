@@ -1,6 +1,7 @@
 // English interface strings for i18n.js. Keys are the Turkish texts with every number replaced by "#".
 window.I18N_EN = {
 "Arka": "Back",
+"Görüntü bilgisi": "Image info",
 "3B": "3D",
 "%#": "#%",
 "3B görünüm": "3D view",
