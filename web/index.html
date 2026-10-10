@@ -466,6 +466,7 @@ details.sec[open] > summary { margin: 0 -10px; border: 0; border-bottom: 1px sol
 .btns.end { justify-content: flex-end; }
 button.ghost { color: var(--accent); }
 button.ghost.danger { color: var(--crit); }
+#chkQc:has(#qc:empty) { display: none; }
 :is(#apprMsg, #auMsg, #expMsg, #fibMirrorMsg, #fibPickMsg, #fibStatus, #guideStat, #imMsg, #lesStatus, #lsStat, #mkStat, #plMsg, #seStat, #verMsg, #xMsg) { color: var(--fg); background: var(--sunken); border-radius: var(--r); padding: 6px 10px; }
 :is(#apprMsg, #auMsg, #expMsg, #fibMirrorMsg, #fibPickMsg, #fibStatus, #guideStat, #imMsg, #lesStatus, #lsStat, #mkStat, #oneMsg, #prodMsg, #plMsg, #seStat, #verMsg, #xMsg):empty { display: none; }
 </style>
@@ -545,7 +546,6 @@ button.ghost.danger { color: var(--crit); }
           <dl class="kv" id="caseInfo"></dl>
           <div class="ctl" id="serBox" hidden><label for="serSel" class="lbl2">Seri seç</label><select id="serSel"></select><p class="hint more" data-for="serSel">Bu yüklemede birden fazla seri var. Guide için ince kesitli (≤ 1 mm) kemik serisini seçin.</p></div>
           <dl class="kv" id="dateInfo"></dl>
-          <ul class="checks" id="qc" aria-label="Görüntü kalite kontrolü"></ul>
           <h3 class="sub">Fibula (bacak) BT'si</h3>
           <div class="btns">
             <label class="filebtn"><svg class="i"><use href="#i-folder"/></svg>DICOM klasörü<input type="file" id="fibDicom" webkitdirectory multiple></label>
@@ -779,6 +779,7 @@ button.ghost.danger { color: var(--crit); }
       <div class="pane" id="pChk" role="tabpanel" aria-labelledby="tab-pChk" hidden>
         <div class="chk-sum" id="chkSum" hidden></div>
         <ul class="checks" id="checks"></ul>
+        <details class="sec" id="chkQc" open><summary>Görüntü kalitesi</summary><ul class="checks" id="qc" aria-label="Görüntü kalite kontrolü"></ul></details>
         <details class="sec" id="chkInfo" hidden><summary>Bilgi notları<span class="aux" id="chkInfoN"></span></summary><ul class="checks" id="checksInfo"></ul></details>
         <p class="hint more">Eşikler örnek değerlerdir; klinik ekip belirler. Bir satıra tıklayınca ilgili öğe açılır.</p>
       </div>
