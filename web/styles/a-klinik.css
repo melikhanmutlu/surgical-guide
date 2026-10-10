@@ -1,0 +1,49 @@
+/* Stil A · Klinik ferah: soft white cards on a cool grey canvas, rounded corners, generous spacing, teal accent. */
+@import url("https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap");
+:root:root[data-style="a"] {
+  --font-body: "Plus Jakarta Sans", system-ui, sans-serif; --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --bg: #eef2f5; --panel: #ffffff; --sunken: #f5f8fa; --fg: #102027; --muted: #546a75; --faint: #6c808a; --control: #9fb0b9;
+  --line: #e3e9ed; --line-strong: #cdd7dd; --hover: #eef4f6; --stage: #dfe6ea;
+  --accent: #0f7b78; --accent-hover: #0b6663; --accent-ink: #fff; --accent-soft: #e0f2f1; --accent-line: #a9d8d5;
+  --r: 9px;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"])[data-style="a"] {
+  --bg: #0e1518; --panel: #151e22; --sunken: #121a1d; --fg: #e4ecef; --muted: #9db0b8; --faint: #7f939b; --control: #4d5f66;
+  --line: #223035; --line-strong: #2f3f45; --hover: #1b262a; --stage: #0a1013;
+  --accent: #4fc1bc; --accent-hover: #6fd0cc; --accent-ink: #062523; --accent-soft: #123432; --accent-line: #1f5a57; } }
+:root:root[data-style="a"][data-theme="dark"] {
+  --bg: #0e1518; --panel: #151e22; --sunken: #121a1d; --fg: #e4ecef; --muted: #9db0b8; --faint: #7f939b; --control: #4d5f66;
+  --line: #223035; --line-strong: #2f3f45; --hover: #1b262a; --stage: #0a1013;
+  --accent: #4fc1bc; --accent-hover: #6fd0cc; --accent-ink: #062523; --accent-soft: #123432; --accent-line: #1f5a57; }
+html[data-style="a"] body { font-size: 14px; }
+/* floating panels: the side columns become cards with air around them */
+html[data-style="a"] .work { gap: 10px; padding: 10px; background: var(--bg); }
+html[data-style="a"] .side { border-radius: 14px; border: 1px solid var(--line) !important; box-shadow: 0 1px 2px rgba(16,32,39,.04), 0 8px 24px rgba(16,32,39,.05); }
+html[data-style="a"] .stagewrap { border-radius: 14px; overflow: hidden; }
+html[data-style="a"] .top { height: 54px; padding: 0 16px; border-bottom: 0; background: var(--bg); }
+html[data-style="a"] .brand { font-size: 15.5px; font-weight: 700; }
+html[data-style="a"] .brand small { font-weight: 700; color: #fff; background: var(--accent); padding: 3px 9px; border-radius: 7px; border: 0; }
+html[data-style="a"] .pill { padding: 5px 12px 5px 9px; background: var(--panel); border-color: var(--line-strong); }
+/* steps: each step is its own card */
+html[data-style="a"] .progress { padding: 14px 16px; }
+html[data-style="a"] .step { border: 0; margin: 8px 10px; border-radius: 12px; background: var(--panel); box-shadow: inset 0 0 0 1px var(--line); }
+html[data-style="a"] .step[open] { box-shadow: inset 0 0 0 1.5px var(--accent-line); }
+html[data-style="a"] .step > summary { padding: 13px 14px; border-radius: 12px; font-weight: 600; }
+html[data-style="a"] .step[open] > summary { background: transparent; }
+html[data-style="a"] .step > summary .n { width: 24px; height: 24px; font-weight: 600; }
+html[data-style="a"] .step[open] > summary .n { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+html[data-style="a"] .body { padding: 2px 14px 16px 14px; gap: 12px; }
+html[data-style="a"] .body h3.sub, html[data-style="a"] .pane h3.sub { letter-spacing: .02em; text-transform: none; font-size: 13px; font-weight: 700; color: var(--fg); border-top-style: dashed; }
+html[data-style="a"] details.sec > summary { text-transform: none; letter-spacing: .01em; font-size: 13px; font-weight: 700; border-radius: 10px; min-height: 40px; }
+html[data-style="a"] details.sec[open] { border-radius: 10px; }
+html[data-style="a"] button:not(.info), html[data-style="a"] select, html[data-style="a"] .filebtn, html[data-style="a"] input[type=text], html[data-style="a"] input[type=number], html[data-style="a"] input[type=date] { height: 34px; border-radius: 9px; }
+html[data-style="a"] button.primary { box-shadow: 0 2px 6px color-mix(in srgb, var(--accent) 35%, transparent); font-weight: 600; }
+html[data-style="a"] .seg { border-radius: 10px; padding: 3px; }
+html[data-style="a"] .seg button { border-radius: 7px; height: 28px; }
+html[data-style="a"] .el { height: 28px; }
+html[data-style="a"] .seq > li { border-radius: 12px; background: var(--sunken); border-color: transparent; }
+html[data-style="a"] .tabs { padding: 6px 8px 0; gap: 2px; border-bottom: 0; }
+html[data-style="a"] .tab { border-radius: 9px 9px 0 0; padding: 9px 10px; border-bottom: 0; }
+html[data-style="a"] .tab[aria-selected="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+html[data-style="a"] .hud { border-radius: 14px; padding: 8px 10px; }
+html[data-style="a"] .checks li { border-radius: 8px; margin-bottom: 6px; border-bottom: 0; background: var(--sunken); }
