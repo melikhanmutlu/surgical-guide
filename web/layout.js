@@ -61,7 +61,7 @@
   function openTab(id, show) {
     if (!$(id)) return;
     [...document.querySelectorAll('.tab')].forEach(t => { const on = t.dataset.tab === id; t.setAttribute('aria-selected', on); t.tabIndex = on ? 0 : -1; $(t.dataset.tab).hidden = !on; });
-    store.set('gs.tab', id);
+    store.set('gs.tab2', id);
     if (show && !right) setRight(true);
   }
   document.querySelectorAll('.tab').forEach(t => {
@@ -72,6 +72,6 @@
       if (j < 0) return; e.preventDefault(); openTab(list[j].dataset.tab); list[j].focus(); list[j].scrollIntoView({ block: 'nearest', inline: 'nearest' });
     });
   });
-  const savedTab = store.get('gs.tab'); openTab(savedTab && $(savedTab) && !document.querySelector(`.tab[data-tab="${savedTab}"]`).hidden ? savedTab : 'pChk');
+  const savedTab = store.get('gs.tab2'); openTab(savedTab && $(savedTab) && !document.querySelector(`.tab[data-tab="${savedTab}"]`).hidden ? savedTab : 'pPrt');
   window.Layout = { openTab, setLeft, setRight };
 })();

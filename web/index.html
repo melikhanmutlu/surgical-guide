@@ -769,20 +769,20 @@ button.ghost.danger { color: var(--crit); }
 
     <aside class="side right" id="rightPanel" aria-label="İnceleme">
       <div class="tabs" role="tablist" aria-label="İnceleme sekmeleri">
-        <button class="tab" role="tab" id="tab-pChk" data-tab="pChk" aria-controls="pChk" aria-selected="true">Kontroller<span class="cnt" id="critCnt" hidden></span></button>
-        <button class="tab" role="tab" id="tab-pMes" data-tab="pMes" aria-controls="pMes" aria-selected="false">Ölçümler</button>
-        <button class="tab" role="tab" id="tab-pPrt" data-tab="pPrt" aria-controls="pPrt" aria-selected="false">Görünüm</button>
+        <button class="tab" role="tab" id="tab-pPrt" data-tab="pPrt" aria-controls="pPrt" aria-selected="true">Katmanlar</button>
         <button class="tab" role="tab" id="tab-pVer" data-tab="pVer" aria-controls="pVer" aria-selected="false">Geçmiş</button>
+        <button class="tab" role="tab" id="tab-pMes" data-tab="pMes" aria-controls="pMes" aria-selected="false">Ölçümler</button>
+        <button class="tab" role="tab" id="tab-pChk" data-tab="pChk" aria-controls="pChk" aria-selected="false">Kontroller<span class="cnt" id="critCnt" hidden></span></button>
         <button class="tab dev" role="tab" id="tab-pJsn" data-tab="pJsn" aria-controls="pJsn" aria-selected="false" hidden>Plan</button>
       </div>
-      <div class="pane" id="pChk" role="tabpanel" aria-labelledby="tab-pChk">
+      <div class="pane" id="pChk" role="tabpanel" aria-labelledby="tab-pChk" hidden>
         <div class="chk-sum" id="chkSum" hidden></div>
         <ul class="checks" id="checks"></ul>
         <details class="sec" id="chkInfo" hidden><summary>Bilgi notları<span class="aux" id="chkInfoN"></span></summary><ul class="checks" id="checksInfo"></ul></details>
         <p class="hint more">Eşikler örnek değerlerdir; klinik ekip belirler. Bir satıra tıklayınca ilgili öğe açılır.</p>
       </div>
       <div class="pane" id="pMes" role="tabpanel" aria-labelledby="tab-pMes" hidden><div id="userMeasures" class="col"></div><div id="measures" class="col" style="gap:10px"></div></div>
-      <div class="pane" id="pPrt" role="tabpanel" aria-labelledby="tab-pPrt" hidden>
+      <div class="pane" id="pPrt" role="tabpanel" aria-labelledby="tab-pPrt">
         <div class="ctl"><span class="lbl2">Göster</span><span class="seg full" role="group" aria-label="Görünürlük"><button id="showAll">Tümü</button><button id="guideOnly">Yalnız guide</button></span></div>
         <div class="ctl"><div class="ctl-row"><label for="explode">Parçaları ayır</label><output id="explodeO">0 mm</output></div><input type="range" id="explode" min="0" max="40" step="1" value="0"></div>
         <ul class="parts" id="parts"></ul>
