@@ -534,13 +534,6 @@ button.ghost.danger { color: var(--crit); }
       <details class="step" id="st1" name="flow" open>
         <summary><span class="n">1</span>Vaka ve görüntüler<span class="tick" role="img" aria-label="Tamamlandı"></span><span class="tag" id="tag1"></span><svg class="chev"><use href="#i-chev"/></svg></summary>
         <div class="body">
-          <h3 class="sub">Vaka</h3>
-          <div class="ctl"><label for="caseName" class="lbl2">Vaka adı</label><input id="caseName" type="text" placeholder="Kısa ad" autocomplete="off"></div>
-          <div class="ctl"><label for="surgDate" class="lbl2">Ameliyat tarihi</label><input id="surgDate" type="date"></div>
-          <details class="sub-d" id="secCases"><summary>Kayıtlı vakalar</summary>
-            <div class="btns"><button id="caseNew"><svg class="i"><use href="#i-plus"/></svg>Yeni vaka</button><button id="caseRefresh" class="ghost">Listeyi yenile</button></div>
-            <ul class="appr" id="caseList" aria-label="Kayıtlı vakalar"></ul>
-          </details>
           <h3 class="sub">Mandibula BT'si</h3>
           <p class="hint more">Dosyalar tarayıcıdan çıkmaz; mandibula serisini modele sürükleyip bırakabilirsiniz. Klasör, dosyalar ya da .zip seçebilirsiniz. Sıkıştırılmamış, RLE, JPEG, JPEG-LS ve JPEG 2000 BT okunur. <button class="link" id="sampleL">Bacak örneğini mandibula yerine aç</button></p>
           <div class="btns">
@@ -559,6 +552,13 @@ button.ghost.danger { color: var(--crit); }
             <button id="fibSample" class="ghost"><svg class="i"><use href="#i-flask"/></svg>Örnek veri</button>
           </div>
           <p class="hint" id="fibMsg" hidden></p>
+          <h3 class="sub">Vaka</h3>
+          <div class="ctl"><label for="caseName" class="lbl2">Vaka adı</label><input id="caseName" type="text" placeholder="Kısa ad" autocomplete="off"></div>
+          <div class="ctl"><label for="surgDate" class="lbl2">Ameliyat tarihi</label><input id="surgDate" type="date"></div>
+          <details class="sub-d" id="secCases"><summary>Kayıtlı vakalar</summary>
+            <div class="btns"><button id="caseNew"><svg class="i"><use href="#i-plus"/></svg>Yeni vaka</button><button id="caseRefresh" class="ghost">Listeyi yenile</button></div>
+            <ul class="appr" id="caseList" aria-label="Kayıtlı vakalar"></ul>
+          </details>
           <div class="stepwarn" data-for="data"></div>
           <div class="nav"><button class="primary next" data-next="st2">Anatomi<svg class="i"><use href="#i-next"/></svg></button></div>
         </div>
