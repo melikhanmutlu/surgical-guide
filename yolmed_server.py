@@ -283,6 +283,17 @@ def build_guide(req):
             raise HttpError(400, "wrap_profile values out of range")
         prof[:, 1] = np.minimum(prof[:, 1], -wrap)
     deep = float(-prof[:, 1].min()) if prof is not None and len(prof) else wrap
+    # optional stops past the +v / -v guide edge: [length beyond the edge, extra depth]
+    stops = req.get("stops") or {}
+    stop = {}
+    for key in ("pos", "neg"):
+        st = stops.get(key)
+        if st:
+            sl_, sd_ = float(st[0]), float(st[1])
+            _check_ranges({"stop length": (sl_, 0, 30), "stop depth": (sd_, 0, 30)})
+            stop[key] = (sl_, sd_)
+    ext_pos, ext_neg = stop.get("pos", (0, 0))[0], stop.get("neg", (0, 0))[0]
+    dstop = max([sd_ for _, sd_ in stop.values()] or [0.0])
 
     # guide frame (orthonormalised; keep the given v direction so `side` keeps its meaning)
     p = np.asarray(fr["p"], float)
@@ -310,8 +321,8 @@ def build_guide(req):
     if not inside.any():
         raise HttpError(422, "no bone inside the guide footprint")
     top = bone_f[inside, 2].max() + bridge_hi + 1.0
-    lo = np.array([-L / 2, -W / 2, -deep]) - 2 * r
-    hi = np.array([L / 2, W / 2, top]) + 2 * r
+    lo = np.array([-L / 2, -W / 2 - ext_neg, -deep - dstop]) - 2 * r
+    hi = np.array([L / 2, W / 2 + ext_pos, top]) + 2 * r
     screws = req.get("screws") or []
     for s in screws:
         dirn = _unit(s["dir"])
@@ -353,7 +364,23 @@ def build_guide(req):
     sl = tuple(slice(a, b) for a, b in zip(i0, i1))
 
     f_shell = np.maximum(clear - d, d - cw)              # < 0 inside the shell band
-    shell = _mc_manifold(m3d, f_shell, glo, r, sl)
+    if not stop:
+        shell = _mc_manifold(m3d, f_shell, glo, r, sl)
+    else:
+        # stops use the shell band outside the bone's "shadow" (bone above along the seating normal): a stop rests
+        # on the bone edge and never reaches under its bulge, so it adds no undercut (one marching-cubes surface for
+        # shell and stops, so no two surfaces coincide)
+        above = np.flip(np.logical_or.accumulate(np.flip(bone, axis=2), axis=2), axis=2)
+        shadow = np.zeros(bone.shape, np.float32); shadow[:, :, :-1] = above[:, :, 1:]
+        vv_ = glo[1] + r * np.arange(shape[1])
+        band = np.zeros(shape[1], bool)
+        if "pos" in stop:
+            band |= vv_ > W / 2 - 2
+        if "neg" in stop:
+            band |= vv_ < -W / 2 + 2
+        shadow[:, ~band, :] = 0
+        shell = _mc_manifold(m3d, np.maximum(f_shell, ndi.gaussian_filter(shadow, 0.6) - 0.5), glo, r, sl)
+        del above, shadow
     del f_shell
     f_bridge = np.maximum(bridge_lo - d, d - bridge_hi)
     bridge_band = _mc_manifold(m3d, f_bridge, glo, r, sl)
@@ -364,15 +391,26 @@ def build_guide(req):
     BIG = float(np.linalg.norm(ghi - glo)) * 2 + 50
     zhi = hi[2] + 10
     # every limit in uu / vv / nn is applied by ONE final box intersection, so no coplanar faces meet
-    if prof is not None and len(prof):
-        # profile in (uu, nn), extruded across the guide width: z -> -vv after the rotation, then centred
-        uu = np.clip(prof[:, 0], -L / 2, L / 2)
-        pts = [(-L / 2, zhi), (-L / 2, float(np.interp(-L / 2, prof[:, 0], prof[:, 1])))]
-        pts += [(float(a), float(b)) for a, b in zip(uu, prof[:, 1]) if -L / 2 < a < L / 2]
-        pts += [(L / 2, float(np.interp(L / 2, prof[:, 0], prof[:, 1]))), (L / 2, zhi)]
-        box = m3d.Manifold.extrude(m3d.CrossSection([pts] if _ccw(pts) else [pts[::-1]]), W).rotate((90, 0, 0)).translate((0, W / 2, 0))
-    else:
-        box = m3d.Manifold.cube((L, W, zhi + wrap)).translate((-L / 2, -W / 2, -wrap))
+    def make_box(v_lo, v_hi, shift):
+        if prof is not None and len(prof):
+            # profile in (uu, nn), extruded across [v_lo, v_hi]: z -> -vv after the rotation, then shifted
+            uu = np.clip(prof[:, 0], -L / 2, L / 2)
+            pz = prof[:, 1] - shift
+            pts = [(-L / 2, zhi), (-L / 2, float(np.interp(-L / 2, prof[:, 0], pz)))]
+            pts += [(float(a), float(b)) for a, b in zip(uu, pz) if -L / 2 < a < L / 2]
+            pts += [(L / 2, float(np.interp(L / 2, prof[:, 0], pz))), (L / 2, zhi)]
+            return m3d.Manifold.extrude(m3d.CrossSection([pts] if _ccw(pts) else [pts[::-1]]), v_hi - v_lo).rotate((90, 0, 0)).translate((0, v_hi, 0))
+        return m3d.Manifold.cube((L, v_hi - v_lo, zhi + wrap + shift)).translate((-L / 2, v_lo, -wrap - shift))
+
+    box = make_box(-W / 2, W / 2, 0.0)
+    # stops: the shell continues past the edge and deeper, but only where no bone lies above it along the seating
+    # normal (the bone's "shadow"), so a stop rests on the bone edge without creating an undercut
+    stop_box = None
+    if "pos" in stop:
+        stop_box = make_box(W / 2 - 2, W / 2 + stop["pos"][0], stop["pos"][1])
+    if "neg" in stop:
+        nb_ = make_box(-W / 2 - stop["neg"][0], -W / 2 + 2, stop["neg"][1])
+        stop_box = nb_ if stop_box is None else stop_box + nb_
     v0 = W / 2 - bridge if side > 0 else -W / 2 - BIG
     vslab = m3d.Manifold.cube((BIG, bridge + BIG, BIG)).translate((-BIG / 2, v0, -BIG / 2))
 
@@ -385,7 +423,7 @@ def build_guide(req):
         slabs.append(slab)
     if slabs:
         shell = shell - m3d.Manifold.batch_boolean(slabs, m3d.OpType.Add)
-    body = (shell + (bridge_band ^ vslab)) ^ box
+    body = (shell + (bridge_band ^ vslab)) ^ (box if stop_box is None else box + stop_box)
 
     parts = [body]
     holes = []

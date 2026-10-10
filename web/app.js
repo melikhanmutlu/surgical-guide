@@ -122,7 +122,7 @@
   const S = {
     vol: null, red: null, labels: null, comps: [], selected: new Set(), mask: null,
     anchor: null,             // {p:Vector3, n:Vector3, axis:Vector3}
-    g: { rot: 0, L: 36, W: 22, wrap: 6, wall: 2.5, clear: 0.3, bridge: 4, side: 1, split: 0, flange: 3, peri: 0, fit: 0 },
+    g: { rot: 0, L: 36, W: 22, wrap: 6, wall: 2.5, clear: 0.3, bridge: 4, side: 1, split: 0, flange: 3, peri: 0, fit: 0, stopT: 0, stopB: 0, stopL: 6, stopD: 5 },
     planes: [], screws: [], sel: null, explode: 0, mode: 'orbit', result: null,
     guideOn: false,           // the guide is built only after 'Guide oluştur', never on its own
     resRemoved: false,        // 'Rezeksiyon bölgesini sil': the resected piece is hidden
@@ -773,11 +773,18 @@
 
   // ---------- guide generation (voxel CSG on a grid aligned with the guide frame) ----------
   // generic voxel guide builder: ctx = { P, u, v, n, g, pls:[{p,N,w}], scs:[{sc,dir,entry}], bone(q) -> bool }
+  // which guide edge (+v or −v) is the upper one (patient superior, +z in LPS); the stop flags map onto them
+  function stopSides(g, v) {
+    const upPos = v.z >= 0;
+    return { pos: !!(upPos ? g.stopT : g.stopB), neg: !!(upPos ? g.stopB : g.stopT) };
+  }
   async function buildGuide(ctx) {
     const t0 = performance.now();
     const { g, P, u, v, n, pls, scs } = ctx, boneAt = ctx.bone, h = ctx.h || 0.4, T = {};
     const maxSleeve = Math.max(0, ...scs.map(s => s.sc.sleeveH));
-    const lo = [-g.L / 2 - 4, -g.W / 2 - 4, -Math.max(g.wrap + 10, 30) - Math.max(0, g.L / 2 - 15) * 0.6], hi = [g.L / 2 + 4, g.W / 2 + 4, g.clear + g.wall + Math.max(maxSleeve, g.bridge) + 6];
+    // optional stops: lips past the upper / lower guide edge that reach around the bone edge (crest, lower border)
+    const sUp = stopSides(g, v), stopX = g.stopT || g.stopB ? (g.stopL || 6) : 0, stopZ = g.stopT || g.stopB ? (g.stopD || 5) : 0;
+    const lo = [-g.L / 2 - 4, -g.W / 2 - 4 - stopX, -Math.max(g.wrap + 10, 30) - Math.max(0, g.L / 2 - 15) * 0.6], hi = [g.L / 2 + 4, g.W / 2 + 4 + stopX, g.clear + g.wall + Math.max(maxSleeve, g.bridge) + 6];
     const nx = Math.ceil((hi[0] - lo[0]) / h) + 1, ny = Math.ceil((hi[1] - lo[1]) / h) + 1, nz = Math.ceil((hi[2] - lo[2]) / h) + 1, N = nx * ny * nz;
     const world = (a, b, c) => P.clone().add(u.clone().multiplyScalar(lo[0] + a * h)).add(v.clone().multiplyScalar(lo[1] + b * h)).add(n.clone().multiplyScalar(lo[2] + c * h));
     const toWorld = (a, b, c) => { const q = world(a, b, c); return [q.x, q.y, q.z]; };
@@ -807,7 +814,14 @@
       const id = i + nx * (j + ny * k), d = D[id] * h;
       if (!O[id]) continue;
       const uu = lo[0] + i * h, vv = lo[1] + j * h, nn = lo[2] + k * h;
-      if (Math.abs(uu) > g.L / 2 || Math.abs(vv) > g.W / 2 || nn < wrapAt[i]) continue;
+      // a stop side: the shell continues past the edge by stopL and deeper by stopD
+      // (only where no bone lies above in the seating direction, so a stop rests on the bone edge without an undercut)
+      const sd = vv > 0 ? sUp.pos : sUp.neg;
+      if (Math.abs(uu) > g.L / 2) continue;
+      const band = sd && Math.abs(vv) > g.W / 2 - 2, shadow = colTopBone[i + nx * j] > nn;
+      const inBox = Math.abs(vv) <= g.W / 2 && nn >= wrapAt[i] && !(band && shadow);
+      const inStop = band && Math.abs(vv) <= g.W / 2 + stopX && nn >= wrapAt[i] - stopZ && !shadow;
+      if (!inBox && !inStop) continue;
       const inShell = d > c && d <= c + w;
       const edge = g.side > 0 ? vv >= g.W / 2 - g.bridge : vv <= -g.W / 2 + g.bridge;
       const inBridge = edge && d > c + w - 0.5 && d <= c + w + 2.5;
@@ -1450,6 +1464,8 @@
     if ($('gRot3')) { $('gRot3').value = S.g.rot; $('gRot3O').textContent = `${fmt(S.g.rot, 0)}°`; $('gRotBox').hidden = !S.guideOn; }
     gFields.forEach(([k, , , , st, unit]) => { $('g_' + k).value = S.g[k]; $('go_' + k).textContent = `${fmt(S.g[k], st < 1 ? (st < 0.1 ? 2 : 1) : 0)} ${unit}`; });
     $('g_side').value = String(S.g.side); $('g_split').value = String(S.g.split ? 1 : 0);
+    $('g_stopT').checked = !!S.g.stopT; $('g_stopB').checked = !!S.g.stopB; $('stopBox').hidden = !(S.g.stopT || S.g.stopB);
+    ['stopL', 'stopD'].forEach(k => { $('g_' + k).value = S.g[k]; $('go_' + k).textContent = `${fmt(S.g[k], 1)} mm`; });
     $('gc_flange').hidden = !S.g.split; $('gc_bridge').hidden = !!S.g.split; $('g_side').closest('.ctl').hidden = !!S.g.split;
   }
   // the screws stay on the guide: a turned guide axis re-places them once the value rests, a shorter or narrower
@@ -1471,6 +1487,8 @@
   }));
   $('g_side').addEventListener('change', e => { S.g.side = +e.target.value; schedule(false); });
   $('gRot3').addEventListener('input', e => setGuideRot(+e.target.value));
+  ['stopT', 'stopB'].forEach(k => $('g_' + k).addEventListener('change', e => { S.g[k] = e.target.checked ? 1 : 0; syncGuideInputs(); unapproveAll(); schedule(false); }));
+  [['stopL', 'mm'], ['stopD', 'mm']].forEach(([k, un]) => $('g_' + k).addEventListener('input', e => { S.g[k] = +e.target.value; $('go_' + k).textContent = `${fmt(S.g[k], 1)} ${un}`; schedule(false, true); }));
   $('g_split').addEventListener('change', e => { S.g.split = +e.target.value; syncGuideInputs(); unapproveAll(); schedule(false); });
   $('resType').addEventListener('change', async e => {
     const side = e.target.value || null;
@@ -1589,7 +1607,8 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   function guideRequest(c) {
     const { vol, g } = c, arr = q => [q.x, q.y, q.z];
     const top = g.clear + g.wall + Math.max(g.bridge, 0, ...c.scs.map(s => s.sc.sleeveH)) + 6;
-    const deep = Math.max(g.wrap + 4, ...(c.wrapProfile || []).map(q => 4 - q[1])), R = Math.hypot(g.L / 2 + 4, g.W / 2 + 4, Math.max(deep, top)) + 6, ic = G.indexOf(vol, arr(c.P)), dims = [vol.nx, vol.ny, vol.nz];
+    const ss = stopSides(g, c.v), sx = ss.pos || ss.neg ? (g.stopL || 6) : 0, sz = ss.pos || ss.neg ? (g.stopD || 5) : 0;
+    const deep = Math.max(g.wrap + 4, ...(c.wrapProfile || []).map(q => 4 - q[1])) + sz, R = Math.hypot(g.L / 2 + 4, g.W / 2 + 4 + sx, Math.max(deep, top)) + 6, ic = G.indexOf(vol, arr(c.P)), dims = [vol.nx, vol.ny, vol.nz];
     const lo = [0, 1, 2].map(a => Math.max(0, Math.floor(ic[a] - R / vol.sp[a]))), hi = [0, 1, 2].map(a => Math.min(dims[a] - 1, Math.ceil(ic[a] + R / vol.sp[a])));
     const [nx, ny, nz] = [0, 1, 2].map(a => hi[a] - lo[a] + 1);
     if (nx < 2 || ny < 2 || nz < 2) throw new Error('Guide bölgesi hacmin dışında.');
@@ -1607,6 +1626,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
       gap: (gp => gp && { A: { p: arr(gp.A.p), N: arr(gp.A.N), w: gp.A.w }, B: { p: arr(gp.B.p), N: arr(gp.B.N), w: gp.B.w }, flange: c.g.flange })(splitGap(c.g, c.pls)),
       screws: c.scs.filter(s => s.entry).map(s => ({ entry: arr(s.entry), dir: arr(s.dir), d: s.sc.d + (c.g.fit || 0), D: s.sc.D, sleeveH: s.sc.sleeveH })),
       wrap_profile: c.wrapProfile || null,
+      stops: ss.pos || ss.neg ? { pos: ss.pos ? [g.stopL || 6, g.stopD || 5] : null, neg: ss.neg ? [g.stopL || 6, g.stopD || 5] : null } : null,
     };
   }
   async function serverGuide(c, outer) {
@@ -1697,12 +1717,13 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
         ? { p: an.p, n: an.n.normalize(), axis: an.axis.normalize() } : null;
       const num = (o, keys, d) => { const r = {}; keys.forEach(k => { const v = Number(o && o[k]); r[k] = Number.isFinite(v) ? v : d[k]; }); return r; };
       const who = o => ({ ok: !!(o && o.ok), ...(o && o.ok && typeof o.by === 'string' ? { by: o.by.slice(0, 120) } : {}), ...(o && o.ok && typeof o.at === 'string' ? { at: o.at.slice(0, 40) } : {}) });
-      const G0 = { rot: 0, L: 36, W: 22, wrap: 6, wall: 2.5, clear: 0.3, bridge: 4, side: 1, split: 0, flange: 3, peri: 0, fit: 0 };
+      const G0 = { rot: 0, L: 36, W: 22, wrap: 6, wall: 2.5, clear: 0.3, bridge: 4, side: 1, split: 0, flange: 3, peri: 0, fit: 0, stopT: 0, stopB: 0, stopL: 6, stopD: 5 };
       Object.assign(S.g, num(plan.g, Object.keys(G0), G0));
       // keep every value inside the range its control allows (a hand-edited or damaged plan cannot hang the app)
       const clampTo = (o, k, a, b) => { o[k] = Math.max(a, Math.min(b, o[k])); };
       gFields.forEach(([k, , a, b]) => clampTo(S.g, k, a, b));
       S.g.side = S.g.side < 0 ? -1 : 1; S.g.split = S.g.split ? 1 : 0; clampTo(S.g, 'fit', -0.5, 0.5);
+      S.g.stopT = S.g.stopT ? 1 : 0; S.g.stopB = S.g.stopB ? 1 : 0; clampTo(S.g, 'stopL', 2, 15); clampTo(S.g, 'stopD', 1, 15);
       const L0 = { from: -6, to: 6, margin: 3 }, pl = plan.lesion || {};
       S.lesion = Object.assign(num(pl, ['from', 'to', 'margin'], L0), who(pl), { condyle: pl.condyle === 'R' || pl.condyle === 'L' ? pl.condyle : null });
       const P0 = { off: 0, yaw: 0, pitch: 0, w: 1.2 }, C0 = Object.assign({ u: 0, v: 0, tiltU: 0, tiltV: 0 }, SCREW_DEFAULT.mandible);

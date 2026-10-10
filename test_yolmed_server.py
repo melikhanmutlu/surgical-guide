@@ -193,6 +193,18 @@ def main():
         assert bool(deep_end) and not bool(shallow_end), (deep_end, shallow_end)
         st, r = J(call(base, "POST", "/guide", dict(req, wrap_profile=[[0, -4], [0, -5]]))); assert st == 400, r
         print("wrap profile OK")
+        # optional stop past the +v edge: the shell reaches around the bone edge there, not on the other side
+        req4 = dict(req, stops={"pos": [4, 10], "neg": None})
+        st, r4 = J(call(base, "POST", "/guide", req4))
+        assert st == 200 and r4["watertight"] is True and r4["bodies"] == 1, (st, r4.get("bodies"), r4.get("error"))
+        tm4 = trimesh.load(io.BytesIO(base64.b64decode(r4["stl_b64"])), file_type="stl")
+        pos_lip, neg_lip = contains(tm4, np.array([[0, 9.8, 1.0], [0, -9.8, 1.0]], float))
+        plain = contains(tm, np.array([[0, 9.8, 1.0]], float))[0]
+        assert bool(pos_lip) and not bool(neg_lip) and not bool(plain), (pos_lip, neg_lip, plain)
+        # never under the bone's bulge (no undercut): this shell point has bone above it along the seating normal
+        assert not bool(contains(tm4, np.array([[0, 7.5, -4.5]], float))[0])
+        st, r = J(call(base, "POST", "/guide", dict(req, stops={"pos": [40, 6]}))); assert st == 400, r
+        print("stops OK")
         st, r = J(call(base, "POST", "/guide", {"crop": crop})); assert st == 400 and "error" in r
     finally:
         srv.shutdown(); srv.server_close()
