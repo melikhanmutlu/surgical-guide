@@ -1,10 +1,10 @@
 <!doctype html>
-<html lang="tr">
+<html lang="tr" data-style="k1">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Yolmed Guide Stüdyosu</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
 /* Clinical workspace. One accent (petrol blue), cool neutrals, status shown by small dots and rules rather than filled boxes.
    Light and dark themes share every token; the 3D stage and slice views stay darker than the panels, as in reading-room software. */
@@ -229,7 +229,9 @@ button.link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2p
 .progress { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); font-size: 12.5px; color: var(--muted); position: sticky; top: 0; background: var(--panel); z-index: 1; }
 .progress .bar { height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; } .progress .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
 .step > summary .n { width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--line-strong); }
-.step.done > summary .n { background: var(--ok); border-color: var(--ok); color: transparent; background-image: var(--g-ok); background-size: 12px; background-position: center; background-repeat: no-repeat; }
+.step.done > summary .n { border-color: var(--ok); color: var(--ok); }
+.step > summary .tick { display: none; width: 16px; height: 16px; flex: none; border-radius: 50%; background: var(--ok) var(--g-ok) center / 11px no-repeat; }
+.step.done > summary .tick { display: inline-block; }
 .step[open] > summary .n { border-color: var(--accent); color: var(--accent); }
 .step[open] > summary { background: var(--sunken); }
 .body { padding: 4px 14px 16px 44px; }
@@ -465,6 +467,7 @@ button.ghost.danger { color: var(--crit); }
 :is(#apprMsg, #auMsg, #expMsg, #fibMirrorMsg, #fibPickMsg, #fibStatus, #guideStat, #imMsg, #lesStatus, #lsStat, #mkStat, #plMsg, #seStat, #verMsg, #xMsg) { color: var(--fg); background: var(--sunken); border-radius: var(--r); padding: 6px 10px; }
 :is(#apprMsg, #auMsg, #expMsg, #fibMirrorMsg, #fibPickMsg, #fibStatus, #guideStat, #imMsg, #lesStatus, #lsStat, #mkStat, #oneMsg, #prodMsg, #plMsg, #seStat, #verMsg, #xMsg):empty { display: none; }
 </style>
+<link rel="stylesheet" href="styles/kart.css">
 <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/TransformControls.js"></script>
@@ -527,7 +530,7 @@ button.ghost.danger { color: var(--crit); }
       <div class="progress" id="flowProg"><div class="bar"><i id="flowBar"></i></div><span id="flowTxt"></span></div>
 
       <details class="step" id="st1" name="flow" open>
-        <summary><span class="n">1</span>Vaka ve görüntüler<span class="tag" id="tag1"></span><svg class="chev"><use href="#i-chev"/></svg></summary>
+        <summary><span class="n">1</span>Vaka ve görüntüler<span class="tick" role="img" aria-label="Tamamlandı"></span><span class="tag" id="tag1"></span><svg class="chev"><use href="#i-chev"/></svg></summary>
         <div class="body">
           <h3 class="sub">Vaka</h3>
           <div class="ctl"><label for="caseName" class="lbl2">Vaka adı</label><input id="caseName" type="text" placeholder="Kısa ad" autocomplete="off"></div>
@@ -560,7 +563,7 @@ button.ghost.danger { color: var(--crit); }
       </details>
 
       <details class="step" id="st2" name="flow">
-        <summary><span class="n">2</span>Anatomi<span class="tag" id="tag2"></span><svg class="chev"><use href="#i-chev"/></svg></summary>
+        <summary><span class="n">2</span>Anatomi<span class="tick" role="img" aria-label="Tamamlandı"></span><span class="tag" id="tag2"></span><svg class="chev"><use href="#i-chev"/></svg></summary>
         <div class="body">
           <h3 class="sub">Kemik modeli</h3>
           <div class="ctl"><label for="segMode" class="lbl2">Yöntem</label><select id="segMode" data-seg><option value="thr" data-short="Eşik">Eşik (tarayıcıda)</option><option value="ai" data-short="Yapay zeka">Yapay zeka (sunucuda)</option></select></div>
@@ -581,7 +584,7 @@ button.ghost.danger { color: var(--crit); }
       </details>
 
       <details class="step" id="st3" name="flow">
-        <summary><span class="n">3</span>Rezeksiyon ve guide<span class="tag" id="tag3"></span><svg class="chev"><use href="#i-chev"/></svg></summary>
+        <summary><span class="n">3</span>Rezeksiyon ve guide<span class="tick" role="img" aria-label="Tamamlandı"></span><span class="tag" id="tag3"></span><svg class="chev"><use href="#i-chev"/></svg></summary>
         <div class="body">
           <div class="btns"><button class="primary" id="autoPrep"><svg class="i"><use href="#i-spark"/></svg>Otomatik planla</button></div>
           <p class="hint more" data-for="autoPrep">Tek tuşla kesileri koyar, rezeksiyon bölgesini siler ve guide'ı oluşturur. Lezyon boyandıysa ona göre, yoksa tıkladığınız bölgeye göre çalışır. Sonra aşağıdaki adımlardan düzeltebilirsiniz.</p>
@@ -621,7 +624,7 @@ button.ghost.danger { color: var(--crit); }
       </details>
 
       <details class="step" id="st4" name="flow">
-        <summary><span class="n">4</span>Fibula<span class="tag" id="tag6" hidden></span><svg class="chev"><use href="#i-chev"/></svg></summary>
+        <summary><span class="n">4</span>Fibula<span class="tick" role="img" aria-label="Tamamlandı"></span><span class="tag" id="tag6" hidden></span><svg class="chev"><use href="#i-chev"/></svg></summary>
         <div class="body">
           <p class="hint" id="fibIntro">Mandibula kesileri arasındaki defekt fibula segmentleriyle doldurulur. Fibula BT'sini ilk adımda yükleyin.</p>
           <div id="fibBody" class="col" hidden>
@@ -669,7 +672,7 @@ button.ghost.danger { color: var(--crit); }
       </details>
 
       <details class="step" id="st5" name="flow">
-        <summary><span class="n">5</span>Guide'lar<span class="tag" id="tag5g"></span><svg class="chev"><use href="#i-chev"/></svg></summary>
+        <summary><span class="n">5</span>Guide'lar<span class="tick" role="img" aria-label="Tamamlandı"></span><span class="tag" id="tag5g"></span><svg class="chev"><use href="#i-chev"/></svg></summary>
         <div class="body">
           <p class="hint" id="gNone">Guide henüz oluşturulmadı. Kesileri belirledikten sonra oluşturun. <button id="gMake2">Guide oluştur</button></p>
           <div id="guideList" class="col"></div>
@@ -696,7 +699,7 @@ button.ghost.danger { color: var(--crit); }
       </details>
 
       <details class="step" id="st6" name="flow">
-        <summary><span class="n">6</span>Vidalar<span class="tag" id="tag5"></span><svg class="chev"><use href="#i-chev"/></svg></summary>
+        <summary><span class="n">6</span>Vidalar<span class="tick" role="img" aria-label="Tamamlandı"></span><span class="tag" id="tag5"></span><svg class="chev"><use href="#i-chev"/></svg></summary>
         <div class="body">
           <div class="el-row"><div class="el-list" id="scList" role="group" aria-label="Vidalar"></div><button id="addScrew" class="ghost sm" title="Vida ekle"><svg class="i"><use href="#i-plus"/></svg>Vida</button></div>
           <div id="scProps" class="col"></div>
@@ -706,7 +709,7 @@ button.ghost.danger { color: var(--crit); }
       </details>
 
       <details class="step" id="st7" name="flow">
-        <summary><span class="n">7</span>İnceleme ve onay<span class="tag" id="tag7"></span><svg class="chev"><use href="#i-chev"/></svg></summary>
+        <summary><span class="n">7</span>İnceleme ve onay<span class="tick" role="img" aria-label="Tamamlandı"></span><span class="tag" id="tag7"></span><svg class="chev"><use href="#i-chev"/></svg></summary>
         <div class="body">
           <div class="ctl"><label for="surgeon" class="lbl2">Cerrah</label><input id="surgeon" type="text" placeholder="Ad Soyad" autocomplete="off"></div>
           <h3 class="sub">Öğe kontrolü</h3>
@@ -719,7 +722,7 @@ button.ghost.danger { color: var(--crit); }
       </details>
 
       <details class="step" id="st8" name="flow">
-        <summary><span class="n">8</span>Teslim<span class="tag" id="tag8"></span><svg class="chev"><use href="#i-chev"/></svg></summary>
+        <summary><span class="n">8</span>Teslim<span class="tick" role="img" aria-label="Tamamlandı"></span><span class="tag" id="tag8"></span><svg class="chev"><use href="#i-chev"/></svg></summary>
         <div class="body">
           <ol class="deliver">
             <li><div><b title="Su geçirmez üretim STL'i sunucuda Manifold ile üretilir.">Guide STL'i</b><p class="hint" id="prodMsg"></p></div><button id="expSrv" title="Sunucuda yüzey tabanlı (Manifold) boolean ile su geçirmez STL"><svg class="i"><use href="#i-server"/></svg>Üret</button></li>

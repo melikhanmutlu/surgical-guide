@@ -1,11 +1,10 @@
 /* "Temiz kart": white cards on a soft blue-grey canvas, one cobalt accent, small uppercase grey labels,
    generous spacing and almost no rules. Modelled on the clean dashboard reference the team chose. */
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap");
 
 /* ---------- tokens ---------- */
 :root:root[data-style="k1"] {
   --font-body: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif; --font-mono: "Inter", system-ui, sans-serif;
-  --bg: #f4f6fb; --panel: #ffffff; --sunken: #f7f8fc; --fg: #1b2233; --muted: #6b7489; --faint: #8a93a6; --control: #c9cfdc;
+  --bg: #f4f6fb; --panel: #ffffff; --sunken: #f7f8fc; --fg: #1b2233; --muted: #3f4759; --faint: #5b6478; --control: #c9cfdc;
   --line: #eceff5; --line-strong: #dde2ec; --hover: #f1f3f9; --stage: #e9edf4; --glass: #ffffff;
   --accent: #3f5bd9; --accent-hover: #3249bf; --accent-ink: #ffffff; --accent-soft: #eef1fd; --accent-line: #c6cff6;
   --ok: #1f9d63; --warn: #c27a12; --crit: #d23c3c; --ok-bg: #e9f7f0; --warn-bg: #fdf3e3; --crit-bg: #fdecec;
@@ -14,9 +13,9 @@
   --r: 9px; --R: 16px;
 }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"])[data-style="k1"] { --bg: #0f131c; --panel: #171c27; --sunken: #131822; --fg: #e6e9f2; --muted: #9aa3b8; --faint: #7d869b; --control: #444d63; --line: #232a38; --line-strong: #2e3647; --hover: #1d2330; --stage: #0b0e14; --glass: #171c27; --accent: #8098ff; --accent-hover: #9aaeff; --accent-ink: #0b1235; --accent-soft: #1c2547; --accent-line: #33437f; --ok: #4cc38a; --warn: #e2a84b; --crit: #f0877c; --ok-bg: #12291f; --warn-bg: #2d2311; --crit-bg: #331715; --cardshadow: none; --shadow: 0 6px 20px rgba(0,0,0,.35); }
+  :root:not([data-theme="light"])[data-style="k1"] { --bg: #0f131c; --panel: #171c27; --sunken: #131822; --fg: #e6e9f2; --muted: #bcc3d2; --faint: #a3abbd; --control: #444d63; --line: #232a38; --line-strong: #2e3647; --hover: #1d2330; --stage: #0b0e14; --glass: #171c27; --accent: #8098ff; --accent-hover: #9aaeff; --accent-ink: #0b1235; --accent-soft: #1c2547; --accent-line: #33437f; --ok: #4cc38a; --warn: #e2a84b; --crit: #f0877c; --ok-bg: #12291f; --warn-bg: #2d2311; --crit-bg: #331715; --cardshadow: none; --shadow: 0 6px 20px rgba(0,0,0,.35); }
 }
-:root:root[data-style="k1"][data-theme="dark"] { --bg: #0f131c; --panel: #171c27; --sunken: #131822; --fg: #e6e9f2; --muted: #9aa3b8; --faint: #7d869b; --control: #444d63; --line: #232a38; --line-strong: #2e3647; --hover: #1d2330; --stage: #0b0e14; --glass: #171c27; --accent: #8098ff; --accent-hover: #9aaeff; --accent-ink: #0b1235; --accent-soft: #1c2547; --accent-line: #33437f; --ok: #4cc38a; --warn: #e2a84b; --crit: #f0877c; --ok-bg: #12291f; --warn-bg: #2d2311; --crit-bg: #331715; --cardshadow: none; --shadow: 0 6px 20px rgba(0,0,0,.35); }
+:root:root[data-style="k1"][data-theme="dark"] { --bg: #0f131c; --panel: #171c27; --sunken: #131822; --fg: #e6e9f2; --muted: #bcc3d2; --faint: #a3abbd; --control: #444d63; --line: #232a38; --line-strong: #2e3647; --hover: #1d2330; --stage: #0b0e14; --glass: #171c27; --accent: #8098ff; --accent-hover: #9aaeff; --accent-ink: #0b1235; --accent-soft: #1c2547; --accent-line: #33437f; --ok: #4cc38a; --warn: #e2a84b; --crit: #f0877c; --ok-bg: #12291f; --warn-bg: #2d2311; --crit-bg: #331715; --cardshadow: none; --shadow: 0 6px 20px rgba(0,0,0,.35); }
 
 html[data-style="k1"] body { font-feature-settings: "tnum" 1, "cv11" 1; letter-spacing: -.003em; }
 
@@ -40,9 +39,8 @@ html[data-style="k1"] .step > summary:hover { background: var(--hover); }
 html[data-style="k1"] .step[open] > summary { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 html[data-style="k1"] .step > summary .n { width: 24px; height: 24px; border-radius: 8px; border: 0; background: var(--sunken); color: var(--muted); font: 600 12px var(--font-body); box-shadow: inset 0 0 0 1px var(--line-strong); }
 html[data-style="k1"] .step[open] > summary .n { background: var(--accent); color: var(--accent-ink); box-shadow: none; }
-html[data-style="k1"] .step.done > summary .n { background-color: var(--ok); box-shadow: none; }
 html[data-style="k1"] .step > summary .chev { color: var(--faint); }
-html[data-style="k1"] .body { padding: 14px 4px 22px; gap: 14px; }
+html[data-style="k1"] .body { padding: 14px 8px 22px; gap: 14px; }
 html[data-style="k1"] .body.foot { padding: 16px 20px; }
 
 /* ---------- labels: small, grey, uppercase, no rules ---------- */
@@ -64,8 +62,7 @@ html[data-style="k1"] button:not(.info):not(.tab), html[data-style="k1"] select,
 html[data-style="k1"] input[type=text], html[data-style="k1"] input[type=number], html[data-style="k1"] input[type=date], html[data-style="k1"] input[type=url], html[data-style="k1"] textarea { height: 36px; border-radius: var(--r); border-color: var(--line-strong); background: var(--panel); }
 html[data-style="k1"] textarea { height: auto; }
 html[data-style="k1"] .ctl-row .num input { height: 30px; border-radius: 8px; font-weight: 500; }
-html[data-style="k1"] button.primary { font-weight: 600; box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 28%, transparent); }
-html[data-style="k1"] button.primary:disabled { box-shadow: none; }
+html[data-style="k1"] button.primary, html[data-style="k1"] button.primary:hover { font-weight: 600; box-shadow: none; }
 html[data-style="k1"] button.ghost { padding: 0 8px; }
 html[data-style="k1"] button.sm { height: 30px; }
 html[data-style="k1"] .seg { border: 0; background: var(--hover); border-radius: 10px; padding: 3px; }
@@ -88,7 +85,7 @@ html[data-style="k1"] .checks li { border: 0; border-radius: 10px; background: v
 html[data-style="k1"] .checks .crit { background: var(--crit-bg); box-shadow: none; }
 html[data-style="k1"] .seq > li { border-radius: 12px; background: var(--sunken); border-color: transparent; }
 html[data-style="k1"] .overlay { border-radius: 10px; box-shadow: var(--shadow); }
-html[data-style="k1"] .step.done > summary .n { background: var(--ok) var(--g-ok) center / 12px no-repeat; color: transparent; box-shadow: none; }
+html[data-style="k1"] .step.done:not([open]) > summary .n { background: var(--ok-bg); color: var(--ok); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ok) 35%, transparent); }
 html[data-style="k1"] .top button:not(.primary):not(.info) { border-color: transparent; background: transparent; }
 html[data-style="k1"] .top button:not(.primary):not(.info):hover:not(:disabled) { background: var(--hover); }
 html[data-style="k1"] .top button[aria-pressed="true"] { background: var(--accent-soft) !important; color: var(--accent); }
