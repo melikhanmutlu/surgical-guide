@@ -180,8 +180,7 @@
     const slices = [], unsup = {}; let skipped = 0, multi = 0;
     for (const f of files) {
       try {
-        const u8 = new Uint8Array(await f.arrayBuffer());
-        const ds = window.DicomCodecs ? await DicomCodecs.parse(u8) : dicomParser.parseDicom(u8);
+        const ds = await dicomHeader(f);
         const ts = (ds.string('x00020010') || '1.2.840.10008.1.2.1').replace(/\0/g, '').trim();
         if (!ds.elements.x7fe00010) { skipped++; continue; }
         const ok = window.DicomCodecs ? DicomCodecs.supported(ts) : ['1.2.840.10008.1.2', '1.2.840.10008.1.2.1'].includes(ts);
@@ -189,7 +188,7 @@
         if ((ds.intString('x00280008') || 1) > 1) { multi++; skipped++; continue; }
         const ipp = (ds.string('x00200032') || '').split('\\').map(Number), iop = (ds.string('x00200037') || '').split('\\').map(Number);
         if (ipp.length !== 3 || iop.length !== 6) { skipped++; continue; }
-        slices.push({ ds, ipp, iop, series: ds.string('x0020000e') || '', sop: dstr(ds, 'x00080018'), path: f.relPath || f.webkitRelativePath || f.name });
+        slices.push({ ds, file: f, ipp, iop, series: ds.string('x0020000e') || '', sop: dstr(ds, 'x00080018'), path: f.relPath || f.webkitRelativePath || f.name });
       } catch (e) { skipped++; }
       await prog(zw + pw * (slices.length + skipped + multi) / files.length, `DICOM okunuyor (${slices.length + skipped} / ${files.length})…`);
     }
@@ -208,6 +207,16 @@
     const sc = { groups, zipName, skipped }, res = await decodeSeries(ser, prog, zw + pw, dw, sc);
     if (!res.error) res.scan = sc;
     return res;
+  }
+  // header only (up to the pixel data tag) from the first 64 kB: a whole study is never held in memory while it is
+  // sorted into series; the pixels of the chosen series are read one file at a time when it is decoded
+  const dparse = (u8, o) => window.DicomCodecs ? DicomCodecs.parse(u8, o) : dicomParser.parseDicom(u8, o);
+  async function dicomHeader(f) {
+    const n = Math.min(f.size, 65536), opt = { untilTag: 'x7fe00010' };
+    if (n < f.size) {
+      try { const ds = await dparse(new Uint8Array(await f.slice(0, n).arrayBuffer()), opt); if (ds.elements.x7fe00010) return ds; } catch (e) { /* header longer than the slice */ }
+    }
+    return dparse(new Uint8Array(await f.arrayBuffer()), opt);
   }
   // series kept from the last DICOM load, so another one can be opened without reading the files again
   let scan = null;
@@ -239,7 +248,10 @@
     const hu = new Int16Array(rows * cols * ser.length), ts0 = (ds0.string('x00020010') || '1.2.840.10008.1.2.1').replace(/\0/g, '').trim();
     const what = window.DicomCodecs && !/^1\.2\.840\.10008\.1\.2(\.1|\.2|\.1\.99)?$/.test(ts0) ? `${DicomCodecs.name(ts0)} açılıyor` : 'Kesitler hazırlanıyor';
     for (let k = 0; k < ser.length; k++) {
-      const ds = ser[k].ds, el = ds.elements.x7fe00010, signed = ds.uint16('x00280103') === 1;
+      let ds;
+      try { ds = await dparse(new Uint8Array(await ser[k].file.arrayBuffer())); }
+      catch (e) { return { error: `Kesit ${k + 1} okunamadı: ${e.message || e}` }; }
+      const el = ds.elements.x7fe00010, signed = ds.uint16('x00280103') === 1;
       const slope = parseFloat(ds.string('x00281053') || '1'), icpt = parseFloat(ds.string('x00281052') || '0');
       let px;
       if (window.DicomCodecs) {
@@ -299,7 +311,7 @@
     S.vol = vol; S.kind = kind;
     busy(true, 'Hacim küçültülüyor…'); await sleep();
     S.red = G.reduce(vol, 0.8);
-    $('caseInfo').innerHTML = `<dt>Vaka</dt><dd>${esc(label)}</dd><dt>Boyut</dt><dd>${vol.nx}×${vol.ny}×${vol.nz}</dd><dt>Voksel</dt><dd>${vol.sp.map(s => fmt(s, 2)).join(' × ')} mm</dd>`;
+    $('caseInfo').innerHTML = `<dt>Vaka</dt><dd>${esc(label)}</dd><dt>Boyut</dt><dd>${vol.nx}×${vol.ny}×${vol.nz}</dd><dt>Voksel</dt><dd>${vol.sp.map(s => fmt(s, 2)).join(' × ')} mm</dd><dt>Çalışma ızgarası</dt><dd>${S.red.sp.map(s => fmt(s, 2)).join(' × ')} mm</dd>`;
     S.qc = qualityCheck(vol); renderQC();
     S.anchor = null; S.planes = []; S.screws = []; S.sel = null; S.result = null; S.guideOn = false; S.resRemoved = false; unapprove(S.lesion);
     if (S.autoAnchor !== false) { S.lesion.condyle = null; S.g.split = 0; syncGuideInputs(); syncLesion(); }

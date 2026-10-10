@@ -20,8 +20,11 @@ const G = (() => {
   }
 
   // block-average to ~target mm voxels (keeps memory and meshing time sane in the browser)
-  function reduce(vol, target = 0.8) {
+  // working grid: whole-voxel binning towards `target` mm, unless that leaves more than maxVox voxels (a large
+  // thin-slice study); then an even spacing that fits, sampled trilinearly, so the browser does not run out of memory
+  function reduce(vol, target = 0.8, maxVox = 60e6) {
     const f = vol.sp.map(s => Math.max(1, Math.round(target / s)));
+    if (Math.floor(vol.nx / f[0]) * Math.floor(vol.ny / f[1]) * Math.floor(vol.nz / f[2]) > maxVox) return resample(vol, Math.cbrt(vol.nx * vol.sp[0] * vol.ny * vol.sp[1] * vol.nz * vol.sp[2] / maxVox) * 1.01);
     const nx = Math.floor(vol.nx / f[0]), ny = Math.floor(vol.ny / f[1]), nz = Math.floor(vol.nz / f[2]);
     const hu = new Int16Array(nx * ny * nz), cnt = f[0] * f[1] * f[2];
     for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
@@ -34,6 +37,29 @@ const G = (() => {
     }
     const sp = vol.sp.map((s, d) => s * f[d]);
     const origin = worldOf(vol, (f[0] - 1) / 2, (f[1] - 1) / 2, (f[2] - 1) / 2);
+    return { hu, nx, ny, nz, sp, origin, axes: vol.axes };
+  }
+
+  function resample(vol, t) {
+    const F = vol.sp.map(s => Math.max(1, t / s)), nx = Math.floor(vol.nx / F[0]), ny = Math.floor(vol.ny / F[1]), nz = Math.floor(vol.nz / F[2]);
+    const hu = new Int16Array(nx * ny * nz), NX = vol.nx, NXY = vol.nx * vol.ny, src = vol.hu;
+    const axis = (n, Fd, N) => { const i0 = new Int32Array(n), w = new Float32Array(n); for (let i = 0; i < n; i++) { const x = Math.min(N - 1, Math.max(0, (i + 0.5) * Fd - 0.5)), a = Math.min(N - 2, Math.floor(x)); i0[i] = Math.max(0, a); w[i] = N > 1 ? x - i0[i] : 0; } return { i0, w }; };
+    const X = axis(nx, F[0], vol.nx), Y = axis(ny, F[1], vol.ny), Z = axis(nz, F[2], vol.nz);
+    for (let k = 0; k < nz; k++) {
+      const z0 = Z.i0[k] * NXY, z1 = Math.min(vol.nz - 1, Z.i0[k] + 1) * NXY, wz = Z.w[k];
+      for (let j = 0; j < ny; j++) {
+        const y0 = Y.i0[j] * NX, y1 = Math.min(vol.ny - 1, Y.i0[j] + 1) * NX, wy = Y.w[j], o = nx * (j + ny * k);
+        for (let i = 0; i < nx; i++) {
+          const x0 = X.i0[i], x1 = Math.min(vol.nx - 1, x0 + 1), wx = X.w[i];
+          const c00 = src[z0 + y0 + x0] + (src[z0 + y0 + x1] - src[z0 + y0 + x0]) * wx, c10 = src[z0 + y1 + x0] + (src[z0 + y1 + x1] - src[z0 + y1 + x0]) * wx;
+          const c01 = src[z1 + y0 + x0] + (src[z1 + y0 + x1] - src[z1 + y0 + x0]) * wx, c11 = src[z1 + y1 + x0] + (src[z1 + y1 + x1] - src[z1 + y1 + x0]) * wx;
+          const c0 = c00 + (c10 - c00) * wy, c1 = c01 + (c11 - c01) * wy;
+          hu[o + i] = c0 + (c1 - c0) * wz;
+        }
+      }
+    }
+    const sp = vol.sp.map((s, d) => s * F[d]);
+    const origin = worldOf(vol, (F[0] - 1) / 2, (F[1] - 1) / 2, (F[2] - 1) / 2);
     return { hu, nx, ny, nz, sp, origin, axes: vol.axes };
   }
 
