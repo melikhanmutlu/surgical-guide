@@ -31,6 +31,8 @@
     if (sec && par && par.parentElement === sec) return { at: sec.querySelector(':scope > summary'), after: null };
     return null;
   }
+  // hovering the "i" shows the explanation itself, not a generic word
+  const tip = (b, ts) => { const t = ts.map(x => x.textContent.replace(/\s+/g, ' ').trim()).join('\n\n'); b.title = t; b.setAttribute('aria-label', 'Açıklama: ' + t); };
   function fold(h) {
     if (h.dataset.folded) return;
     h.dataset.folded = '1';
@@ -40,7 +42,7 @@
     // a heading that already has an "i" gets no second one; its button opens every text under it
     const prev = a && a.at && [...a.at.children].find(c => c.matches('button.info') && c._ts && c._ts.every(t => t.isConnected));
     if (prev) {
-      prev._ts.push(h); prev.setAttribute('aria-controls', prev._ts.map(t => t.id).join(' '));
+      prev._ts.push(h); prev.setAttribute('aria-controls', prev._ts.map(t => t.id).join(' ')); tip(prev, prev._ts);
       h.classList.toggle('shut', prev.getAttribute('aria-expanded') !== 'true');
       prev._ts[prev._ts.length - 2].after(h);
       return;
@@ -49,7 +51,7 @@
     h.classList.toggle('shut', !open);
     const b = document.createElement('button');
     b.type = 'button'; b.className = 'info'; b.textContent = 'i';
-    b.setAttribute('aria-label', 'Açıklama'); b.title = 'Açıklama';
+    tip(b, [h]);
     b.setAttribute('aria-controls', h.id); b.setAttribute('aria-expanded', String(open));
     b.dataset.k = k; b._t = h; b._ts = [h];
     if (a && a.btn) { a.btn.after(b); a.after.after(h); b.style.alignSelf = 'center'; }
@@ -60,7 +62,8 @@
       if (a.after) { if (a.inside) a.after.appendChild(h); else a.after.after(h); }
     } else {
       const row = document.createElement('span');
-      row.className = 'info-row'; row.append(b, document.createTextNode('Açıklama'));
+      row.className = 'info-row'; const lead = document.createElement('span'); lead.textContent = h.textContent.replace(/\s+/g, ' ').trim().split(/(?<=\.)\s/)[0];
+      row.append(b, lead);
       row.addEventListener('click', e => { if (e.target !== b) b.click(); });
       h.before(row); b._row = row;
     }
