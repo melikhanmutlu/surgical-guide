@@ -1165,6 +1165,16 @@
       if (live.resDirty) { live.planes = live.resDirty = false; busy(true, 'Rezeksiyon güncelleniyor…'); await sleep(); await rebuildResection(); }
       if (S.screwRefit) { S.screwRefit = false; if (S.guideOn && S.anchor) { placeScrews(); S.sel = null; renderElements(); } }
       await regenerate();
+      // a new angle or size: the guide is re-formed to seat on the bone where it now lies (wrap depth, one or two pieces)
+      if (S.refit) {
+        S.refit = false;
+        const R = S.result, want = S.g.split && S.planes.length >= 2 ? 2 : 1;
+        if (S.guideOn && R && (R.pieces !== want || (R.seat && R.seat.ok && !R.seat.free))) {
+          busy(true, 'Guide yeni açıda kemiğe oturtuluyor…'); await sleep();
+          const f = await fitWrap();
+          if (f && $('guideStat')) $('guideStat').textContent = f.ok ? `Guide yeni konuma göre yeniden şekillendi (sarma ${fmt(f.wrap, 1)} mm${f.split ? ', iki parça' : ''}).` : 'Bu açıda guide kemiğe takılamıyor; açıyı azaltın ya da sarma derinliğini düşürün.';
+        }
+      }
     }, liveEdit ? 400 : 120);
   }
   const ray = new THREE.Raycaster(), mouse = new THREE.Vector2();
@@ -1425,6 +1435,7 @@
   gFields.forEach(([k]) => $('g_' + k).addEventListener('input', e => {
     S.g[k] = +e.target.value;
     if (k === 'rot') { unapproveAll(); updateLesionPart(); if (S.guideOn && S.screws.length) S.screwRefit = true; }
+    if (k === 'rot' || k === 'L' || k === 'W') S.refit = true;
     if ((k === 'L' || k === 'W') && S.guideOn) clampScrews();
     syncGuideInputs(); schedule(k === 'rot', true);
   }));
