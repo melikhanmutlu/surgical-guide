@@ -686,15 +686,24 @@
     syncGuideInputs();
     const pw = planesWorld();
     S.screws = pos.map(({ u: uu, v: vv }) => {
-      // straight screw unless a tilt scores better; with no bone under this spot it stays straight and the
+      // straight screw unless a tilt scores better; if the spot has no bone under it (a turned guide axis on a
+      // curved jaw), slide it sideways within the guide until it finds bone; with none at all it stays and the
       // screw checks report it
-      let best = Object.assign({ u: uu, v: vv, tiltU: 0, tiltV: 0, ok: false }, def), bs = screwScore(best, pw);
-      if (!Number.isFinite(bs)) bs = -Infinity;
-      for (let tu = -20; tu <= 20; tu += 5) for (let tv = -20; tv <= 20; tv += 5) {
-        const sc = Object.assign({ u: uu, v: vv, tiltU: tu, tiltV: tv, ok: false }, def), sc2 = screwScore(sc, pw);
-        if (Number.isFinite(sc2) && sc2 > bs) { bs = sc2; best = sc; }
+      const lim = Math.max(0, S.g.W / 2 - def.D / 2 - 0.5), dvs = [0];
+      for (let d = 1; d <= 2 * lim; d++) dvs.push(d / 2, -d / 2);
+      let first = null;
+      for (const dv of dvs) {
+        const v0 = Math.max(-lim, Math.min(lim, vv + dv));
+        let best = Object.assign({ u: uu, v: v0, tiltU: 0, tiltV: 0, ok: false }, def), bs = screwScore(best, pw);
+        if (!Number.isFinite(bs)) bs = -Infinity;
+        for (let tu = -20; tu <= 20; tu += 5) for (let tv = -20; tv <= 20; tv += 5) {
+          const sc = Object.assign({ u: uu, v: v0, tiltU: tu, tiltV: tv, ok: false }, def), sc2 = screwScore(sc, pw);
+          if (Number.isFinite(sc2) && sc2 > bs) { bs = sc2; best = sc; }
+        }
+        if (!first) first = best;
+        if (bs > 50) return best;
       }
-      return best;
+      return first;
     });
   }
   // a painted lesion (world points) -> lesion extent, and cuts that clear it by the safety margin at the angle that
@@ -971,8 +980,8 @@
     if (S.sel && !o) S.sel = null;
     if (!o) { if (S.planes.length) $('plProps').innerHTML = '<p class="hint">Düzenlemek için bir kesi seçin ya da 3B görünümde kesiye tıklayın.</p>'; if (S.screws.length) $('scProps').innerHTML = '<p class="hint">Düzenlemek için bir vida seçin ya da 3B görünümde vidaya tıklayın.</p>'; return; }
     const box = $(isP ? 'plProps' : 'scProps');
-    const fields = isP ? [['off', 'Konum (guide ekseni boyunca)', -45, 45, 0.5, 'mm'], ['yaw', 'Yatay açı', -45, 45, 0.5, '°'], ['pitch', 'Dikey açı', -45, 45, 0.5, '°'], ['w', 'Yuva genişliği (testere + tolerans)', 0.6, 2.5, 0.1, 'mm']]
-      : [['u', 'Konum (eksen boyunca)', -45, 45, 0.5, 'mm'], ['v', 'Konum (yanal)', -15, 15, 0.5, 'mm'], ['tiltU', 'Eğim (eksen yönünde)', -40, 40, 1, '°'], ['tiltV', 'Eğim (yanal)', -40, 40, 1, '°'],
+    const fields = isP ? [['off', 'Konum (guide ekseni boyunca)', -45, 45, 0.5, 'mm'], ['yaw', 'Yatay açı', -80, 80, 0.5, '°'], ['pitch', 'Dikey açı', -80, 80, 0.5, '°'], ['w', 'Yuva genişliği (testere + tolerans)', 0.6, 2.5, 0.1, 'mm']]
+      : [['u', 'Konum (eksen boyunca)', -45, 45, 0.5, 'mm'], ['v', 'Konum (yanal)', -15, 15, 0.5, 'mm'], ['tiltU', 'Eğim (eksen yönünde)', -60, 60, 1, '°'], ['tiltV', 'Eğim (yanal)', -60, 60, 1, '°'],
          ['d', 'Matkap çapı', 1.2, 4, 0.1, 'mm'], ['D', 'Kovan dış çapı', 3, 8, 0.1, 'mm'], ['sleeveH', 'Kovan yüksekliği', 0, 12, 0.5, 'mm'], ['len', 'Vida boyu', 6, 40, 1, 'mm']];
     box.innerHTML = `<h3 class="sub">${isP ? 'Kesi' : 'Vida'} ${i + 1}</h3>` + fields.map(([k, t, mn, mx, st, unit]) => `<div class="ctl"><div class="ctl-row"><label for="f_${k}">${t}</label><output id="o_${k}">${fmt(o[k], st < 1 ? 1 : 0)} ${unit}</output></div><input type="range" id="f_${k}" min="${mn}" max="${mx}" step="${st}" value="${o[k]}"></div>`).join('') +
       `<p class="hint">${apprText(o)}</p><p class="hint">3B görünümde kesiyi ya da vidayı tutup sürükleyebilir, tutamaçla da taşıyabilirsiniz (W taşı, E döndür).</p>` +
@@ -1165,7 +1174,7 @@
   }
   function previewNow() {
     if (!S.anchor) return;
-    const pls = planesWorld(), info = S.guideOn ? screwsWorld().map(s => ({ s, ok: !!s.entry })) : [];
+    const pls = planesWorld(), info = S.guideOn && !S.screwRefit ? screwsWorld().map(s => ({ s, ok: !!s.entry })) : [];
     S.liveScrews = info;
     rebuildElementParts(pls, info); applyExplode(); emit('preview'); render();
   }
@@ -1178,6 +1187,7 @@
     clearTimeout(timer);
     timer = setTimeout(async () => {
       if (live.resDirty) { live.planes = live.resDirty = false; busy(true, 'Rezeksiyon güncelleniyor…'); await sleep(); await rebuildResection(); }
+      if (S.screwRefit) { S.screwRefit = false; if (S.guideOn && S.anchor) { placeScrews(); S.sel = null; renderElements(); } }
       await regenerate();
     }, liveEdit ? 400 : 120);
   }
@@ -1271,15 +1281,15 @@
       if (gz.mode === 'translate') o.off = clampR(o0.off + d.dot(u), -45, 45, 0.5);
       else {
         const N = gz.start.N0.clone().applyQuaternion(dq);
-        o.yaw = clampR(THREE.MathUtils.radToDeg(Math.atan2(N.dot(v), N.dot(u))), -45, 45, 0.5);
-        o.pitch = clampR(THREE.MathUtils.radToDeg(-Math.asin(Math.max(-1, Math.min(1, N.dot(n))))), -45, 45, 0.5);
+        o.yaw = clampR(THREE.MathUtils.radToDeg(Math.atan2(N.dot(v), N.dot(u))), -80, 80, 0.5);
+        o.pitch = clampR(THREE.MathUtils.radToDeg(-Math.asin(Math.max(-1, Math.min(1, N.dot(n))))), -80, 80, 0.5);
       }
     } else {
       if (gz.mode === 'translate') { o.u = clampR(o0.u + d.dot(u), -45, 45, 0.5); o.v = clampR(o0.v + d.dot(v), -15, 15, 0.5); }
       else {
         const D = gz.start.d0.clone().applyQuaternion(dq), a = Math.asin(Math.max(-1, Math.min(1, -D.dot(u))));
-        o.tiltU = clampR(THREE.MathUtils.radToDeg(a), -40, 40, 1);
-        o.tiltV = clampR(THREE.MathUtils.radToDeg(Math.atan2(D.dot(v), -D.dot(n))), -40, 40, 1);
+        o.tiltU = clampR(THREE.MathUtils.radToDeg(a), -60, 60, 1);
+        o.tiltV = clampR(THREE.MathUtils.radToDeg(Math.atan2(D.dot(v), -D.dot(n))), -60, 60, 1);
       }
     }
     const key = [o.off, o.yaw, o.pitch, o.u, o.v, o.tiltU, o.tiltV].join();
@@ -1326,7 +1336,7 @@
     const { u, v, n } = frameAxes(); if (N.dot(u) < 0) N = N.clone().negate();
     const yaw = THREE.MathUtils.radToDeg(Math.atan2(N.dot(v), N.dot(u))), pitch = THREE.MathUtils.radToDeg(-Math.asin(Math.max(-1, Math.min(1, N.dot(n)))));
     const off = N.dot(c.clone().sub(S.anchor.p)) / (N.dot(u) || 1e-6);
-    o.off = clampR(off, -45, 45, 0.5); o.yaw = clampR(yaw, -45, 45, 0.5); o.pitch = clampR(pitch, -45, 45, 0.5);
+    o.off = clampR(off, -45, 45, 0.5); o.yaw = clampR(yaw, -80, 80, 0.5); o.pitch = clampR(pitch, -80, 80, 0.5);
   }
   renderer.domElement.addEventListener('pointerdown', e => {
     if (e.button !== 0 || S.mode !== 'orbit' || !S.anchor || (gizmo && (gizmo.dragging || gizmo.axis)) || (window.SegEdit && SegEdit.tool()) || (window.Lesion && Lesion.active())) return;
@@ -1424,7 +1434,22 @@
     $('g_side').value = String(S.g.side); $('g_split').value = String(S.g.split ? 1 : 0);
     $('gc_flange').hidden = !S.g.split; $('gc_bridge').hidden = !!S.g.split; $('g_side').closest('.ctl').hidden = !!S.g.split;
   }
-  gFields.forEach(([k]) => $('g_' + k).addEventListener('input', e => { S.g[k] = +e.target.value; syncGuideInputs(); if (k === 'rot') { unapproveAll(); updateLesionPart(); } schedule(k === 'rot', true); }));
+  // the screws stay on the guide: a turned guide axis re-places them once the value rests, a shorter or narrower
+  // guide pulls them back inside its body
+  function clampScrews() {
+    const half = S.g.L / 2;
+    S.screws.forEach(sc => {
+      const mu = Math.max(0, half - sc.D / 2 - 0.5), mv = Math.max(0, S.g.W / 2 - sc.D / 2 - 0.5);
+      if (Math.abs(sc.u) > mu) { sc.u = Math.sign(sc.u) * Math.floor(mu * 2) / 2; unapprove(sc); }
+      if (Math.abs(sc.v) > mv) { sc.v = Math.sign(sc.v) * Math.floor(mv * 2) / 2; unapprove(sc); }
+    });
+  }
+  gFields.forEach(([k]) => $('g_' + k).addEventListener('input', e => {
+    S.g[k] = +e.target.value;
+    if (k === 'rot') { unapproveAll(); updateLesionPart(); if (S.guideOn && S.screws.length) S.screwRefit = true; }
+    if ((k === 'L' || k === 'W') && S.guideOn) clampScrews();
+    syncGuideInputs(); schedule(k === 'rot', true);
+  }));
   $('g_side').addEventListener('change', e => { S.g.side = +e.target.value; schedule(false); });
   $('g_split').addEventListener('change', e => { S.g.split = +e.target.value; syncGuideInputs(); unapproveAll(); schedule(false); });
   $('resType').addEventListener('change', async e => {
@@ -1666,8 +1691,8 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
       // older versions could save an empty (null) screw when no position reached bone: drop it, re-place the screws
       const rawScrews = (Array.isArray(plan.screws) ? plan.screws : []).slice(0, 16), lostScrew = rawScrews.some(c => !c || typeof c !== 'object');
       S.screws = rawScrews.filter(c => c && typeof c === 'object').map(c => Object.assign(num(c, Object.keys(C0), C0), who(c)));
-      S.planes.forEach(p => { clampTo(p, 'off', -45, 45); clampTo(p, 'yaw', -45, 45); clampTo(p, 'pitch', -45, 45); clampTo(p, 'w', 0.6, 2.5); });
-      S.screws.forEach(c => { clampTo(c, 'u', -45, 45); clampTo(c, 'v', -15, 15); clampTo(c, 'tiltU', -40, 40); clampTo(c, 'tiltV', -40, 40); clampTo(c, 'd', 0.5, 6); clampTo(c, 'D', c.d, 12); clampTo(c, 'sleeveH', 0, 20); clampTo(c, 'len', 2, 40); });
+      S.planes.forEach(p => { clampTo(p, 'off', -45, 45); clampTo(p, 'yaw', -80, 80); clampTo(p, 'pitch', -80, 80); clampTo(p, 'w', 0.6, 2.5); });
+      S.screws.forEach(c => { clampTo(c, 'u', -45, 45); clampTo(c, 'v', -15, 15); clampTo(c, 'tiltU', -60, 60); clampTo(c, 'tiltV', -60, 60); clampTo(c, 'd', 0.5, 6); clampTo(c, 'D', c.d, 12); clampTo(c, 'sleeveH', 0, 20); clampTo(c, 'len', 2, 40); });
       ['from', 'to'].forEach(k => clampTo(S.lesion, k, -45, 45)); clampTo(S.lesion, 'margin', 0, 15);
       if (plan.perSide === 1 || plan.perSide === 2) $('perSide').value = String(plan.perSide);
       // plans from before the explicit 'Guide oluştur' step always had a guide when they had screws
