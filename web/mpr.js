@@ -208,6 +208,7 @@
       if (e.shiftKey) { st.drag = { kind: 'wl', v, X, Y, L: st.win.L, W: st.win.W }; return; }
       if (v.custom) { const T = xf(v); st.drag = { kind: 'custom', v }; v.custom.pick(v, T.ix(X), T.iy(Y)); return; }
       if (window.Measure && Measure.active()) { const T = xf(v); Measure.pick(V(...toWorld(imgToIdx(v, T.ix(X), T.iy(Y)))), null); return; }
+      const hd = handleAt(v, X, Y); if (hd) { st.drag = { kind: 'handle', v, h: hd }; c.style.cursor = 'grabbing'; return; }
       const P = painter(); if (P) { const T = xf(v); st.drag = { kind: 'paint', v, P }; P.paint(toWorld(imgToIdx(v, T.ix(X), T.iy(Y))), v.axis, true); return; }
       const li = hitLine(v, X, Y);
       if (li >= 0) { st.drag = { kind: 'plane', v, i: li }; St.select('p' + li); c.style.cursor = 'grabbing'; return; }
@@ -215,7 +216,8 @@
     });
     c.addEventListener('pointermove', e => {
       const [X, Y] = at(e), d = st.drag;
-      if (!d) { c.style.cursor = hitLine(v, X, Y) >= 0 ? 'grab' : 'crosshair'; return; }
+      if (!d) { c.style.cursor = handleAt(v, X, Y) || hitLine(v, X, Y) >= 0 ? 'grab' : 'crosshair'; return; }
+      if (d.kind === 'handle') { const T = xf(v); d.h.drag(toWorld(imgToIdx(v, T.ix(X), T.iy(Y)))); redraw(); return; }
       if (d.kind === 'pan') { v.pan[0] = d.pan[0] + X - d.X; v.pan[1] = d.pan[1] + Y - d.Y; redraw(); }
       else if (d.kind === 'cursor') moveCursor(v, X, Y);
       else if (d.kind === 'wl') { const k = 1 / Math.min(devicePixelRatio, 2); st.win = { L: Math.round(d.L - (Y - d.Y) * 2 * k), W: Math.max(10, Math.round(d.W + (X - d.X) * 4 * k)) }; customWin(); redraw(); }
@@ -223,10 +225,12 @@
       else if (d.kind === 'plane') dragPlane(v, d.i, X, Y);
       else if (d.kind === 'paint') { const T = xf(v); d.P.paint(toWorld(imgToIdx(v, T.ix(X), T.iy(Y))), v.axis, false); }
     });
-    const end = () => { if (st.drag && st.drag.kind === 'plane') { St.unapprove(S.planes[st.drag.i]); St.schedule(true); } if (st.drag && st.drag.kind === 'paint') st.drag.P.strokeEnd(); st.drag = null; c.style.cursor = 'crosshair'; };
+    const end = () => { if (st.drag && st.drag.kind === 'handle' && st.drag.h.end) st.drag.h.end(); if (st.drag && st.drag.kind === 'plane') { St.unapprove(S.planes[st.drag.i]); St.schedule(true); } if (st.drag && st.drag.kind === 'paint') st.drag.P.strokeEnd(); st.drag = null; c.style.cursor = 'crosshair'; };
     c.addEventListener('pointerup', end); c.addEventListener('pointercancel', end);
     c.addEventListener('dblclick', () => { st.max = st.max === v.id ? null : v.id; layout(); });
   }
+  // draggable handles other modules draw on the slices (guide angle): { hit(v, X, Y, T, api) -> bool, drag(world), end() }
+  function handleAt(v, X, Y) { if (v.custom || !S.vol) return null; const T = xf(v); return (window.SliceHandles || []).find(h => { try { return h.hit(v, X, Y, T, overlayAPI()); } catch (e) { return false; } }) || null; }
   // slice painting tools: lesion brush, segmentation brush / eraser
   const painter = () => (window.Masks && Masks.tool() ? Masks : window.Lesion && Lesion.active() ? Lesion : window.SegEdit && SegEdit.active() ? SegEdit : null);
   function moveCursor(v, X, Y) { const T = xf(v); setCursor(imgToIdx(v, T.ix(X), T.iy(Y))); }

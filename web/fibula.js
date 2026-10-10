@@ -19,6 +19,7 @@ window.Fibula = (function () {
   let F = null;            // loaded fibula: { source, label, vol, red, labels, cands, c (current candidate) }
   let pending = null;      // stored plan waiting for its DICOM series
   let view = 'm', last = null, grafts = null, guideTimer = null, guideKey = '', building = false;
+  const fsel = { joint: null, seg: null, mode: null, first: null };   // selection in the fibula view; bone pick / split mode
   const msg = t => { $('fibMsg').textContent = t || ''; $('fibMsg').hidden = !t; };
   // vOff: graft shift towards the occlusal plane; dbl: double barrel (a second strut stacked dblH mm above);
   // fg / fsc: fibula guide body and screw edits (null = automatic)
@@ -224,8 +225,8 @@ window.Fibula = (function () {
     clearLeg();
     grafts = new THREE.Group();
     St.setPart('grafts', 'Fibula greftleri', grafts, GRAFT[0]);
-    onLeg(new THREE.Mesh(F.c.geo, mat(BONE, { transparent: true, opacity: 0.3, depthWrite: false }))).userData.keep = true;
-    if (F.c.tgeo) onLeg(new THREE.Mesh(F.c.tgeo, mat(BONE, { transparent: true, opacity: 0.12, depthWrite: false }))).userData.keep = true;
+    const fm = onLeg(new THREE.Mesh(F.c.geo, mat(BONE, { transparent: true, opacity: 0.3, depthWrite: false }))); fm.userData.keep = true; fm.userData.bone = 'fib';
+    if (F.c.tgeo) { const tm = onLeg(new THREE.Mesh(F.c.tgeo, mat(BONE, { transparent: true, opacity: 0.12, depthWrite: false }))); tm.userData.keep = true; tm.userData.bone = 'tib'; }
   }
   function disc(center, normal, r, color, opacity) {
     const m = new THREE.Mesh(new THREE.CircleGeometry(r, 48), new THREE.MeshBasicMaterial({ color, transparent: true, opacity, side: THREE.DoubleSide, depthWrite: false }));
@@ -242,8 +243,10 @@ window.Fibula = (function () {
       m.matrixAutoUpdate = false; m.matrix.copy(g.M); m.matrixWorldNeedsUpdate = true; m.userData.seg = i; grafts.add(m);
       // fibula side: the same segment in the leg, plus the cut discs
       const w0 = dirFib(g.n0), w1 = dirFib(g.n1), p0 = toFib(g.s0, o[0], o[1]), p1 = toFib(g.s1, o[0], o[1]);
-      onLeg(new THREE.Mesh(F.c.geo, mat(GRAFT[i % 2], { clippingPlanes: [keepAtLeast(w0, p0), keepAtMost(w1, p1)] })));
-      onLeg(disc(p0, w0, F.c.FR + 8, 0xe0533d, 0.2)).userData.disc = true; onLeg(disc(p1, w1, F.c.FR + 8, 0xe0533d, 0.2)).userData.disc = true;
+      onLeg(new THREE.Mesh(F.c.geo, mat(GRAFT[i % 2], { emissive: fsel.seg === i ? 0x332200 : 0, clippingPlanes: [keepAtLeast(w0, p0), keepAtMost(w1, p1)] }))).userData.legSeg = i;
+      // cut discs: joint j between segment j-1 and j; joint 0 and n are the mandible's own cuts
+      const j0 = g.barrel ? -1 : i, j1 = g.barrel ? -2 : i + 1;
+      [[p0, w0, j0], [p1, w1, j1]].forEach(([pp, ww, j]) => { const d = onLeg(disc(pp, ww, F.c.FR + 8, 0xe0533d, fsel.joint === j ? 0.5 : 0.2)); d.userData.disc = true; d.userData.joint = j; d.userData.seg = i; });
     });
     St.applyExplode(); St.render();
   }
@@ -449,6 +452,7 @@ window.Fibula = (function () {
       else { pending = p; msg(`Bu planın fibula serisi "${p.source ? p.source.name : '?'}". Fibula planını açmak için aynı seriyi ilk adımda yükleyin.`); if (window.UI) UI.openStep('st1'); return; }
       F.c = null;
     }
+    if (p.legSplit && !F.split && Array.isArray(p.legSplit.f) && Array.isArray(p.legSplit.t)) { const c = splitLeg(V(...p.legSplit.f), V(...p.legSplit.t)); if (c) F.cands.push(c); }
     let best = 0, bd = Infinity; F.cands.forEach((c, i) => { const d = c.C.distanceTo(V(...(p.cand || [0, 0, 0]))); if (d < bd) { bd = d; best = i; } });
     if (!F.c || F.c.i !== best) setCandidate(best);
     $('fibCand').value = best;
@@ -493,12 +497,152 @@ window.Fibula = (function () {
     $('prodMsg').textContent += ` Fibula guide'ı: ${r.watertight ? 'su geçirmez' : 'SU GEÇİRMEZ DEĞİL'}, ${r.bodies} parça${r.bodies > 1 ? ' (BİRDEN FAZLA PARÇA)' : ''}.`;
   }
 
+
+  // ---------- fibula view: click to select, active structure (mandible / fibula), bone pick and split ----------
+  const cv = St.renderer.domElement, rc = new THREE.Raycaster(); rc.layers.set(1);
+  function paneAt(e) {
+    const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+    if (S.split) { const hw = Math.floor(r.width / 2); return x > hw ? { pane: 'f', cam: St.camF, ndc: [((x - hw) / (r.width - hw)) * 2 - 1, -(y / r.height) * 2 + 1] } : { pane: 'm' }; }
+    if (view === 'f' && F && F.c) return { pane: 'f', cam: St.camera, ndc: [(x / r.width) * 2 - 1, -(y / r.height) * 2 + 1] };
+    return { pane: 'm' };
+  }
+  // the structure being worked on: its pane label is highlighted and its panel opens
+  let activePane = 'm';
+  function setActive(p, openPanel) {
+    activePane = p;
+    $('mainLabel').classList.toggle('on', p === 'm'); const fl = $('splitPane').querySelector('.vlabel'); if (fl) fl.classList.toggle('on', p === 'f');
+    if (!openPanel || !window.UI) return;
+    const open = document.querySelector('details.step[open]'), id = open && open.id;
+    if (p === 'f' && id !== 'st4') UI.openStep('st4');
+    if (p === 'm' && (id === 'st4' || !id)) UI.openStep('st3');
+  }
+  const note = t => { const el = $('fibPickMsg'); if (el) { el.textContent = t || ''; el.hidden = !t; } };
+  function focusBox(id) {
+    if (window.UI) UI.openStep('st4');
+    const el = $(id); if (!el) return;
+    requestAnimationFrame(() => { el.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); });
+  }
+  let down = null;
+  // the right half of the split view is covered by its own pane (its orbit controls), so listen on both
+  const onUp = e => {
+    const d = down; down = null;
+    if (!d || e.button !== 0 || Math.hypot(e.clientX - d[0], e.clientY - d[1]) > 4 || !F || !F.c) return;
+    const pa = paneAt(e);
+    if (pa.pane === 'm') { if (S.split) setTimeout(() => setActive('m', !!(S.sel || S.guideSel)), 0); return; }
+    rc.setFromCamera(new THREE.Vector2(pa.ndc[0], pa.ndc[1]), pa.cam);
+    clickLeg(rc.intersectObjects(leg.children, true));
+  };
+  [cv, $('splitPane')].forEach(el => { el.addEventListener('pointerdown', e => { down = [e.clientX, e.clientY]; }); el.addEventListener('pointerup', onUp); });
+  function clickLeg(hits) {
+    if (fsel.mode) { const h = hits.find(x => x.object.userData.bone || x.object.userData.all); if (h) boneClick(h.point); return; }
+    setActive('f', true);
+    if (!active()) return;
+    const dk = hits.find(h => h.object.userData.disc), sg = hits.find(h => h.object.userData.legSeg !== undefined), gd = hits.find(h => h.object.userData.guide);
+    if (dk) { selectJoint(dk.object.userData.joint); return; }
+    if (gd && (!sg || gd.distance <= sg.distance)) { fsel.joint = fsel.seg = null; draw(last); focusBox('fgBox'); note('Fibula guide\'ı seçildi; gövde ve vida ayarları aşağıda.'); return; }
+    if (sg) { const i = sg.object.userData.legSeg; fsel.seg = i; fsel.joint = null; draw(last); focusBox(plan().roll.length > i ? 'fr' + i : 'fibRows'); note(`Segment ${i + 1} seçildi; rotasyonunu ve kırılma noktalarını ayarlayabilirsiniz.`); return; }
+    fsel.joint = fsel.seg = null; draw(last); note('');
+  }
+  function selectJoint(j) {
+    const P0 = plan();
+    if (j > 0 && j < P0.n) {
+      fsel.joint = j; fsel.seg = null; $('fibJoint').value = j; syncUI(); draw(last); focusBox('fibJointBox');
+      note(`Segment ${j}–${j + 1} arasındaki kesi seçildi; açısını aşağıdan ayarlayın.`); return;
+    }
+    // the graft's two ends are cut to the mandible's own planes: those are edited on the mandible
+    const E = St.resEnds(), end = j === 0 ? E && E.A : E && E.B;
+    const k = end && !end.virtual ? St.planesWorld().findIndex(q => Math.abs(q.off - end.off) < 1e-6 && q.N.distanceTo(end.N) < 1e-6) : -1;
+    fsel.joint = j; fsel.seg = null; draw(last);
+    if (k >= 0) { St.select('p' + k); setActive('m', true); note(`Bu uç mandibuladaki Kesi ${k + 1} ile aynı düzlemde; açısını mandibulada değiştirince fibula da güncellenir.`); }
+    else note('Bu uç kondile bağlı; mandibula tarafındaki kesiyle değişir.');
+  }
+  // which labelled bone is at a world point (a small neighbourhood vote)
+  function labelAt(q) {
+    const r = F.red, c = G.indexOf(r, [q.x, q.y, q.z]).map(Math.round), votes = new Map();
+    for (let dk = -2; dk <= 2; dk++) for (let dj = -2; dj <= 2; dj++) for (let di = -2; di <= 2; di++) {
+      const i = c[0] + di, j = c[1] + dj, k = c[2] + dk; if (i < 0 || j < 0 || k < 0 || i >= r.nx || j >= r.ny || k >= r.nz) continue;
+      const l = F.labels[i + r.nx * (j + r.ny * k)]; if (l > 0) votes.set(l, (votes.get(l) || 0) + 1);
+    }
+    return votes.size ? [...votes.entries()].sort((a, b) => b[1] - a[1])[0][0] : 0;
+  }
+  function useCandidate(c, extra) {
+    let i = F.cands.indexOf(c); if (i < 0) { F.cands.push(c); i = F.cands.length - 1; }
+    $('fibCand').innerHTML = F.cands.map((x, k) => `<option value="${k}" title="Taraf tahminidir">${x.picked ? 'Seçilen' : 'Aday ' + (k + 1)} · ${fmt(x.len, 0)} mm · Ø${fmt(2 * x.rad, 0)} · ${x.C.x > 0 ? 'sol' : 'sağ'}</option>`).join('');
+    setCandidate(i); $('fibCand').value = i;
+    if (active()) { const P0 = plan(); P0.cand = F.c.centroid.map(x => Math.round(x * 10) / 10); Object.assign(P0, extra || {}); guideKey = ''; edited(false, true); setView(view); }
+  }
+  function boneClick(q) {
+    const l = labelAt(q); if (!l) { note('Tıklanan yerde kemik yok.'); return; }
+    if (fsel.mode === 'pick') {
+      endMode();
+      let c = F.cands.find(x => x.label === l);
+      if (!c) { c = boneStats(F.red, F.labels, [{ label: l }])[0]; c.picked = true; c.tibia = (F.c && F.cands[F.c.i] && F.cands[F.c.i].tibia && F.cands[F.c.i].tibia.label !== l) ? F.cands[F.c.i].tibia : null; }
+      useCandidate(c); note(`Fibula olarak seçildi (${fmt(c.len, 0)} mm, Ø${fmt(2 * c.rad, 0)} mm).`); return;
+    }
+    if (!fsel.first) { fsel.first = q.clone(); fsel.firstL = l; marker(q, 0x46c98b); note('Şimdi aynı parçada tibiaya tıklayın.'); return; }
+    const pf = fsel.first, lf = fsel.firstL; endMode();
+    if (l !== lf) { note('İki tıklama aynı (birleşik) kemik parçasında olmalı. Ayrı parçalarsa "Fibulayı modelde seç"i kullanın.'); return; }
+    const out = splitLeg(pf, q); if (!out) { note('Ayrılamadı; tıklamaları kemik gövdesinin ortasına yakın yapın.'); return; }
+    useCandidate(out, { legSplit: { f: pf.toArray().map(x => Math.round(x * 10) / 10), t: q.toArray().map(x => Math.round(x * 10) / 10) } });
+    note('Fibula tibiadan ayrıldı.');
+  }
+  // seeded split of one joined piece into fibula (seed at pf) and tibia (seed at pt); returns the fibula candidate
+  function splitLeg(pf, pt) {
+    const r = F.red, l = labelAt(pf); if (!l || labelAt(pt) !== l) return null;
+    const n = r.nx * r.ny * r.nz, dom = new Uint8Array(n), seeds = new Uint8Array(n);
+    for (let v = 0; v < n; v++) if (F.labels[v] === l) dom[v] = 1;
+    [[pf, 1], [pt, 2]].forEach(([q, val]) => {
+      const c = G.indexOf(r, [q.x, q.y, q.z]), rad = r.sp.map(x => Math.ceil(5 / x));
+      for (let k = Math.round(c[2]) - rad[2]; k <= Math.round(c[2]) + rad[2]; k++) for (let j = Math.round(c[1]) - rad[1]; j <= Math.round(c[1]) + rad[1]; j++) for (let i = Math.round(c[0]) - rad[0]; i <= Math.round(c[0]) + rad[0]; i++) {
+        if (i < 0 || j < 0 || k < 0 || i >= r.nx || j >= r.ny || k >= r.nz) continue;
+        const v = i + r.nx * (j + r.ny * k); if (dom[v] && ((i - c[0]) * r.sp[0]) ** 2 + ((j - c[1]) * r.sp[1]) ** 2 + ((k - c[2]) * r.sp[2]) ** 2 <= 25) seeds[v] = val;
+      }
+    });
+    const { lab } = G.splitSeeds(r, dom, seeds, THR);
+    let mx = 0; for (let v = 0; v < n; v++) if (F.labels[v] > mx) mx = F.labels[v];
+    let nf = 0, nt = 0;
+    for (let v = 0; v < n; v++) { if (lab[v] === 1) { F.labels[v] = mx + 1; nf++; } else if (lab[v] === 2) { F.labels[v] = mx + 2; nt++; } }
+    if (nf < 100 || nt < 100) return null;
+    const [cf, ct] = boneStats(r, F.labels, [{ label: mx + 1 }, { label: mx + 2 }]);
+    cf.tibia = ct; cf.picked = true; F.split = true; return cf;
+  }
+  // all bones of the leg scan, faint, while a bone is being picked
+  function showAll(on) {
+    leg.children.filter(o => o.userData.all).forEach(o => { leg.remove(o); o.geometry.dispose(); o.material.dispose(); });
+    if (on) {
+      const r = F.red, m = new Uint8Array(F.labels.length); for (let v = 0; v < m.length; v++) if (F.labels[v] > 0) m[v] = 1;
+      const o = onLeg(St.meshFromNets(G.surfaceNets(G.blur(m, r.nx, r.ny, r.nz), r.nx, r.ny, r.nz), (x, y, z) => G.worldOf(r, x, y, z), mat(0x9aa5b1, { transparent: true, opacity: 0.35, depthWrite: false })));
+      o.userData.all = true; o.userData.keep = true;
+    }
+    St.render();
+  }
+  function marker(q, color) { const m = onLeg(new THREE.Mesh(new THREE.SphereGeometry(3, 12, 8), new THREE.MeshBasicMaterial({ color, depthTest: false }))); m.position.copy(q); m.userData.keep = true; m.userData.marker = true; St.render(); }
+  function startMode(m) {
+    if (!F || !F.c) return;
+    if (fsel.mode === m) { endMode(); note(''); return; }
+    endMode(); fsel.mode = m; fsel.first = null;
+    if (view === 'm') setView(active() ? 's' : 'f');
+    showAll(true); setActive('f');
+    $('fibPick').setAttribute('aria-pressed', m === 'pick'); $('fibSplit').setAttribute('aria-pressed', m === 'split');
+    note(m === 'pick' ? 'Fibula görünümünde fibula olacak kemiğe tıklayın.' : 'Birleşik görünen kemikte önce fibulaya, sonra tibiaya tıklayın.');
+  }
+  function endMode() {
+    fsel.mode = null; fsel.first = null; if (!F) return;
+    leg.children.filter(o => o.userData.marker).forEach(o => { leg.remove(o); o.geometry.dispose(); o.material.dispose(); });
+    showAll(false); $('fibPick').setAttribute('aria-pressed', 'false'); $('fibSplit').setAttribute('aria-pressed', 'false');
+  }
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && fsel.mode) { endMode(); note(''); } });
+  // opening a step makes its structure the active one
+  document.querySelectorAll('details.step[name="flow"]').forEach(d => d.addEventListener('toggle', () => { if (d.open && S.split) setActive(d.id === 'st4' ? 'f' : 'm'); }));
+
   // ---------- wiring ----------
   $('fibSample').addEventListener('click', () => start('sample'));
   $('fibDicom').addEventListener('change', e => { if (e.target.files.length) start('dicom', [...e.target.files]); e.target.value = ''; });
   $('fibCand').addEventListener('change', e => { setCandidate(+e.target.value); plan().cand = F.c.centroid.map(x => Math.round(x * 10) / 10); guideKey = ''; edited(false, true); setView(view); });
   document.querySelectorAll('#fibN button').forEach(b => b.addEventListener('click', () => { if (!active()) return; setN(+b.dataset.n); update(); optimizeKnots(); edited(false, true); }));
   $('fibOpt').addEventListener('click', () => { if (!active()) return; optimizeKnots(); edited(false, true); });
+  $('fibPick').addEventListener('click', () => startMode('pick'));
+  $('fibSplit').addEventListener('click', () => startMode('split'));
   $('fibJoint').addEventListener('change', syncUI);
   [['fibYaw', 'yaw'], ['fibPitch', 'pitch']].forEach(([id, key]) => {
     $(id).addEventListener('input', e => { const j = +$('fibJoint').value; plan()[key][j] = +e.target.value; $(id + 'O').textContent = fmt(+e.target.value, 0) + '°'; edited(true); });
@@ -524,6 +668,6 @@ window.Fibula = (function () {
   // fibula guide edits from the guide panel: drop the cached key so the guide is rebuilt
   function guideEdited() { guideKey = ''; scheduleGuide(); renderStep(); St.emit('changed'); }
   const guideInfo = () => (active() && last ? { auto: guideAuto(last), body: guideBody(last), screws: guideScrews(last), segs: last.segs, FR: F.c.FR } : null);
-  return { summary: () => (active() ? summary() : null), view: () => view, active, approved, checks, apply, exportFiles, reportHTML, production, setView, state: () => ({ F, last, view }),
+  return { setActive, activePane: () => activePane, summary: () => (active() ? summary() : null), view: () => view, active, approved, checks, apply, exportFiles, reportHTML, production, setView, state: () => ({ F, last, view }),
     graftBone, fibBone: q => (F && F.c ? fibBone(q) : false), guideInfo, guideEdited, plan: () => (active() ? plan() : null), building: () => building };
 })();

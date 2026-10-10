@@ -502,6 +502,7 @@
     pt.visible = !S.resRemoved; pt.obj.visible = pt.visible;
   }
   function syncSeq() {
+    if ($('gRotBox')) $('gRotBox').hidden = !S.guideOn;
     const has = !!S.anchor && S.planes.length > 0, gOn = S.guideOn && !!S.anchor;
     $('resRemove').disabled = !has;
     $('resRemove').innerHTML = S.resRemoved ? '<svg class="i"><use href="#i-eye"/></svg>Rezeke parçayı geri göster' : '<svg class="i"><use href="#i-trash"/></svg>Rezeksiyon bölgesini sil';
@@ -1191,13 +1192,18 @@
     if (window.SegEdit && SegEdit.tool()) return;
     if (window.Lesion && Lesion.active()) return;
     if (window.Masks && Masks.tool()) return;
+    if (!camera.layers.isEnabled(0)) return;   // fibula-only view: Fibula handles the clicks
     if (window.Tools && Tools.click(e, ray)) return;
     if (S.mode === 'orbit') {
       // click a screw or a cut disc to select it (screws first: they sit inside the discs)
       const els = Object.values(parts).filter(pt => pt.visible && /^(screw|plane)\d/.test(pt.id));
       const hits = ray.intersectObjects(els.map(pt => pt.obj), false);
       const h = hits.find(x => els.find(pt => pt.obj === x.object).id.startsWith('screw')) || hits[0];
-      if (h) { const id = els.find(pt => pt.obj === h.object).id; select((id.startsWith('screw') ? 's' : 'p') + id.replace(/\D/g, '')); }
+      if (h) { const id = els.find(pt => pt.obj === h.object).id; select((id.startsWith('screw') ? 's' : 'p') + id.replace(/\D/g, '')); return; }
+      // the guide body: select it to turn it with the ring
+      const gh = parts.guide && parts.guide.visible && S.guideOn && ray.intersectObject(parts.guide.obj, true)[0];
+      if (gh) { if (S.sel) select(null); S.guideSel = true; syncGizmo(); emit('guideSel', true); }
+      else if (S.guideSel) { S.guideSel = false; syncGizmo(); emit('guideSel', false); }
       return;
     }
     const targets = ['bone', 'resected', 'guide'].filter(k => parts[k] && parts[k].visible).map(k => parts[k].obj);
@@ -1227,8 +1233,8 @@
     gizmo.addEventListener('dragging-changed', e => {
       controls.enabled = !e.value;
       if (e.value) { gz.used = true; gz.start = gizmoStart(); return; }
-      const moved = gz.start && gz.start.moved; gz.start = null;
-      if (moved) schedule(S.sel && S.sel[0] === 'p', false); syncGizmo();
+      const moved = gz.start && gz.start.moved, wasGuide = gz.start && gz.start.guide; gz.start = null;
+      if (moved) schedule(wasGuide || (S.sel && S.sel[0] === 'p'), false); syncGizmo();
     });
     gizmo.addEventListener('objectChange', () => { if (gz.start) gizmoApply(); });
   }
@@ -1240,6 +1246,15 @@
   function syncGizmo() {
     if (!gizmo) return;
     const so = selObj(), fib = S.split || (window.Fibula && Fibula.active && Fibula.active() && camera.layers.isEnabled(1));
+    // the guide itself: a ring about its seating normal turns it on the bone (Guide ekseni dönüşü)
+    if (S.guideSel && !(S.guideOn && S.anchor && parts.guide)) S.guideSel = false;
+    if (S.guideSel && !fib) {
+      $('gizmoSeg').hidden = true; $('dragBox').hidden = true;
+      if (gz.start) return;
+      const { u, v, n } = frameAxes();
+      proxy.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(u, v, n)); proxy.position.copy(S.anchor.p); proxy.updateMatrixWorld();
+      gizmo.setMode('rotate'); gizmo.showX = false; gizmo.showY = false; gizmo.showZ = true; gizmo.attach(proxy); render(); return;
+    }
     $('gizmoSeg').hidden = !so; $('dragBox').hidden = !(so && so.isP);
     if (!so || fib) { gizmo.detach(); render(); return; }
     if (gz.start) return;
@@ -1256,13 +1271,25 @@
     gizmo.attach(proxy); render();
   }
   function gizmoStart() {
+    if (S.guideSel) { const { u, v } = frameAxes(); return { guide: true, q0: proxy.quaternion.clone(), rot0: S.g.rot, u0: u, v0: v, key: String(S.g.rot) }; }
     const so = selObj(); if (!so) return null;
     const o = so.o, st = { so, p0: proxy.position.clone(), q0: proxy.quaternion.clone(), o0: Object.assign({}, o), key: [o.off, o.yaw, o.pitch, o.u, o.v, o.tiltU, o.tiltV].join() };
     if (so.isP) st.N0 = planesWorld()[so.i].N.clone(); else st.d0 = screwWorld(so.o).dir.clone();
     return st;
   }
   const clampR = (x, a, b, st) => Math.max(a, Math.min(b, Math.round(x / st) * st));
+  function setGuideRot(r) {
+    r = clampR(r, -90, 90, 1); if (r === S.g.rot) return false;
+    S.g.rot = r; unapproveAll(); updateLesionPart();
+    if (S.guideOn && S.screws.length) S.screwRefit = true;
+    S.refit = true; syncGuideInputs(); schedule(true, true); return true;
+  }
   function gizmoApply() {
+    if (gz.start.guide) {
+      const { q0, rot0, u0, v0 } = gz.start, dq = proxy.quaternion.clone().multiply(q0.clone().invert()), nu = u0.clone().applyQuaternion(dq);
+      if (setGuideRot(rot0 + THREE.MathUtils.radToDeg(Math.atan2(nu.dot(v0), nu.dot(u0))))) gz.start.moved = true;
+      return;
+    }
     const { so, p0, q0, o0 } = gz.start, o = so.o, { u, v, n } = frameAxes();
     const d = proxy.position.clone().sub(p0), dq = proxy.quaternion.clone().multiply(q0.clone().invert());
     if (so.isP) {
@@ -1298,6 +1325,7 @@
     else if (e.key === 'e' || e.key === 'E') setGizmoMode('rotate');
     else if (e.key === 'Escape' && S.mode !== 'orbit') { S.autoAfter = false; setMode('orbit'); }
     else if (e.key === 'Escape' && S.sel && !gz.start) select(null);
+    else if (e.key === 'Escape' && S.guideSel && !gz.start) { S.guideSel = false; syncGizmo(); }
   });
   // ---------- direct drag on the model: grab a cut disc or a screw and slide it ----------
   // A cut slides along the bone ("Kemik boyunca": the mandibular arch, the cut stays at the same angle to the
@@ -1418,6 +1446,7 @@
   const gFields = [['rot', 'Guide ekseni dönüşü', -90, 90, 1, '°'], ['L', 'Uzunluk', 16, 100, 1, 'mm'], ['W', 'Genişlik', 10, 40, 1, 'mm'], ['wrap', 'Sarma derinliği', 2, 20, 0.5, 'mm'], ['wall', 'Duvar kalınlığı', 1.5, 5, 0.1, 'mm'], ['clear', 'Kemik boşluğu', 0, 1, 0.05, 'mm'], ['bridge', 'Köprü genişliği', 2, 10, 0.5, 'mm'], ['flange', 'Yakalama kenarı (kesi ötesinde)', 2, 8, 0.5, 'mm'], ['peri', 'Periost payı (boşluğa eklenir)', 0, 1, 0.05, 'mm']];
   $('gCtl').innerHTML = gFields.map(([k, t, mn, mx, st]) => `<div class="ctl" id="gc_${k}"><div class="ctl-row"><label for="g_${k}">${t}</label><output id="go_${k}"></output></div><input type="range" id="g_${k}" min="${mn}" max="${mx}" step="${st}"></div>`).join('');
   function syncGuideInputs() {
+    if ($('gRot3')) { $('gRot3').value = S.g.rot; $('gRot3O').textContent = `${fmt(S.g.rot, 0)}°`; $('gRotBox').hidden = !S.guideOn; }
     gFields.forEach(([k, , , , st, unit]) => { $('g_' + k).value = S.g[k]; $('go_' + k).textContent = `${fmt(S.g[k], st < 1 ? (st < 0.1 ? 2 : 1) : 0)} ${unit}`; });
     $('g_side').value = String(S.g.side); $('g_split').value = String(S.g.split ? 1 : 0);
     $('gc_flange').hidden = !S.g.split; $('gc_bridge').hidden = !!S.g.split; $('g_side').closest('.ctl').hidden = !!S.g.split;
@@ -1440,6 +1469,7 @@
     syncGuideInputs(); schedule(k === 'rot', true);
   }));
   $('g_side').addEventListener('change', e => { S.g.side = +e.target.value; schedule(false); });
+  $('gRot3').addEventListener('input', e => setGuideRot(+e.target.value));
   $('g_split').addEventListener('change', e => { S.g.split = +e.target.value; syncGuideInputs(); unapproveAll(); schedule(false); });
   $('resType').addEventListener('change', async e => {
     const side = e.target.value || null;
@@ -1713,8 +1743,8 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     await applyPlan(plan); return true;
   }
   function serverUrl() { return ($('aiUrl').value || '').trim().replace(/\/+$/, ''); }
-  function select(sel) { S.sel = sel; emit('select', sel); renderElements(); rebuildElementParts(S.result ? S.result.pls : planesWorld(), S.result ? S.result.screwInfo : []); applyExplode(); render(); }
-  window.Studio = { renderComps, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, resEnds, splitGap, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr };
+  function select(sel) { if (sel) S.guideSel = false; S.sel = sel; emit('select', sel); renderElements(); rebuildElementParts(S.result ? S.result.pls : planesWorld(), S.result ? S.result.screwInfo : []); applyExplode(); render(); }
+  window.Studio = { renderComps, setGuideRot, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, resEnds, splitGap, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr };
   bus.addEventListener('planeDragged', () => { renderElements(); schedule(true, true); });
   emit('ready');
 
