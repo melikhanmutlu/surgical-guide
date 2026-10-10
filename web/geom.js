@@ -216,5 +216,48 @@ const G = (() => {
     return { positions: pos.slice(0, np), indices: idx.slice(0, ni) };
   }
 
-  return { worldOf, indexOf, reduce, threshold, components, exterior, edt, blur, surfaceNets };
+
+  // seeded split of a bone mask (Mimics "Split Mask"): every voxel of the domain goes to the seed that reaches it with
+  // the cheapest path; a step into dense bone costs 1, a step through low density (the thin contact between teeth, a
+  // joint) costs up to 1 + W, so the border between two layers settles in the contact surface. Dial's bucket queue on
+  // the domain's bounding box. seeds: 0 none, 1..255 layer; returns { lab (Uint8, full grid), box }.
+  function splitSeeds(red, dom, seeds, lo = 250, hi = 1100, W = 12) {
+    const { nx, ny, nz, hu } = red, N = nx * ny * nz;
+    let b = [nx, ny, nz, -1, -1, -1];
+    for (let k = 0, v = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++, v++) if (dom[v]) {
+      if (i < b[0]) b[0] = i; if (j < b[1]) b[1] = j; if (k < b[2]) b[2] = k; if (i > b[3]) b[3] = i; if (j > b[4]) b[4] = j; if (k > b[5]) b[5] = k;
+    }
+    const lab = new Uint8Array(N); if (b[3] < 0) return { lab, box: null };
+    const sx = b[3] - b[0] + 1, sy = b[4] - b[1] + 1, sz = b[5] - b[2] + 1, M = sx * sy * sz;
+    const dist = new Uint16Array(M).fill(65535), sl = new Uint8Array(M), done = new Uint8Array(M), cost = new Uint8Array(M);
+    const C = W + 2, buckets = Array.from({ length: C }, () => []);
+    const full = (i, j, k) => (i + b[0]) + nx * ((j + b[1]) + ny * (k + b[2]));
+    for (let k = 0, m = 0; k < sz; k++) for (let j = 0; j < sy; j++) for (let i = 0; i < sx; i++, m++) {
+      const v = full(i, j, k); if (!dom[v]) continue;
+      cost[m] = 1 + Math.round(W * Math.min(1, Math.max(0, (hi - hu[v]) / (hi - lo))));
+      if (seeds[v]) { dist[m] = 0; sl[m] = seeds[v]; buckets[0].push(m); }
+    }
+    let d = 0, left = buckets[0].length;
+    const sxy = sx * sy;
+    while (left > 0) {
+      const q = buckets[d % C];
+      if (!q.length) { d++; continue; }
+      const m = q.pop(); left--;
+      if (done[m] || dist[m] !== Math.min(d, 65535)) continue;
+      done[m] = 1;
+      const i = m % sx, j = ((m / sx) | 0) % sy, k = (m / sxy) | 0;
+      for (let a = 0; a < 6; a++) {
+        let n;
+        if (a === 0) { if (i === 0) continue; n = m - 1; } else if (a === 1) { if (i === sx - 1) continue; n = m + 1; }
+        else if (a === 2) { if (j === 0) continue; n = m - sx; } else if (a === 3) { if (j === sy - 1) continue; n = m + sx; }
+        else if (a === 4) { if (k === 0) continue; n = m - sxy; } else { if (k === sz - 1) continue; n = m + sxy; }
+        if (!cost[n] || done[n]) continue;
+        const nd = Math.min(65534, d + cost[n]);
+        if (nd < dist[n]) { dist[n] = nd; sl[n] = sl[m]; buckets[nd % C].push(n); left++; }
+      }
+    }
+    for (let k = 0, m = 0; k < sz; k++) for (let j = 0; j < sy; j++) for (let i = 0; i < sx; i++, m++) if (sl[m]) lab[full(i, j, k)] = sl[m];
+    return { lab, box: b };
+  }
+  return { worldOf, indexOf, reduce, threshold, components, exterior, edt, blur, surfaceNets, splitSeeds };
 })();

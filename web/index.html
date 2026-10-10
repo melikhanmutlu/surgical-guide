@@ -268,6 +268,12 @@ button.link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2p
 .layers { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .layers .lay { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 8px; align-items: center; border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font-size: 13px; }
 .layers .lay label { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.layers.mk .lay { grid-template-columns: minmax(0, 1fr) auto auto; }
+.layers .lay.on { border-color: var(--accent, #46c98b); }
+.layers .mk-name { border: 0; background: transparent; color: var(--fg); font: inherit; min-width: 0; width: 100%; padding: 1px 2px; }
+.layers .mk-name:focus { background: var(--sunken); outline: 1px solid var(--line-strong); }
+.layers .eye { height: 22px; width: 26px; padding: 0; margin-left: 4px; vertical-align: middle; }
+.layers .eye[aria-pressed="false"] { opacity: .45; }
 .layers .lay i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: none; }
 .layers .lay .hu { font-size: 12px; white-space: nowrap; display: flex; align-items: center; gap: 3px; }
 .layers .lay .hu input { width: 58px; padding: 2px 4px; font-size: 12px; }
@@ -454,6 +460,7 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
             <p class="hint">Küçültülmüş hacim sitenin sunucusunda segmente edilir.</p>
           </div>
           <div class="ctl" id="thrBox"><div class="ctl-row"><label for="thr">Kemik eşiği</label><output id="thrO">250 HU</output></div><input type="range" id="thr" min="120" max="800" step="10" value="250"></div>
+          <div id="maskBox" class="col"></div>
           <div id="comps" class="col" style="gap:3px"></div>
           <div id="segEdit" class="col"></div>
           <div id="refBox" class="col"></div>
@@ -709,3 +716,4 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
 <script src="postop.js"></script>
 <script src="lesion.js"></script>
 <script src="layers.js"></script>
+<script src="masks.js"></script>

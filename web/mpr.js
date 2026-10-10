@@ -228,7 +228,7 @@
     c.addEventListener('dblclick', () => { st.max = st.max === v.id ? null : v.id; layout(); });
   }
   // slice painting tools: lesion brush, segmentation brush / eraser
-  const painter = () => (window.Lesion && Lesion.active() ? Lesion : window.SegEdit && SegEdit.active() ? SegEdit : null);
+  const painter = () => (window.Masks && Masks.tool() ? Masks : window.Lesion && Lesion.active() ? Lesion : window.SegEdit && SegEdit.active() ? SegEdit : null);
   function moveCursor(v, X, Y) { const T = xf(v); setCursor(imgToIdx(v, T.ix(X), T.iy(Y))); }
   function dragPlane(v, i, X, Y) {
     const T = xf(v), w = toWorld(imgToIdx(v, T.ix(X), T.iy(Y))), q = V(...w), pw = St.planesWorld()[i], { u } = St.frameAxes();

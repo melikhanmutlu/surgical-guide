@@ -111,6 +111,7 @@ window.Lesion = (function () {
     if (tool) {
       if (St.S.mode !== 'orbit') St.setMode('orbit');
       if (window.SegEdit) SegEdit.off();
+      if (window.Masks) Masks.off();
       if (window.Measure && Measure.active()) $('toolMeasure').click();
       // painting happens on the slices: make sure they are on screen
       if ($('vm3d') && $('vm3d').getAttribute('aria-pressed') === 'true') $('vmStrip').click();

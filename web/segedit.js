@@ -191,6 +191,7 @@ window.SegEdit = (function () {
     tool = tool === t ? null : t;
     if (tool && window.Measure && Measure.active()) $('toolMeasure').click();
     if (tool && window.Lesion) Lesion.off();
+    if (tool && window.Masks) Masks.off();
     St.controls.enabled = !tool; cv.style.cursor = tool ? 'crosshair' : '';
     document.querySelectorAll('#seTools [data-t]').forEach(b => b.setAttribute('aria-pressed', b.dataset.t === tool));
     const b = $('modeBadge');

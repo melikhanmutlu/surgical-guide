@@ -359,11 +359,14 @@
     const m = G.threshold(r, thr);
     const { labels, comps } = G.components(m, r.nx, r.ny, r.nz, 200);
     S.labels = labels; S.comps = comps.slice(0, 8); S.compNames = null; S.segMethod = `Eşik ${thr} HU (tarayıcı)`;
-    if (autoSelect || ![...S.selected].some(l => S.comps.find(c => c.label === l))) S.selected = new Set(S.comps.length ? [S.comps[0].label] : []);
+    // painted layer marks (Masks) split the threshold mask into layers and choose the planning bone
+    const split = window.Masks ? Masks.relabel() : false;
+    if (!split && (autoSelect || ![...S.selected].some(l => S.comps.find(c => c.label === l)))) S.selected = new Set(S.comps.length ? [S.comps[0].label] : []);
     renderComps();
     await rebuildBone(true);
   }
   function renderComps() {
+    if (window.Masks) { Masks.renderList(); return; }
     const vox = S.red.sp[0] * S.red.sp[1] * S.red.sp[2] / 1000;
     $('comps').innerHTML = S.comps.map((c, i) => `<label class="comp"><input type="checkbox" data-l="${c.label}" ${S.selected.has(c.label) ? 'checked' : ''}> ${S.compNames ? S.compNames[c.label] || 'Yapı ' + (i + 1) : 'Yapı ' + (i + 1)} <span>${fmt(c.size * vox)} cm³</span></label>`).join('') || '<p class="hint">Eşiğin üstünde yapı bulunamadı.</p>';
     $('comps').querySelectorAll('input').forEach(el => el.addEventListener('change', async () => {
@@ -401,7 +404,7 @@
     if (frame && parts.bone) fitTo(parts.bone.obj);
     if (S.kind && !S.anchor && S.autoAnchor !== false) presetCase();
     else if (S.anchor) await regenerate();
-    busy(false); render();
+    busy(false); render(); emit('bone');
   }
   const toWorldRed = (x, y, z) => G.worldOf(S.red, x, y, z);
 
@@ -1177,6 +1180,7 @@
     ray.setFromCamera(mouse, camera);
     if (window.SegEdit && SegEdit.tool()) return;
     if (window.Lesion && Lesion.active()) return;
+    if (window.Masks && Masks.tool()) return;
     if (window.Tools && Tools.click(e, ray)) return;
     if (S.mode === 'orbit') {
       // click a screw or a cut disc to select it (screws first: they sit inside the discs)
@@ -1313,7 +1317,7 @@
     o.off = clampR(off, -45, 45, 0.5); o.yaw = clampR(yaw, -80, 80, 0.5); o.pitch = clampR(pitch, -80, 80, 0.5);
   }
   renderer.domElement.addEventListener('pointerdown', e => {
-    if (e.button !== 0 || S.mode !== 'orbit' || !S.anchor || (gizmo && (gizmo.dragging || gizmo.axis)) || (window.SegEdit && SegEdit.tool()) || (window.Lesion && Lesion.active())) return;
+    if (e.button !== 0 || S.mode !== 'orbit' || !S.anchor || (gizmo && (gizmo.dragging || gizmo.axis)) || (window.SegEdit && SegEdit.tool()) || (window.Lesion && Lesion.active()) || (window.Masks && Masks.tool())) return;
     if (window.Fibula && Fibula.active && Fibula.active() && camera.layers.isEnabled(1)) return;
     const r = pickAt(e); if (!r) return;
     const els = Object.values(parts).filter(pt => pt.visible && /^(screw|plane)\d/.test(pt.id));
@@ -1699,7 +1703,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   }
   function serverUrl() { return ($('aiUrl').value || '').trim().replace(/\/+$/, ''); }
   function select(sel) { S.sel = sel; emit('select', sel); renderElements(); rebuildElementParts(S.result ? S.result.pls : planesWorld(), S.result ? S.result.screwInfo : []); applyExplode(); render(); }
-  window.Studio = { planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, resEnds, splitGap, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr };
+  window.Studio = { renderComps, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, resEnds, splitGap, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr };
   bus.addEventListener('planeDragged', () => { renderElements(); schedule(true, true); });
   emit('ready');
 
