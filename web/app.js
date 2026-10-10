@@ -533,6 +533,20 @@
       : `Guide oluşturuldu, ${S.screws.length} vida yerleştirildi.` + (f.split ? ' Kavisli kemik nedeniyle iki ayrı guide seçildi.' : '') + (f.wrap < (S.kind === 'leg' ? 6 : 5) ? ` Takılabilsin diye sarma derinliği ${fmt(f.wrap, 1)} mm'ye indirildi.` : '');
     syncSeq();
   }
+  // one button: region (sample spot, painted lesion, or one click on the model), cuts, resected piece removed, guide
+  async function autoPrep() {
+    if (!S.red || !parts.bone) return;
+    const pts = window.Lesion && Lesion.points ? Lesion.points() : [];
+    if (pts.length) { await Lesion.plan(); }
+    else if (!S.anchor) {
+      const pr = S.presetRay, hit = pr && new THREE.Raycaster(pr.from, pr.dirv).intersectObject(parts.bone.obj, false)[0];
+      if (!hit) { S.autoAfter = true; setMode('anchor'); alertMsg('Modelde rezeksiyon bölgesine bir kez tıklayın; gerisi otomatik yapılacak.'); return; }
+      setAnchor(hit.point.clone(), pr.dirv.clone().negate()); suggest();
+    }
+    if (!S.planes.length) suggest();
+    S.resRemoved = true; showResected();
+    await makeGuide();
+  }
   function deleteGuide() {
     S.guideOn = false; S.screws = []; S.sel = null; $('guideStat').textContent = 'Guide silindi. Kesiler duruyor.';
     schedule(false); syncSeq();
@@ -1184,6 +1198,7 @@
       if (nrm.dot(ray.ray.direction) > 0) nrm.negate();
       setAnchor(hit.point.clone(), nrm);
       setMode('orbit'); suggest();
+      if (S.autoAfter) { S.autoAfter = false; autoPrep(); }
     } else if (S.mode === 'screw' && S.anchor) {
       const { u, v } = frameAxes(), d = hit.point.clone().sub(S.anchor.p);
       S.screws.push(Object.assign({ u: Math.round(d.dot(u) * 2) / 2, v: Math.round(d.dot(v) * 2) / 2, tiltU: 0, tiltV: 0, ok: false }, SCREW_DEFAULT[S.kind] || SCREW_DEFAULT.dicom));
@@ -1271,7 +1286,7 @@
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.key === 'w' || e.key === 'W') setGizmoMode('translate');
     else if (e.key === 'e' || e.key === 'E') setGizmoMode('rotate');
-    else if (e.key === 'Escape' && S.mode !== 'orbit') setMode('orbit');
+    else if (e.key === 'Escape' && S.mode !== 'orbit') { S.autoAfter = false; setMode('orbit'); }
     else if (e.key === 'Escape' && S.sel && !gz.start) select(null);
   });
   // ---------- direct drag on the model: grab a cut disc or a screw and slide it ----------
@@ -1373,6 +1388,7 @@
   function presetCase() {
     const bone = parts.bone.obj, box = new THREE.Box3().setFromObject(bone), c = box.getCenter(V());
     let from, dirv, lesion, g;
+    S.presetRay = null;
     if (S.kind === 'mandible') {
       from = V(c.x, box.min.y - 40, box.min.z + 11); dirv = V(0, 1, 0);
       lesion = { from: -8, to: 8, margin: 3 };
@@ -1382,8 +1398,8 @@
       lesion = { from: -1, to: 3, margin: 3 };
       g = { rot: 0, L: 44, W: 20, wrap: 6, wall: 2.5, clear: 0.3, bridge: 4, side: 1 };
     } else return;
-    // sample defaults only; the region is picked on the model in the resection step
-    void from; void dirv;
+    // sample defaults only; the region is picked on the model (or by 'Otomatik hazırla', which uses this spot)
+    S.presetRay = { from, dirv };
     Object.assign(S.g, g); syncGuideInputs(); Object.assign(S.lesion, lesion); syncLesion();
     setTimeout(() => fitTo(parts.bone.obj), 50);
   }
@@ -1422,9 +1438,10 @@
   $('thr').addEventListener('change', () => { unapproveAll(); segment(false); });
   $('softOn').addEventListener('change', e => { if (parts.soft) { parts.soft.visible = e.target.checked; parts.soft.obj.visible = e.target.checked; renderParts(); render(); } });
   $('serSel').addEventListener('change', e => switchSeries(+e.target.value));
-  $('pickAnchor').addEventListener('click', () => { if (S.red) setMode('anchor'); });
+  $('pickAnchor').addEventListener('click', () => { S.autoAfter = false; if (S.red) setMode('anchor'); });
   $('resRemove').addEventListener('click', () => { S.resRemoved = !S.resRemoved; showResected(); syncSeq(); renderParts(); render(); emit('changed'); });
   $('guideMake').addEventListener('click', makeGuide);
+  $('autoPrep').addEventListener('click', autoPrep);
   $('gMake2').addEventListener('click', makeGuide);
   $('guideDel').addEventListener('click', deleteGuide);
   $('planReset').addEventListener('click', resetPlan);
