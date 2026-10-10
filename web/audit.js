@@ -93,7 +93,7 @@ window.Audit = (function () {
   function block(role, h) {
     const s = status(role, h), name = role === 'sur' ? $('surgeon').value.trim() : engName;
     return `<div class="audit-b"><b>${role === 'eng' ? '1 · Teknik onay (mühendis)' : '2 · Klinik onay (cerrah)'}</b><p class="hint">${stTxt(role, h)}</p>
-      ${role === 'eng' ? `<div class="ctl"><label for="au_eng_n" class="lbl2">Mühendis</label><input id="au_eng_n" type="text" placeholder="Ad Soyad" autocomplete="off" value="${esc(name)}"></div>` : `<p class="hint">Cerrah: ${name ? `<b>${esc(name)}</b>` : 'adı adımın başındaki "Cerrah" alanına yazın'}</p>`}
+      ${role === 'eng' ? `<div class="ctl"><label for="au_eng_n" class="lbl2">Mühendis</label><input id="au_eng_n" type="text" placeholder="Ad Soyad" autocomplete="off" value="${esc(name)}"></div>` : `<p class="hint">Cerrah: ${name ? `<b>${esc(name)}</b>` : 'adı girilmedi (adımın başında)'}</p>`}
       <div class="ctl"><label for="au_${role}_c" class="lbl2">Yorum</label><textarea id="au_${role}_c" rows="2" placeholder="${role === 'eng' ? 'Üretilebilirlik, tolerans, malzeme' : 'Klinik değerlendirme'}"></textarea></div>
       <div class="btns">${s.ok ? `<button data-a="geri" data-r="${role}">Onayı geri çek</button>` : `<button class="primary" data-a="onay" data-r="${role}"><svg class="i"><use href="#i-check"/></svg>${role === 'eng' ? 'Teknik onay ver' : 'Klinik onay ver'}</button>`}<button data-a="not" data-r="${role}">Not ekle</button></div></div>`;
   }
@@ -107,7 +107,7 @@ window.Audit = (function () {
       ${block('eng', h)}${block('sur', h)}
       <p class="hint" id="auMsg">${esc(note)}</p>
       <details class="sub-d"><summary>Onay geçmişi (${log.length})</summary>
-        <p class="hint">${chain.ok ? `Zincir doğrulandı${log.length ? ` · son özet ${esc(String(lastH).slice(0, 16))}` : ''}.` : `<b style="color:var(--crit)">Zincir ${chain.bad + 1}. kayıtta bozuk.</b>`} Plan özeti ${h.slice(0, 16)}.</p>
+        <p class="hint">${chain.ok ? `Zincir doğrulandı${log.length ? ` · ${esc(String(lastH).slice(0, 8))}` : ''}` : `<b style="color:var(--crit)">Zincir ${chain.bad + 1}. kayıtta bozuk.</b>`} · plan ${h.slice(0, 8)}</p>
         <ol class="aulog">${log.slice().reverse().map(e => `<li>${esc(when(e.at))} · ${esc(ROLE[e.role] || '')} ${esc(e.name)} ${esc(ACT[e.action] || '')}${e.comment ? `: “${esc(e.comment)}”` : ''}<small>#${Number(e.n) || 0} ${esc(String(e.hash || '').slice(0, 12))} · plan ${esc(String(e.plan || '').slice(0, 8))}</small></li>`).join('') || '<li>Kayıt yok.</li>'}</ol>
       </details>`;
     box.querySelectorAll('[data-a]').forEach(b => b.addEventListener('click', () => act(b.dataset.r, b.dataset.a)));

@@ -242,7 +242,7 @@ window.Masks = (function () {
   function status() {
     renderLayers();
     const c = counts();
-    $('mkStat').textContent = msg || (active ? 'Maske katmanlara ayrıldı. İşaret ekleyip yeniden ayırabilirsiniz.' : c.some((x, i) => i && x) ? 'İşaretler hazır; "Ayır"a basın.' : 'Henüz işaret yok.');
+    $('mkStat').textContent = msg || (active ? 'Katmanlara ayrıldı.' : c.some((x, i) => i && x) ? 'İşaretler hazır; "Ayır"a basın.' : '');
     $('mkRun').disabled = !hasSeeds(); $('mkClear').disabled = !hasSeeds() && !active;
     msg = '';
   }

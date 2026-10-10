@@ -200,7 +200,7 @@ window.SegEdit = (function () {
   }
   function status(msg) {
     const a = count(add), d = count(del), vox = S.red ? S.red.sp[0] * S.red.sp[1] * S.red.sp[2] / 1000 : 0;
-    $('seStat').innerHTML = (msg ? `${St.esc(msg.replace(/\.$/, ''))}. ` : '') + (a || d ? `Toplam: +${fmt(a * vox, 2)} cm³ eklendi, −${fmt(d * vox, 2)} cm³ çıkarıldı.` : 'Düzeltme yok; otomatik segmentasyon kullanılıyor.');
+    $('seStat').innerHTML = (msg ? `${St.esc(msg.replace(/\.$/, ''))}. ` : '') + (a || d ? `Toplam: +${fmt(a * vox, 2)} cm³ eklendi, −${fmt(d * vox, 2)} cm³ çıkarıldı.` : '');
     $('seReset').disabled = !(a || d);
   }
   $('segEdit').innerHTML = `<details class="sub-d"><summary>Elle düzeltme</summary>
