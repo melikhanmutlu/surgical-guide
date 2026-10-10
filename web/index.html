@@ -538,7 +538,7 @@ button.ghost.danger { color: var(--crit); }
           <p class="hint more">Dosyalar tarayıcıdan çıkmaz; mandibula serisini modele sürükleyip bırakabilirsiniz. Klasör, dosyalar ya da .zip seçebilirsiniz. Sıkıştırılmamış, RLE, JPEG, JPEG-LS ve JPEG 2000 BT okunur. <button class="link" id="sampleL">Bacak örneğini mandibula yerine aç</button></p>
           <div class="btns">
             <label class="filebtn"><svg class="i"><use href="#i-folder"/></svg>DICOM klasörü<input type="file" id="dicomDir" webkitdirectory multiple></label>
-            <label class="filebtn"><svg class="i"><use href="#i-files"/></svg>Dosyalar<input type="file" id="dicomFiles" multiple></label>
+            <label class="filebtn" title="DICOM dosyaları ya da .zip"><svg class="i"><use href="#i-files"/></svg>Dosya / .zip<input type="file" id="dicomFiles" multiple></label>
             <button id="sampleM" class="ghost"><svg class="i"><use href="#i-flask"/></svg>Örnek veri</button>
           </div>
           <p class="err" id="caseMsg" hidden></p>
@@ -549,6 +549,7 @@ button.ghost.danger { color: var(--crit); }
           <h3 class="sub">Fibula (bacak) BT'si</h3>
           <div class="btns">
             <label class="filebtn"><svg class="i"><use href="#i-folder"/></svg>DICOM klasörü<input type="file" id="fibDicom" webkitdirectory multiple></label>
+            <label class="filebtn" title="DICOM dosyaları ya da .zip"><svg class="i"><use href="#i-files"/></svg>Dosya / .zip<input type="file" id="fibFiles" multiple></label>
             <button id="fibSample" class="ghost"><svg class="i"><use href="#i-flask"/></svg>Örnek veri</button>
           </div>
           <p class="hint" id="fibMsg" hidden></p>

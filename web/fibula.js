@@ -691,6 +691,7 @@ window.Fibula = (function () {
   // ---------- wiring ----------
   $('fibSample').addEventListener('click', () => start('sample'));
   $('fibDicom').addEventListener('change', e => { if (e.target.files.length) start('dicom', [...e.target.files]); e.target.value = ''; });
+  $('fibFiles').addEventListener('change', e => { if (e.target.files.length) start('dicom', [...e.target.files]); e.target.value = ''; });
   $('fibCand').addEventListener('change', e => { setCandidate(+e.target.value); plan().cand = F.c.centroid.map(x => Math.round(x * 10) / 10); guideKey = ''; edited(false, true); setView(view); });
   document.querySelectorAll('#fibN button').forEach(b => b.addEventListener('click', () => { if (!active()) return; setN(+b.dataset.n); update(); optimizeKnots(); edited(false, true); }));
   $('fibOpt').addEventListener('click', () => { if (!active()) return; optimizeKnots(); edited(false, true); });
