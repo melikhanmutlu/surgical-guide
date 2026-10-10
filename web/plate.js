@@ -12,6 +12,9 @@ window.Plate = (function () {
     mini20: { name: '2.0 mini', w: 5, t: 1.0, pitch: 6, d: 2.0 },
     custom: { name: 'Özel' },
   };
+  // screw lengths each system offers (mm); a hole gets the shortest that passes the far cortex by 1 mm
+  const LENS = { recon24: [6, 8, 10, 12, 14, 16, 18, 20, 22, 24], mini20: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16], custom: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 22, 24] };
+  const JOINT_GAP = 3;
   const DEF = { on: false, sys: 'recon24', h: 0, ext: 25, w: 7, t: 2.5, pitch: 8, d: 2.4, shift: 0 };
   let P = Object.assign({}, DEF), last = null, timer = null;
 
@@ -27,20 +30,23 @@ window.Plate = (function () {
   function snap(q, n, T) {
     for (const lift of [10, 22]) {
       rc.set(q.clone().addScaledVector(n, lift), n.clone().negate()); rc.far = lift + 14;
-      const hits = rc.intersectObjects(T.map(t => t[0]), false);
-      if (!hits.length) continue;
-      const h = hits[0], nn = h.face.normal.clone().transformDirection(h.object.matrixWorld);
+      // graft meshes hold the whole fibula piece and are cut to length by clipping planes: skip the clipped-away part
+      const h = rc.intersectObjects(T.map(t => t[0]), false).find(x => !clipped(x));
+      if (!h) continue;
+      const nn = h.face.normal.clone().transformDirection(h.object.matrixWorld);
       if (nn.dot(n) < 0) nn.negate();
       return { p: h.point.clone(), n: nn, kind: T.find(t => t[0] === h.object)[1] };
     }
     return null;
   }
+  const clipped = h => { const cp = h.object.material && h.object.material.clippingPlanes; return !!cp && cp.some(pl => pl.distanceToPoint(h.point) < -0.05); };
   // walk from s along dir until stop(point, length) is true
   function walk(s, dir, T, stop) {
     const out = []; let cur = s, d = dir.clone(), len = 0;
     for (let i = 0; i < 160; i++) {
       d.sub(cur.n.clone().multiplyScalar(d.dot(cur.n))).normalize();
-      const nx = snap(cur.p.clone().addScaledVector(d, 1.5), cur.n.clone().lerp(d, 0).normalize(), T);
+      // a short step first; across the saw gap between bone and graft, longer steps bridge it
+      let nx = null; for (const st of [1.5, 3, 5]) { nx = snap(cur.p.clone().addScaledVector(d, st), cur.n, T); if (nx) break; }
       if (!nx) return { pts: out, ok: false };
       const step = nx.p.distanceTo(cur.p); if (step < 0.2) return { pts: out, ok: false };
       d = nx.p.clone().sub(cur.p).normalize(); nx.n.lerp(cur.n, 0.5).normalize();
@@ -75,20 +81,62 @@ window.Plate = (function () {
       path.push({ s, p: a.p.clone().lerp(b.p, f), n: a.n.clone().lerp(b.n, f).normalize(), kind: f < 0.5 ? a.kind : b.kind });
     }
     path.forEach((q, i) => { const a = path[Math.max(0, i - 1)].p, b = path[Math.min(path.length - 1, i + 1)].p; q.t = b.clone().sub(a).normalize(); q.n.sub(q.t.clone().multiplyScalar(q.n.dot(q.t))).normalize(); });
-    // holes at the plate's spacing, centred on the defect; a hole within 3 mm of a slot edge is not usable
-    const pls = St.planesWorld(), mid = L / 2 + P.shift, holes = [];
+    // holes at the plate's spacing, centred on the defect; a hole within 3 mm of a slot edge or of a joint between
+    // two fibula segments is not usable
+    const pls = St.planesWorld(), mid = L / 2 + P.shift, holes = [], fl = graftPlan(), lower = fl ? fl.segs.filter(g => !g.barrel) : [];
+    const joints = lower.slice(1).map(g => ({ p: g.P0, N: g.N0 })), kerf = fl ? (Fibula.plan().kerf || 1) : 0;
     const k0 = Math.ceil((0 - mid) / P.pitch + 0.5), k1 = Math.floor((L - mid) / P.pitch - 0.5);
     for (let k = k0; k <= k1; k++) {
       const s = mid + k * P.pitch, q = path[Math.min(path.length - 1, Math.round(s))];
       const dCut = Math.min(Infinity, ...pls.map(pw => Math.abs(q.p.clone().sub(pw.p).dot(pw.N)) - pw.w / 2 - P.d / 2));
       const sa = q.p.clone().sub(A.p).dot(A.N), region = sa < -A.w / 2 ? 'A' : E.condyle || q.p.clone().sub(B.p).dot(B.N) <= B.w / 2 ? 'defect' : 'B';
-      holes.push({ s, p: q.p.clone(), n: q.n.clone(), t: q.t.clone(), region, kind: q.kind, dCut, usable: dCut >= 3 });
+      const dJoint = Math.min(Infinity, ...joints.filter(J => q.p.distanceTo(J.p) < 30).map(J => Math.abs(q.p.clone().sub(J.p).dot(J.N)) - kerf / 2 - P.d / 2));
+      const h = { s, p: q.p.clone(), n: q.n.clone(), t: q.t.clone(), region, kind: q.kind, dCut, dJoint, usable: dCut >= 3 && dJoint >= JOINT_GAP, why: dCut < 3 ? 'cut' : dJoint < JOINT_GAP ? 'joint' : null };
+      h.seg = region === 'defect' && lower.length ? segOf(lower, h.p) : null;
+      Object.assign(h, screwFor(h, fl));
+      holes.push(h);
     }
     // bending: how much the plate turns, in the plate plane and out of it
     let inPlane = 0, outPlane = 0;
     for (let i = 4; i < path.length; i += 4) { const a = path[i - 4], b = path[i]; const tb = V().crossVectors(a.t, a.n); inPlane += Math.abs(Math.asin(Math.max(-1, Math.min(1, b.t.dot(tb))))); outPlane += Math.abs(Math.asin(Math.max(-1, Math.min(1, b.t.dot(a.n))))); }
     last = { path, holes, L, ok: wa.ok && wb.ok, E, bend: { inPlane: THREE.MathUtils.radToDeg(inPlane), outPlane: THREE.MathUtils.radToDeg(outPlane) } };
     return last;
+  }
+
+  // the fibula plan when grafts are shown (plate holes then also avoid the graft joints)
+  function graftPlan() {
+    if (!window.Fibula || !Fibula.active() || !St.parts.grafts || !St.parts.grafts.obj.children.length) return null;
+    const st = Fibula.state(); return st && st.last && st.last.segs.length ? st.last : null;
+  }
+  // graft segment that holds point p: between its two end planes, else the one whose axis passes closest
+  function segOf(segs, p) {
+    const inside = segs.find(g => p.clone().sub(g.P0).dot(g.N0) >= 0 && p.clone().sub(g.P1).dot(g.N1) <= 0);
+    if (inside) return inside.i;
+    let best = null, bd = Infinity;
+    segs.forEach(g => { const t = Math.max(0, Math.min(g.L, p.clone().sub(g.P0).dot(g.x))), d = p.distanceTo(g.P0.clone().addScaledVector(g.x, t)); if (d < bd) { bd = d; best = g.i; } });
+    return best;
+  }
+  // bone under a hole: remaining mandible (without the resected piece) or a graft segment
+  function boneHere(q, fl) {
+    if (fl) for (let i = 0; i < fl.segs.length; i++) if (Fibula.graftBone(i, q)) return true;
+    if (!fl && !S.resRemoved) return St.boneAt(q);
+    if (!St.boneAt(q)) return false;
+    if (!S.resMask) return true;
+    const r = S.red, ix = G.indexOf(r, [q.x, q.y, q.z]).map(Math.round);
+    if (ix.some((x, k) => x < 0 || x >= [r.nx, r.ny, r.nz][k])) return true;
+    return !S.resMask[ix[0] + r.nx * (ix[1] + r.ny * ix[2])];
+  }
+  // bicortical screw: walk into the bone along the hole axis until 2 mm of no bone follow; length = far cortex + 1 mm,
+  // rounded up to the system's lengths. No exit within 30 mm: monocortical, the longest standard length is proposed.
+  function screwFor(h, fl) {
+    const dir = h.n.clone().negate(), q = V(); let entry = null, lastIn = null, out = 0, t = -1;
+    for (; t <= 30; t += 0.25) {
+      if (boneHere(q.copy(h.p).addScaledVector(dir, t), fl)) { if (entry === null) entry = t; lastIn = t; out = 0; }
+      else if (entry !== null && (out += 0.25) >= 2) break;
+    }
+    if (entry === null) return { len: null, thick: 0, bi: false };
+    const bi = t <= 30, need = Math.max(0, lastIn) + 1, L = LENS[P.sys] || LENS.custom;
+    return { len: L.find(x => x >= need) || L[L.length - 1], thick: lastIn - entry, bi: bi && need <= L[L.length - 1] };
   }
 
   // ---------- plate mesh ----------
@@ -168,7 +216,8 @@ window.Plate = (function () {
   const plateSTL = () => { const b = St.parts.plate && St.parts.plate.obj.getObjectByName('plateBody'); return b ? St.stlOf(b) : null; };
   (window.ExportHooks = window.ExportHooks || []).push(files => {
     if (!last) return;
-    files.push({ name: 'plak_bukme_modeli.stl', data: bendModel() }, { name: 'plak_sablonu.stl', data: plateSTL() }, { name: 'plak_plani.json', data: JSON.stringify(summary(), null, 2) });
+    const s = summary();
+    files.push({ name: 'plak_bukme_modeli.stl', data: bendModel() }, { name: 'plak_sablonu.stl', data: plateSTL() }, { name: 'plak_plani.json', data: JSON.stringify(s, null, 2) }, { name: 'plak_vidalari.csv', data: screwCSV(s) });
   });
 
   // ---------- summary, checks, report ----------
@@ -178,8 +227,20 @@ window.Plate = (function () {
     return { sistem: SYSTEMS[P.sys].name, genislik_mm: P.w, kalinlik_mm: P.t, delik_araligi_mm: P.pitch, uzunluk_mm: Math.round(last.L), holes: last.holes.length,
       kullanilabilir: { A: cnt('A'), defekt: cnt('defect'), B: cnt('B') }, kesiye_yakin: last.holes.filter(h => !h.usable).length,
       bukme_deg: { kalinlik_yonunde: Math.round(last.bend.outPlane), kenar_yonunde: Math.round(last.bend.inPlane) },
-      guide_ile_eslesen: last.holes.filter(h => h.matched).length,
-      delikler: last.holes.map((h, i) => ({ no: i + 1, bolge: h.region, kullanilabilir: h.usable, kesiye_mm: +h.dCut.toFixed(1), konum: h.p.toArray().map(x => +x.toFixed(2)) })) };
+      guide_ile_eslesen: last.holes.filter(h => h.matched).length, greft_eklemine_yakin: last.holes.filter(h => h.why === 'joint').length,
+      vida_listesi: screwList(),
+      delikler: last.holes.map((h, i) => ({ no: i + 1, bolge: h.region, segment: h.seg == null ? null : h.seg + 1, kullanilabilir: h.usable, neden: h.why === 'cut' ? 'kesiye yakın' : h.why === 'joint' ? 'greft eklemine yakın' : null,
+        kesiye_mm: +h.dCut.toFixed(1), eklem_mm: Number.isFinite(h.dJoint) ? +h.dJoint.toFixed(1) : null, vida_boyu_mm: h.usable ? h.len : null, kemik_kalinligi_mm: +h.thick.toFixed(1), bikortikal: h.usable && h.len ? h.bi : null,
+        konum: h.p.toArray().map(x => +x.toFixed(2)), eksen: h.n.clone().negate().toArray().map(x => +x.toFixed(4)) })) };
+  }
+  // usable holes grouped by screw length: [[length, count], ...]
+  function screwList() {
+    const m = new Map(); last.holes.forEach(h => { if (h.usable && h.len) m.set(h.len, (m.get(h.len) || 0) + 1); });
+    return [...m.entries()].sort((a, b) => a[0] - b[0]).map(([boy_mm, adet]) => ({ boy_mm, adet }));
+  }
+  const screwText = s => s.vida_listesi.length ? s.vida_listesi.map(x => `${x.adet} × ${fmt(x.boy_mm, 0)} mm`).join(', ') : '–';
+  function screwCSV(s) {
+    return 'delik;bolge;segment;vida_boyu_mm;kemik_kalinligi_mm;bikortikal;x;y;z\n' + s.delikler.filter(h => h.kullanilabilir).map(h => [h.no, h.bolge, h.segment || '', h.vida_boyu_mm || '', h.kemik_kalinligi_mm, h.bikortikal ? 'evet' : 'hayir', ...h.konum].join(';')).join('\n') + '\n';
   }
   (window.ExtraChecks = window.ExtraChecks || []).push(() => {
     if (!P.on || !S.anchor) return [];
@@ -187,6 +248,11 @@ window.Plate = (function () {
     const out = [], need = last.E.condyle ? ['A'] : ['A', 'B'];
     need.forEach(r => { const c = last.holes.filter(h => h.region === r && h.usable).length; if (c < 3) out.push(['warn', 'Uyarı', `Plak ${r === 'A' ? 'birinci' : 'ikinci'} kalan segmentte ${c} vidaya yer bırakıyor; en az 3 önerilir (plak uzantısını artırın).`, 'guide']); });
     if (!last.ok) out.push(['warn', 'Uyarı', 'Plak hattı istenen uzunluğa ulaşmadan kemik yüzeyinden çıktı.', 'guide']);
+    const fl = graftPlan();
+    if (fl) fl.segs.filter(g => !g.barrel).forEach(g => { const c = last.holes.filter(h => h.seg === g.i && h.usable).length; if (c < 2) out.push(['warn', 'Uyarı', `Plak greft segmenti ${g.i + 1} üzerinde ${c} vidaya yer bırakıyor; her segmente en az 2 vida önerilir (delik dizisini kaydırın ya da segment boyunu değiştirin).`, 'guide']); });
+    const mono = last.holes.filter(h => h.usable && h.len && !h.bi).length, none = last.holes.filter(h => h.usable && !h.len).length;
+    if (mono) out.push(['info', 'Bilgi', `${mono} plak deliğinde karşı korteks 30 mm içinde bulunamadı ya da standart boydan uzun; bu vidalar monokortikal kalır.`, 'guide']);
+    if (none) out.push(['warn', 'Uyarı', `${none} kullanılabilir plak deliğinin altında kemik yok.`, 'guide']);
     const m = last.holes.filter(h => h.matched).length, gs = S.screws.length;
     if (gs && m < gs && S.screws.some(s => s.plate)) out.push(['info', 'Bilgi', `${gs} guide vidasından ${m} tanesi plak deliğiyle çakışıyor.`, 'guide']);
     return out;
@@ -194,7 +260,7 @@ window.Plate = (function () {
   (window.ReportSections = window.ReportSections || []).push(d => {
     const s = summary(); if (!s) return;
     if (d.keep) d.keep(380); d.h2('Plak');
-    d.table(['Özellik', 'Değer'], [['Sistem', `${s.sistem} · ${fmt(s.genislik_mm)} × ${fmt(s.kalinlik_mm)} mm · ${fmt(s.delik_araligi_mm)} mm aralık`], ['Uzunluk / delik', `${s.uzunluk_mm} mm · ${s.holes} delik`], ['Kullanılabilir delik', `kalan 1: ${s.kullanilabilir.A} · defekt: ${s.kullanilabilir.defekt} · kalan 2: ${s.kullanilabilir.B}`], ['Kesiye yakın (boş bırakılacak)', `${s.kesiye_yakin}`], ['Toplam bükme', `kalınlık yönünde ${s.bukme_deg.kalinlik_yonunde}° · kenar yönünde ${s.bukme_deg.kenar_yonunde}°`], ['Guide vidalarıyla eşleşen delik', `${s.guide_ile_eslesen}`]], [0.34, 0.66]);
+    d.table(['Özellik', 'Değer'], [['Sistem', `${s.sistem} · ${fmt(s.genislik_mm)} × ${fmt(s.kalinlik_mm)} mm · ${fmt(s.delik_araligi_mm)} mm aralık`], ['Uzunluk / delik', `${s.uzunluk_mm} mm · ${s.holes} delik`], ['Kullanılabilir delik', `kalan 1: ${s.kullanilabilir.A} · defekt: ${s.kullanilabilir.defekt} · kalan 2: ${s.kullanilabilir.B}`], ['Kesiye yakın (boş bırakılacak)', `${s.kesiye_yakin}`], ['Toplam bükme', `kalınlık yönünde ${s.bukme_deg.kalinlik_yonunde}° · kenar yönünde ${s.bukme_deg.kenar_yonunde}°`], ['Guide vidalarıyla eşleşen delik', `${s.guide_ile_eslesen}`], ['Greft eklemine yakın (boş bırakılacak)', `${s.greft_eklemine_yakin}`], ['Vida boyları (bikortikal)', screwText(s)], ['Not', 'Vida boyları kemik modelinden ölçülür; sinir kanalı ve diş kökleri ayrıca kontrol edilmelidir.']], [0.34, 0.66]);
   });
 
   // ---------- slices: plate cross-section where it meets the slice ----------
@@ -212,14 +278,14 @@ window.Plate = (function () {
     $('plateBox').innerHTML = `<h3 class="sub">Plak</h3>
       <label class="chk"><input type="checkbox" id="plOn" ${P.on ? 'checked' : ''}> Rekonstrüksiyon plağı planla</label>
       ${P.on ? `<div class="ctl"><label for="plSys" class="lbl2">Plak sistemi</label><select id="plSys">${Object.entries(SYSTEMS).map(([k, x]) => `<option value="${k}" ${P.sys === k ? 'selected' : ''}>${x.name}</option>`).join('')}</select></div>
-      ${F.filter(f => P.sys === 'custom' || !['w', 't', 'pitch', 'd'].includes(f[0])).map(([k, t, mn, mx, st, un]) => `<div class="ctl"><div class="ctl-row"><label for="pl_${k}">${t}</label><output id="plo_${k}">${fmt(P[k], st < 1 ? 1 : 0)} ${un}</output></div><input type="range" id="pl_${k}" min="${mn}" max="${mx}" step="${st}" value="${P[k]}"></div>`).join('')}
+      ${F.filter(f => P.sys === 'custom' || !['w', 't', 'pitch'].includes(f[0])).map(([k, t, mn, mx, st, un]) => `<div class="ctl"><div class="ctl-row"><label for="pl_${k}">${t}</label><output id="plo_${k}">${fmt(P[k], st < 1 ? 1 : 0)} ${un}</output></div><input type="range" id="pl_${k}" min="${mn}" max="${mx}" step="${st}" value="${P[k]}"></div>`).join('')}
       <div id="plSum">${sumHTML(s)}</div>
       <div class="btns"><button id="plScrews" ${s ? '' : 'disabled'}><svg class="i"><use href="#i-target"/></svg>Vidaları plak deliklerine taşı</button></div>
       <div class="btns"><button id="plBend" ${s ? '' : 'disabled'}><svg class="i"><use href="#i-download"/></svg>Bükme modeli STL</button><button id="plTpl" ${s ? '' : 'disabled'}>Plak şablonu STL</button></div>
-      <p class="hint" id="plMsg">Kırmızı delikler kesiye 3 mm'den yakındır, boş bırakılır. Yeşil delikler guide vidalarıyla eşleşir.</p>` : '<p class="hint">Plak hattı kalan kemik ve greftlerin dış yüzeyini izler; guide vidaları plak deliklerine yerleştirilebilir.</p>'}`;
+      <p class="hint" id="plMsg">Kırmızı delikler kesiye ya da greft eklemine 3 mm'den yakındır, boş bırakılır. Yeşil delikler guide vidalarıyla eşleşir. Vida boyu her delikte karşı kortekse göre ölçülür; sinir kanalı ayrıca kontrol edilmelidir.</p>` : '<p class="hint">Plak hattı kalan kemik ve greftlerin dış yüzeyini izler; guide vidaları plak deliklerine yerleştirilebilir.</p>'}`;
     wire();
   }
-  const sumHTML = s => s ? `<dl class="kv"><dt>Uzunluk</dt><dd>${s.uzunluk_mm} mm · ${s.holes} delik</dd><dt>Kullanılabilir</dt><dd>${s.kullanilabilir.A} · ${s.kullanilabilir.defekt} · ${s.kullanilabilir.B}</dd><dt>Kesiye yakın</dt><dd>${s.kesiye_yakin} delik boş kalır</dd><dt>Bükme</dt><dd>${s.bukme_deg.kalinlik_yonunde}° yüzeye · ${s.bukme_deg.kenar_yonunde}° kenara</dd><dt>Guide ile eşleşen</dt><dd>${s.guide_ile_eslesen}</dd></dl>` : `<p class="hint">${S.anchor ? 'Plak hattı bulunamadı; yüksekliği değiştirin.' : 'Önce rezeksiyon bölgesini ve kesileri belirleyin.'}</p>`;
+  const sumHTML = s => s ? `<dl class="kv"><dt>Uzunluk</dt><dd>${s.uzunluk_mm} mm · ${s.holes} delik</dd><dt>Kullanılabilir</dt><dd>${s.kullanilabilir.A} · ${s.kullanilabilir.defekt} · ${s.kullanilabilir.B}</dd><dt>Kesiye yakın</dt><dd>${s.kesiye_yakin} delik boş kalır</dd><dt>Bükme</dt><dd>${s.bukme_deg.kalinlik_yonunde}° yüzeye · ${s.bukme_deg.kenar_yonunde}° kenara</dd><dt>Guide ile eşleşen</dt><dd>${s.guide_ile_eslesen}</dd>${s.greft_eklemine_yakin ? `<dt>Greft eklemine yakın</dt><dd>${s.greft_eklemine_yakin} delik boş kalır</dd>` : ''}<dt>Vidalar</dt><dd>${screwText(s)}</dd></dl>` : `<p class="hint">${S.anchor ? 'Plak hattı bulunamadı; yüksekliği değiştirin.' : 'Önce rezeksiyon bölgesini ve kesileri belirleyin.'}</p>`;
   function renderSum() {
     if (!$('plSum')) return;
     const s = summary(); $('plSum').innerHTML = sumHTML(s);

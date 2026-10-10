@@ -284,5 +284,18 @@
     if (sel[0] === 'p') { const pw = St.planesWorld()[+sel.slice(1)]; if (pw) jumpTo(pw.p); }
     else { const s = S.screws[+sel.slice(1)]; if (s) { const sw = St.screwWorld(s); if (sw.entry) jumpTo(sw.entry); } }
   });
-  window.MPR = { layout, setCursor, jumpTo, state: st, redraw, views: VIEWS, xf, label, toIdx, toWorld };
+  // one slice through world point w, drawn off screen with the plan overlays, zoomed around w (report images)
+  function capture(id, w, o = {}) {
+    const v = VIEWS.find(x => x.id === id); if (!v || !S.vol) return null;
+    const W = o.w || 640, H = o.h || 640, keep = { canvas: v.canvas, zoom: v.zoom, pan: v.pan, lines: v.lines, custom: v.custom, cur: st.cur.slice() };
+    const c = document.createElement('canvas'); c.style.cssText = `position:fixed;left:-99999px;top:0;width:${W}px;height:${H}px`; document.body.appendChild(c);
+    try {
+      const dpr = Math.min(devicePixelRatio, 2); c.width = Math.round(W * dpr); c.height = Math.round(H * dpr);
+      v.canvas = c; v.custom = null; v.lines = []; v.zoom = o.zoom || 3; v.pan = [0, 0];
+      const ix = toIdx([w.x, w.y, w.z]); st.cur = ix.map((x, k) => Math.max(0, Math.min(dims()[k] - 1, Math.round(x))));
+      const T = xf(v), [px, py] = idxToImg(v, ix); v.pan = [c.width / 2 - T.fx(px), c.height / 2 - T.fy(py)];
+      draw(v); return c.toDataURL('image/jpeg', 0.9);
+    } catch (e) { return null; } finally { Object.assign(v, { canvas: keep.canvas, zoom: keep.zoom, pan: keep.pan, lines: keep.lines, custom: keep.custom }); st.cur = keep.cur; c.remove(); }
+  }
+  window.MPR = { layout, setCursor, jumpTo, state: st, redraw, views: VIEWS, xf, label, toIdx, toWorld, capture };
 })();

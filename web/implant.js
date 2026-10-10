@@ -9,7 +9,7 @@ window.Implants = (function () {
   const COLOR = 0x9aa3ad, DEF = { d: 4.0, len: 10, tb: 0, tm: 0 };
   // sample thresholds; the clinical team sets the final values
   const LIM = { cov: 0.95, covCrit: 0.75, wall: 0.8, joint: 1.5, gap: 3, tilt: 25 };
-  let list = [], sel = -1, picking = false, last = [], timer = null;
+  let list = [], sel = -1, picking = false, last = [], timer = null, msgText = '';
 
   const fib = () => (Fibula.active() ? Fibula.state() : null);
   // remaining mandible: bone field minus the resected piece
@@ -95,6 +95,44 @@ window.Implants = (function () {
     });
     return best && { seg: best.seg, t: Math.round(best.t * 2) / 2 };
   }
+  // ---------- automatic placement ----------
+  // tooth positions every PITCH mm along the graft that carries the teeth (the upper barrel when there is one), clear
+  // of the segment ends; at each position the widest and longest catalogue implant that passes every check is kept,
+  // shifting up to 3 mm along the segment to stay off the plate screws. Positions where nothing fits are left out.
+  const AUTO = { pitch: 7.5, d: [4.8, 4.1, 3.75, 3.3], len: [13, 11.5, 10, 8.5, 7], screwGap: 1.5, max: 6 };
+  function plateScrews() {
+    const R = window.Plate && Plate.get(); if (!R) return [];
+    return R.holes.filter(h => h.usable).map(h => ({ a: h.p, b: h.p.clone().addScaledVector(h.n, -(h.len || 12)) }));
+  }
+  function segDist(a0, a1, b0, b1) {
+    let m = Infinity; const p = V(), q = V();
+    for (let i = 0; i <= 12; i++) { p.copy(a0).lerp(a1, i / 12); for (let j = 0; j <= 12; j++) m = Math.min(m, p.distanceTo(q.copy(b0).lerp(b1, j / 12))); }
+    return m;
+  }
+  function passes(r, im, scr) {
+    if (!r.ok || r.cov < LIM.cov || r.wall < LIM.wall || r.joint < LIM.joint) return false;
+    return scr.every(c => segDist(r.entry, r.apex, c.a, c.b) >= im.d / 2 + AUTO.screwGap);
+  }
+  function autoPlace() {
+    const st = fib(); if (!st || !st.last) return 0;
+    const segs = st.last.segs, top = segs.some(g => g.barrel) ? segs.filter(g => g.barrel) : segs, scr = plateScrews(), out = [];
+    for (const g of top) {
+      const m = LIM.joint + AUTO.d[0] / 2 + 1, room = g.L - 2 * m; if (room < 0) continue;
+      const k = Math.floor(room / AUTO.pitch) + 1, start = (g.L - (k - 1) * AUTO.pitch) / 2;
+      for (let j = 0; j < k && out.length < AUTO.max; j++) {
+        const t0 = start + j * AUTO.pitch; let pick = null;
+        for (const d of AUTO.d) { for (const len of AUTO.len) { for (const dt of [0, 1.5, -1.5, 3, -3]) {
+          const t = Math.round((t0 + dt) * 2) / 2; if (t < d / 2 + LIM.joint || t > g.L - d / 2 - LIM.joint) continue;
+          const im = Object.assign({}, DEF, { seg: g.i, t, d, len }); let r; try { r = evaluate(im, st); } catch (e) { continue; }
+          if (out.some(o => Math.abs(o.t - t) < (o.d + d) / 2 + LIM.gap && o.seg === g.i)) continue;
+          if (passes(r, im, scr)) { pick = im; break; }
+        } if (pick) break; } if (pick) break; }
+        if (pick) out.push(pick);
+      }
+    }
+    list = out; sel = list.length - 1; changed();
+    return { placed: out.length, tried: top.reduce((a, g) => a + Math.max(0, Math.floor((g.L - 2 * (LIM.joint + AUTO.d[0] / 2 + 1)) / AUTO.pitch) + 1), 0) };
+  }
   function add(at) { if (!at) return; list.push(Object.assign({}, DEF, at)); sel = list.length - 1; changed(); }
 
   // ---------- checks, report, export ----------
@@ -136,6 +174,8 @@ window.Implants = (function () {
     const im = list[sel], segs = st.last.segs;
     box.innerHTML = `<h3 class="sub">Dental implant planı</h3>
       <div class="btns"><button id="imAdd"><svg class="i"><use href="#i-plus"/></svg>İmplant ekle</button><button id="imPick"><svg class="i"><use href="#i-target"/></svg>Greft üzerinde seç</button></div>
+      <div class="btns"><button id="imAuto"><svg class="i"><use href="#i-target"/></svg>Otomatik yerleştir</button></div>
+      <p class="hint" id="imMsg">${msgText}</p>
       <div class="el-list" id="imList">${list.map((x, i) => `<button class="el ${i === sel ? 'on' : ''}" data-i="${i}" aria-pressed="${i === sel}">İmplant ${i + 1}</button>`).join('')}</div>
       ${im ? `<div class="ctl"><label for="imSeg" class="lbl2">Segment</label><select id="imSeg">${segs.map((g, i) => `<option value="${i}" ${i === im.seg ? 'selected' : ''}>Segment ${i + 1}${g.barrel ? ' (üst)' : ''} · ${fmt(g.L)} mm</option>`).join('')}</select></div>
       ${F.map(([k, t, mn, mx, stp, un]) => `<div class="ctl"><div class="ctl-row"><label for="im_${k}">${t}</label><output id="imo_${k}">${fmt(im[k], stp < 1 ? 1 : 0)} ${un}</output></div><input type="range" id="im_${k}" min="${mn}" max="${k === 't' ? Math.ceil(segs[Math.min(im.seg, segs.length - 1)].L) : mx}" step="${stp}" value="${im[k]}"></div>`).join('')}
@@ -144,6 +184,11 @@ window.Implants = (function () {
       <p class="hint">İmplant ekseni varsayılan olarak oklüzal yöndedir. Kemik örtüsü implant yüzeyinde, duvar 1 mm dışında greft ve kalan mandibula içinde örneklenir.</p>`;
     renderTable();
     $('imAdd').addEventListener('click', () => add(freeSpot()));
+    $('imAuto').addEventListener('click', () => {
+      if (list.length && !confirm('Mevcut implantlar silinip otomatik yerleşimle değiştirilsin mi?')) return;
+      St.busy(true, 'İmplantlar yerleştiriliyor…');
+      setTimeout(() => { try { const r = autoPlace(); msgText = r.placed ? `${r.placed} implant yerleştirildi${r.tried > r.placed ? `; ${r.tried - r.placed} diş konumunda kontrolleri geçen implant bulunamadı` : ''}. Çap ve boy greft kalınlığına göre seçildi, plak vidalarından uzak tutuldu.` : 'Greft üzerinde kontrolleri geçen implant konumu bulunamadı.'; render(); } finally { St.busy(false); } }, 30);
+    });
     $('imPick').addEventListener('click', () => { picking = true; const mb = $('modeBadge'); mb.hidden = false; mb.textContent = 'İmplant yeri için mandibula görünümünde bir fibula greftine tıklayın. Vazgeçmek için Esc.'; if (Fibula.view() !== 'm') $('scM').click(); });
     box.querySelectorAll('#imList button').forEach(b => b.addEventListener('click', () => { sel = +b.dataset.i; render(); draw(); }));
     if (!im) return;
@@ -170,5 +215,5 @@ window.Implants = (function () {
   bus.addEventListener('changed', () => { if (!S.restoring && !$('implBox').contains(document.activeElement)) later(); });
   bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring)) { list = []; sel = -1; last = []; draw(); render(); } });
   render();
-  return { summary, list: () => list, get: () => last, add, freeSpot, update };
+  return { summary, list: () => list, get: () => last, add, freeSpot, update, autoPlace };
 })();

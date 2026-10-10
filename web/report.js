@@ -9,22 +9,24 @@ window.Report = (function () {
   const C = { ink: '#14181c', muted: '#5b646e', line: '#d5dadf', accent: '#0b6782', ok: '#1d7a50', warn: '#9a5a00', crit: '#b42318', soft: '#f3f5f7' };
 
   // ---------- 3D snapshots from fixed directions ----------
-  function snapshot(dir, w = 1000, h = 640, layer = 0) {
+  function snapshot(dir, w = 1000, h = 640, layer = 0, focus = null, margin = 1.02, hide = null) {
     const r = St.renderer, cam = St.camera, ctl = St.controls, keep = { pos: cam.position.clone(), tgt: ctl.target.clone(), aspect: cam.aspect, layers: cam.layers.mask };
     const size = r.getSize(new THREE.Vector2()), pr = r.getPixelRatio(), split = S.split;
     S.split = false; r.setPixelRatio(1); r.setSize(w, h, false); cam.aspect = w / h; cam.layers.set(layer);
-    const objs = layer === 0 ? Object.values(St.parts).filter(p => p.visible && /^(bone|guide|resected|screw|plate)/.test(p.id)).map(p => p.obj) : [];
+    const objs = layer === 0 ? Object.values(St.parts).filter(p => p.visible && (focus || /^(bone|guide|resected|screw|plate)$/).test(p.id)).map(p => p.obj) : [];
+    // tissue layers and other context surfaces would cover the plan: hidden for the picture
+    const hid = Object.values(St.parts).filter(p => p.obj.visible && (/^(layer_|ctx_|mirror)/.test(p.id) || (hide && hide.test(p.id)))); hid.forEach(p => { p.obj.visible = false; });
     const box = new THREE.Box3(); objs.forEach(o => box.expandByObject(o));
     if (layer === 1) St.scene.traverse(o => { if (o.isMesh && o.layers.mask === 2 && (o.userData.guide || o.userData.disc)) box.expandByObject(o); });
     if (!box.isEmpty()) {
       const c = box.getCenter(V()), rad = box.getSize(V()).length() / 2, d = V(...dir).normalize();
       const vf = THREE.MathUtils.degToRad(cam.fov), hf = 2 * Math.atan(Math.tan(vf / 2) * cam.aspect);
-      ctl.target.copy(c); cam.position.copy(c).add(d.multiplyScalar(rad / Math.sin(Math.min(vf, hf) / 2) * 1.02));
+      ctl.target.copy(c); cam.position.copy(c).add(d.multiplyScalar(rad / Math.sin(Math.min(vf, hf) / 2) * margin));
     }
     cam.updateProjectionMatrix(); cam.lookAt(ctl.target);
     const bg = St.scene.background; St.scene.background = new THREE.Color(0xeef1f4);
     r.render(St.scene, cam); const url = r.domElement.toDataURL('image/jpeg', 0.9);
-    St.scene.background = bg;
+    St.scene.background = bg; hid.forEach(p => { p.obj.visible = true; });
     cam.position.copy(keep.pos); ctl.target.copy(keep.tgt); cam.aspect = keep.aspect; cam.layers.mask = keep.layers; cam.updateProjectionMatrix();
     r.setPixelRatio(pr); r.setSize(size.x, size.y, false); S.split = split; St.resize(); ctl.update();
     return url;
@@ -133,7 +135,20 @@ window.Report = (function () {
       shots.push({ img: await loadImg(snapshot([-1, -0.25, 0.2])), cap: 'Sağdan' });
       shots.push({ img: await loadImg(snapshot([1, -0.25, 0.2])), cap: 'Soldan' });
       shots.push({ img: await loadImg(snapshot([0, -0.05, 1])), cap: 'Üstten' });
+      const has = id => St.parts[id] && St.parts[id].visible, n = S.anchor.n;
+      // close views of what the surgeon builds: the guide on the bone, the plate, the implants on the grafts
+      if (has('guide')) shots.push({ img: await loadImg(snapshot([n.x, n.y, n.z], 1000, 640, 0, /^(guide|screw)$/, 1.5)), cap: 'Guide yakın görünüm (kemiğe bakış)' });
+      if (has('plate')) shots.push({ img: await loadImg(snapshot([n.x, n.y, n.z], 1000, 640, 0, /^plate$/, 1.15)), cap: 'Plak ve vida delikleri' });
+      if (has('implants')) { const up = Fibula.state().last.D.vup; shots.push({ img: await loadImg(snapshot([up.x, up.y, up.z], 1000, 640, 0, /^implants$/, 2.2, /^(guide|screw|plate|lesion|resected)/)), cap: 'İmplantlar (oklüzal bakış)' }); }
       if (window.Fibula && Fibula.active()) { St.scene.traverse(o => { if (o.isLight) o.layers.enableAll(); }); shots.push({ img: await loadImg(snapshot([0, -1, 0.3], 1000, 640, 1)), cap: 'Fibula ve fibula guide\'ı' }); }
+    }
+    // CT slices through the resection centre and through each cut, with the plan drawn on them
+    const slices = [];
+    if (S.anchor && window.MPR && MPR.capture) {
+      const at = (id, w, cap) => { const u = MPR.capture(id, w); if (u) slices.push({ url: u, cap }); };
+      at('ax', S.anchor.p, 'Aksiyel · rezeksiyon merkezi'); at('co', S.anchor.p, 'Koronal · rezeksiyon merkezi'); at('sa', S.anchor.p, 'Sagittal · rezeksiyon merkezi');
+      St.planesWorld().forEach((pw, i) => at('ax', pw.p, `Aksiyel · Kesi ${i + 1}`));
+      for (const s of slices) s.img = await loadImg(s.url);
     }
     St.busy(true, 'Rapor sayfaları çiziliyor…'); await St.sleep();
     const d = Doc({ title: name, version });
@@ -144,6 +159,7 @@ window.Report = (function () {
     if (draft) d.text(`Onay bekleyen: ${miss.join(', ') || '–'}${S.crit ? ` · ${S.crit} kritik kontrol` : ''}`, { size: 22, color: C.warn });
     d.text(`Görüntü: ${St.caseLine()} · Segmentasyon: ${S.segMethod || '–'}`, { size: 20, color: C.muted, after: 10 });
     if (shots.length) { d.h2('Görünümler'); d.images(shots); }
+    if (slices.length) { d.h2('BT kesitleri'); d.images(slices); }
     d.h2('Kesim tablosu');
     const sorted = S.planes.slice().sort((a, b) => a.off - b.off);
     d.table(['Kesi', 'Konum (eksen)', 'Yatay açı', 'Dikey açı', 'Yuva', 'Onay'], S.planes.map((p, i) => [`Kesi ${i + 1}`, `${fmt(p.off)} mm`, `${fmt(p.yaw)}°`, `${fmt(p.pitch)}°`, `${fmt(p.w)} mm`, p.ok ? (p.by || 'onaylı') : 'bekliyor']), [0.16, 0.2, 0.15, 0.15, 0.12, 0.22]);
