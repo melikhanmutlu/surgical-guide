@@ -610,7 +610,7 @@ button.ghost.danger { color: var(--crit); }
                 <div class="ctl"><div class="ctl-row"><label for="gRot3">Yüzeyde döndür</label><output id="gRot3O">0°</output></div><input type="range" id="gRot3" min="-180" max="180" step="1" value="0"></div>
                 <div class="ctl"><div class="ctl-row"><label for="gRoll3">Kemik etrafında kaydır</label><output id="gRoll3O">0°</output></div><input type="range" id="gRoll3" min="-180" max="180" step="1" value="0"></div>
                 <p class="hint more" data-for="gRot3">Üstteki ayar guide'ı kemik yüzeyinde döndürür, alttaki guide'ı kemiğin etrafında kaydırıp başka bir yüzüne oturtur. 3B görünümde guide'a tıklayıp halkayla, kesitlerde de mor tutamakla da döndürebilirsiniz. Kesiler yerinde kalır, guide her konumda kemiğe yeniden oturtulur.</p></div>
-              <div class="btns"><button class="primary" id="guideMake" disabled><svg class="i"><use href="#i-spark"/></svg>Guide oluştur</button><button id="guideDel" class="sm" hidden><svg class="i"><use href="#i-trash"/></svg>Guide'ı sil</button></div>
+              <div class="btns"><button class="primary" id="guideMake" disabled><svg class="i"><use href="#i-spark"/></svg>Guide oluştur</button><button id="guideDel" class="sm" title="Guide ve vidaları kaldırır; kesiler yerinde kalır" hidden><svg class="i"><use href="#i-trash"/></svg>Guide'ı sil</button></div>
               <p class="hint" id="guideStat"></p>
             </li>
           </ol>
@@ -673,6 +673,7 @@ button.ghost.danger { color: var(--crit); }
         <div class="body">
           <p class="hint" id="gNone">Guide henüz oluşturulmadı. Kesileri belirledikten sonra oluşturun. <button id="gMake2">Guide oluştur</button></p>
           <div id="guideList" class="col"></div>
+          <div class="btns end" id="guideDel2Box" hidden><button id="guideDel2" class="sm" title="Guide ve vidaları kaldırır; kesiler yerinde kalır"><svg class="i"><use href="#i-trash"/></svg>Guide'ı sil</button></div>
           <h3 class="sub">Yerleşim</h3>
           <div class="ctl"><label for="g_split" class="lbl2">Düzen</label><select id="g_split" data-seg><option value="0" data-short="Tek parça">Tek parça (köprülü)</option><option value="1">İki parça</option></select></div>
           <div class="ctl"><label for="g_side" class="lbl2">Köprü tarafı</label><select id="g_side" data-seg><option value="1" data-short="+ taraf">Bir kenar (+)</option><option value="-1" data-short="− taraf">Diğer kenar (−)</option></select></div>
