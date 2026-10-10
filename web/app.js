@@ -1151,6 +1151,7 @@
   }
   function previewNow() {
     if (!S.anchor) return;
+    emit('livePlanes');
     const pls = planesWorld(), info = S.guideOn && !S.screwRefit ? screwsWorld().map(s => ({ s, ok: !!s.entry })) : [];
     S.liveScrews = info;
     rebuildElementParts(pls, info); applyExplode(); emit('preview'); render();

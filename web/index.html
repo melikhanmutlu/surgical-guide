@@ -531,6 +531,8 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
             <div class="ctl"><div class="ctl-row"><label for="fibKerf">Testere payı</label><output id="fibKerfO"></output></div><input type="range" id="fibKerf" min="0.5" max="2" step="0.1"></div>
             <div class="ctl"><div class="ctl-row"><label for="fibDistal">Distal korunan fibula</label><output id="fibDistalO"></output></div><input type="range" id="fibDistal" min="40" max="140" step="1"></div>
             <div class="ctl"><div class="ctl-row"><label for="fibVOff">Greft dikey konumu</label><output id="fibVOffO"></output></div><input type="range" id="fibVOff" min="-12" max="12" step="0.5"></div>
+            <label class="chk"><input type="checkbox" id="fibMirror"> Hedef şekil: sağlam tarafın aynası</label>
+            <p class="hint" id="fibMirrorMsg">Tümör kemiği bozduysa greftler bozuk kemiğe değil, karşı taraftaki sağlam kemiğin aynadaki şekline göre dizilir.</p>
             <label class="chk"><input type="checkbox" id="fibDbl"> Çift namlu (iki kat fibula)</label>
             <div class="ctl" id="fibDblHBox" hidden><div class="ctl-row"><label for="fibDblH">Namlular arası mesafe</label><output id="fibDblHO"></output></div><input type="range" id="fibDblH" min="8" max="30" step="0.5"></div>
             <p class="hint">Dikey konum greftleri yukarı (oklüzal düzleme) ya da aşağı (alt kenara) kaydırır. Kret sütunu greft üst yüzeyinin rezeke kemiğin alveol kretine göre yüksekliğidir; eksi değer kretin altıdır.</p>

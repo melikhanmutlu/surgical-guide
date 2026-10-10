@@ -23,7 +23,7 @@ window.Fibula = (function () {
   const msg = t => { $('fibMsg').textContent = t || ''; $('fibMsg').hidden = !t; };
   // vOff: graft shift towards the occlusal plane; dbl: double barrel (a second strut stacked dblH mm above);
   // fg / fsc: fibula guide body and screw edits (null = automatic)
-  const defaultPlan = () => ({ source: null, cand: null, n: 2, knots: [0.5], yaw: [0, 0, 0], pitch: [0, 0, 0], roll: [0, 0], kerf: 1.0, distal: 70, vOff: 0, dbl: 0, dblH: null, fg: null, fsc: null, ok: false });
+  const defaultPlan = () => ({ source: null, cand: null, mirror: 0, n: 2, knots: [0.5], yaw: [0, 0, 0], pitch: [0, 0, 0], roll: [0, 0], kerf: 1.0, distal: 70, vOff: 0, dbl: 0, dblH: null, fg: null, fsc: null, ok: false });
 
   // ---------- small linear algebra ----------
   function eig3(A) {          // Jacobi; returns [{val, vec:[3]}] sorted by value, descending
@@ -134,6 +134,10 @@ window.Fibula = (function () {
     PA.sub(NA.clone().multiplyScalar(PA.clone().sub(A.p).dot(NA))); PB.sub(NB.clone().multiplyScalar(PB.clone().sub(B.p).dot(NB)));
     let mid = acc.filter(x => x[3] > 4).map(cen).filter(q => q.clone().sub(PA).dot(NA) > 3 && q.clone().sub(PB).dot(NB) < -3);
     mid = mid.map((q, i) => (i > 0 && i < mid.length - 1 ? q.clone().add(mid[i - 1]).add(mid[i + 1]).multiplyScalar(1 / 3) : q));
+    // target shape from the healthy side: each point of the defect line is replaced by the mirror image of the bone
+    // centre found at its mirrored position (the tumour may have deformed the resected bone)
+    let mirrored = 0;
+    if (S.fib && S.fib.plan && S.fib.plan.mirror) { const m = mirrorLine(mid); mid = m.pts; mirrored = m.n; }
     // vertical position: the whole line moves along vup; its ends stay in their cut planes
     const vo = (S.fib && S.fib.plan && S.fib.plan.vOff) || 0, inPlane = N => { const w = vup.clone().sub(N.clone().multiplyScalar(vup.dot(N))); return w.multiplyScalar(1 / Math.max(w.dot(vup), 0.3)); };
     if (vo) { PA.addScaledVector(inPlane(NA), vo); PB.addScaledVector(inPlane(NB), vo); mid.forEach(q => q.addScaledVector(vup, vo)); }
@@ -142,7 +146,53 @@ window.Fibula = (function () {
     for (let b = 1; b < nb; b++) if (crest[b] === -Infinity) crest[b] = crest[b - 1];
     for (let b = nb - 2; b >= 0; b--) if (crest[b] === -Infinity) crest[b] = crest[b + 1];
     const crestAt = q => crest[Math.min(nb - 1, Math.max(0, Math.floor(q.clone().sub(A.p).dot(dir) / bw)))];
-    return { pts, s, L: s[s.length - 1], NA, NB, up: S.anchor.n.clone(), vup, crestAt, inPlane, A, B };
+    return { pts, s, L: s[s.length - 1], NA, NB, up: S.anchor.n.clone(), vup, crestAt, inPlane, A, B, mirrored, nmid: mid.length };
+  }
+  // mid-sagittal plane: through the condyles' midpoint, normal along the line between them; without condyles the
+  // patient's left-right axis through the centre of the mandible
+  function symPlane() {
+    const ref = window.Ref && Ref.get && Ref.get(), cR = ref && ref.cond && ref.cond.R, cL = ref && ref.cond && ref.cond.L;
+    if (cR && cL) { const a = V(...cR), b = V(...cL); return { p: a.clone().add(b).multiplyScalar(0.5), N: b.clone().sub(a).normalize() }; }
+    const r = S.red; let sx = 0, sy = 0, sz = 0, c = 0;
+    for (let k = 0; k < r.nz; k += 2) for (let j = 0; j < r.ny; j += 2) for (let i = 0; i < r.nx; i += 2) { const v = i + r.nx * (j + r.ny * k); if (S.mask[v] || (S.resMask && S.resMask[v])) { const w = G.worldOf(r, i, j, k); sx += w[0]; sy += w[1]; sz += w[2]; c++; } }
+    return c ? { p: V(sx / c, sy / c, sz / c), N: V(1, 0, 0) } : null;
+  }
+  function mirrorLine(mid) {
+    const P = symPlane(); if (!P || !S.mask) return { pts: mid, n: 0 };
+    const refl = q => q.clone().addScaledVector(P.N, -2 * q.clone().sub(P.p).dot(P.N)), r = S.red, R = 9;
+    let n = 0;
+    const out = mid.map(q => {
+      const m = refl(q);
+      if (Math.abs(q.clone().sub(P.p).dot(P.N)) < 12) return q;        // at the midline the mirror is the defect itself
+      const c = G.indexOf(r, m.toArray()), rad = r.sp.map(x => Math.ceil(R / x)); let sx = 0, sy = 0, sz = 0, cnt = 0;
+      for (let k = Math.round(c[2]) - rad[2]; k <= Math.round(c[2]) + rad[2]; k++) for (let j = Math.round(c[1]) - rad[1]; j <= Math.round(c[1]) + rad[1]; j++) for (let i = Math.round(c[0]) - rad[0]; i <= Math.round(c[0]) + rad[0]; i++) {
+        if (i < 0 || j < 0 || k < 0 || i >= r.nx || j >= r.ny || k >= r.nz || !S.mask[i + r.nx * (j + r.ny * k)]) continue;
+        const w = G.worldOf(r, i, j, k); if ((w[0] - m.x) ** 2 + (w[1] - m.y) ** 2 + (w[2] - m.z) ** 2 > R * R) continue;
+        sx += w[0]; sy += w[1]; sz += w[2]; cnt++;
+      }
+      if (cnt < 20) return q;
+      n++; return refl(V(sx / cnt, sy / cnt, sz / cnt));
+    });
+    return { pts: out.map((q, i) => (i > 0 && i < out.length - 1 ? q.clone().add(out[i - 1]).add(out[i + 1]).multiplyScalar(1 / 3) : q)), n };
+  }
+  // while a mandible cut is dragged: move the graft ends into the cut planes as they are now (the resected piece is
+  // rebuilt on release, then the full plan follows)
+  let liveRaf = 0;
+  function livePlanes() {
+    if (!active() || !last || S.restoring || liveRaf) return;
+    liveRaf = requestAnimationFrame(() => {
+      liveRaf = 0;
+      const E = St.resEnds(); if (!E || E.condyle) return;
+      const D0 = last.D, dir = E.B.p.clone().sub(E.A.p).normalize();
+      const NA = E.A.N.clone(), NB = E.B.N.clone(); if (NA.dot(dir) < 0) NA.negate(); if (NB.dot(dir) < 0) NB.negate();
+      const onPlane = (q, p, N) => q.clone().addScaledVector(N, p.clone().sub(q).dot(N));
+      const PA = onPlane(D0.pts[0], E.A.p, NA), PB = onPlane(D0.pts[D0.pts.length - 1], E.B.p, NB);
+      const mid = D0.pts.slice(1, -1).filter(q => q.clone().sub(PA).dot(NA) > 3 && q.clone().sub(PB).dot(NB) < -3);
+      const pts = [PA, ...mid, PB], sArr = [0];
+      for (let i = 1; i < pts.length; i++) sArr.push(sArr[i - 1] + pts[i].distanceTo(pts[i - 1]));
+      const D = Object.assign({}, D0, { pts, s: sArr, L: sArr[sArr.length - 1], NA, NB, A: E.A, B: E.B });
+      try { const c = compute(D); draw(c); syncOutputs(); } catch (e) { /* the full update on release redraws */ }
+    });
   }
   function at(D, x) {
     const s = D.s; x = Math.min(Math.max(x, 0), D.L);
@@ -370,6 +420,7 @@ window.Fibula = (function () {
     $('fibKerf').value = P0.kerf; $('fibKerfO').textContent = fmt(P0.kerf) + ' mm';
     $('fibDistal').value = P0.distal; $('fibDistalO').textContent = fmt(P0.distal, 0) + ' mm';
     $('fibVOff').value = P0.vOff || 0; $('fibVOffO').textContent = fmt(P0.vOff || 0) + ' mm';
+    $('fibMirror').checked = !!P0.mirror;
     $('fibDbl').checked = !!P0.dbl; $('fibDblHBox').hidden = !P0.dbl; $('fibDblH').value = dblH(); $('fibDblHO').textContent = fmt(dblH()) + ' mm';
     P0.knots.forEach((_, i) => {
       const el = $('fk' + i);
@@ -382,6 +433,7 @@ window.Fibula = (function () {
     if (!active()) { $('tag6').hidden = true; return; }
     const c = last, R = S.fib.guide && S.fib.guide.result;
     $('fibRows').innerHTML = c ? c.segs.map(g => `<tr><td>${g.i + 1}${g.barrel ? ' (üst)' : ''}</td><td>${fmt(g.L)} mm</td><td>${fmt(g.s0 - F.c.smin, 0)} mm</td><td>${fmt(g.a0, 0)}° / ${fmt(g.a1, 0)}°</td><td>${fmt(g.crest)} mm</td></tr>`).join('') : '<tr><td colspan="5">Defekt yok</td></tr>';
+    const mm = $('fibMirrorMsg'); if (mm) mm.textContent = plan().mirror && c ? (c.D.mirrored ? `Defekt hattının ${c.D.mirrored}/${c.D.nmid} noktası sağlam taraftan aynalandı${window.Ref && Ref.get && Ref.get() ? '' : ' (orta hat kemiğin ortasından tahmin edildi)'}.` : 'Karşı tarafta eşleşen sağlam kemik bulunamadı (defekt orta hatta olabilir); mevcut kemik kullanılıyor.') : 'Tümör kemiği bozduysa greftler bozuk kemiğe değil, karşı taraftaki sağlam kemiğin aynadaki şekline göre dizilir.';
     $('fibSum').innerHTML = c ? `<dt>Defekt boyu (hat boyunca)</dt><dd>${fmt(c.D.L)} mm</dd><dt>Greftlerin hattan sapması</dt><dd>${fmt(c.dev, 2)} mm</dd><dt>Kullanılan fibula</dt><dd>${fmt(c.used)} mm</dd><dt>Proksimalde kalan</dt><dd>${fmt(c.proxLeft, 0)} mm</dd><dt>Fibula guide'ı</dt><dd>${R ? `${fmt(S.fib.guide.ctx.g.L, 0)} mm, temas ${fmt(R.contact, 0)} mm²` : building ? 'üretiliyor' : '–'}</dd>` : '';
     const ck = checks(); $('fibChecks').innerHTML = (ck.length ? ck : [['ok', 'Uygun', 'Fibula kontrolleri geçti.']]).map(([k, t, m]) => `<li class="${k}"><b>${t}</b><span>${m}</span></li>`).join('');
     const crit = ck.some(x => x[0] === 'crit'), ok = approved();
@@ -663,6 +715,8 @@ window.Fibula = (function () {
   $('scF').addEventListener('click', () => setView('f'));
   $('scS').addEventListener('click', () => setView('s'));
   bus.addEventListener('parts', () => { if (active() && !S.restoring) update(); });
+  bus.addEventListener('livePlanes', livePlanes);
+  $('fibMirror').addEventListener('change', e => { if (!active()) return; plan().mirror = e.target.checked ? 1 : 0; guideKey = ''; edited(false, true); });
   bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring) && S.fib) unload(); });
 
   // fibula guide edits from the guide panel: drop the cached key so the guide is rebuilt
