@@ -507,7 +507,7 @@
     $('resRemove').disabled = !has;
     $('resRemove').innerHTML = S.resRemoved ? '<svg class="i"><use href="#i-eye"/></svg>Rezeke parçayı göster' : '<svg class="i"><use href="#i-eye"/></svg>Rezeke parçayı gizle';
     $('guideMake').disabled = !has; $('guideMake').hidden = gOn;
-    $('guideDel').hidden = !gOn;
+    $('guideDel').hidden = !gOn; $('guideDel2Box').hidden = !gOn;
     $('planReset').disabled = !S.anchor;
     [['sq1', has], ['sq2', has && S.resRemoved], ['sq3', gOn]].forEach(([id, ok]) => $(id).classList.toggle('done', ok));
     $('gNone').hidden = gOn;
@@ -1606,7 +1606,7 @@
   $('guideMake').addEventListener('click', makeGuide);
   $('autoPrep').addEventListener('click', autoPrep);
   $('gMake2').addEventListener('click', makeGuide);
-  $('guideDel').addEventListener('click', deleteGuide);
+  $('guideDel').addEventListener('click', deleteGuide); $('guideDel2').addEventListener('click', deleteGuide);
   $('planReset').addEventListener('click', resetPlan);
   ['parts', 'changed', 'volume', 'planApplied'].forEach(t => bus.addEventListener(t, syncSeq));
   $('addPlane').addEventListener('click', () => { if (!S.anchor) return; S.planes.push({ off: 0, yaw: 0, pitch: 0, w: 1.2 }); S.sel = 'p' + (S.planes.length - 1); schedule(true); });
