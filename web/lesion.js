@@ -114,27 +114,30 @@ window.Lesion = (function () {
     try { await planNow(pts); } finally { planning = false; status(); }
   }
   async function planNow(pts) {
-    St.busy(true, 'Kesi ve vidalar lezyona göre hesaplanıyor…'); await St.sleep();
+    St.busy(true, 'Kesiler lezyona göre hesaplanıyor…'); await St.sleep();
     try {
       // the guide is centred over the lesion
-      if (!St.anchorFromLesion(pts)) { if (!S.anchor) { St.busy(false); St.alertMsg('Lezyonun üzerinde kemik yüzeyi bulunamadı; "Rezeksiyon bölgesini modelde seç" ile guide merkezini seçin.'); return; } }
+      if (!St.anchorFromLesion(pts)) { if (!S.anchor) { St.busy(false); St.alertMsg('Lezyonun üzerinde kemik yüzeyi bulunamadı; "Bölgeyi modelde seç" ile bölgeyi modelde seçin.'); return; } }
       St.planFromLesion(pts);
-      St.busy(true, 'Guide\'ın takılabilirliği kontrol ediliyor…');
-      const f = await St.fitWrap();
-      wrapNote = !f ? '' : !f.ok ? ' Guide bu yerleşimde takılamıyor; kontrolleri inceleyin.' : (f.split ? ' Kavisli kemik nedeniyle iki ayrı guide seçildi.' : '') + (f.wrap < (S.kind === 'leg' ? 6 : 5) ? ` Guide takılabilsin diye sarma derinliği ${fmt(f.wrap, 1)} mm'ye indirildi.` : '');
+      // with a guide already on, it follows the new cuts and is checked again for fit
+      if (S.guideOn) {
+        St.busy(true, 'Guide\'ın takılabilirliği kontrol ediliyor…');
+        const f = await St.fitWrap();
+        wrapNote = !f ? '' : !f.ok ? ' Guide bu yerleşimde takılamıyor; kontrolleri inceleyin.' : (f.split ? ' Kavisli kemik nedeniyle iki ayrı guide seçildi.' : '') + (f.wrap < (S.kind === 'leg' ? 6 : 5) ? ` Guide takılabilsin diye sarma derinliği ${fmt(f.wrap, 1)} mm'ye indirildi.` : '');
+      } else wrapNote = '';
     } finally { St.busy(false); }
     // say what changed: cut positions and angles, screw count
     const pl = S.planes.slice().sort((a, b) => a.off - b.off), ang = q => (q.yaw || q.pitch ? `, açı ${fmt(Math.hypot(q.yaw, q.pitch), 0)}°` : '');
-    if (pl.length) planMsg = ` Kesiler ${pl.map(q => `${fmt(q.off, 1)} mm${ang(q)}`).join(' ve ')}; ${S.screws.length} vida yerleştirildi.${wrapNote}`;
+    if (pl.length) planMsg = ` Kesiler ${pl.map(q => `${fmt(q.off, 1)} mm${ang(q)}`).join(' ve ')}.${S.guideOn ? ` ${S.screws.length} vida yerleştirildi.` : ''}${wrapNote}`;
     status();
   }
-  $('lesPaint').innerHTML = `<h3 class="sub">Lezyonu işaretle</h3>
+  $('lesPaint').innerHTML = `<p class="hint">Fırça kesit görüntülerinde lezyonu kırmızıyla boyar, Silgi boyamayı geri alır. Boyadıktan sonra kesiler lezyonu güvenlik payı kadar dışarıda bırakacak şekilde konur.</p>
     <span class="seg" id="lsTools" role="group" aria-label="Lezyon aracı">
       <button data-t="paint" aria-pressed="false"><svg class="i"><use href="#i-brush"/></svg>Fırça</button>
       <button data-t="erase" aria-pressed="false"><svg class="i"><use href="#i-eraser"/></svg>Silgi</button>
     </span>
     <div class="ctl"><div class="ctl-row"><label for="lsRad">Fırça yarıçapı</label><output id="lsRadO">4 mm</output></div><input type="range" id="lsRad" min="1" max="12" step="0.5" value="4"></div>
-    <div class="btns"><button class="primary" id="lsPlan" disabled><svg class="i"><use href="#i-spark"/></svg>Lezyondan kesi ve vida öner</button><button id="lsClear" disabled>Temizle</button></div>
+    <div class="btns"><button class="primary" id="lsPlan" disabled><svg class="i"><use href="#i-spark"/></svg>Lezyondan kesi öner</button><button id="lsClear" disabled>Temizle</button></div>
     <p class="hint" id="lsStat"></p>
     <p class="hint">Lezyonun ilk ve son göründüğü kesitleri de boyayın. Kesiler boyanan bölgeyi güvenlik payı kadar dışarıda bırakır; açı, en az kemik alınacak şekilde 30°'ye kadar seçilir.</p>`;
   document.querySelectorAll('#lsTools [data-t]').forEach(b => b.addEventListener('click', () => setTool(b.dataset.t)));
@@ -158,5 +161,5 @@ window.Lesion = (function () {
   };
   status();
 
-  return { active: () => !!tool, tool: () => tool, paint, strokeEnd, points, setTool, plan, off: () => { if (tool) setTool(tool); } };
+  return { clear: () => { mask = null; planMsg = ''; changed(); }, active: () => !!tool, tool: () => tool, paint, strokeEnd, points, setTool, plan, off: () => { if (tool) setTool(tool); } };
 })();

@@ -66,7 +66,10 @@
   $('lightReset').addEventListener('click', () => { light = { preset: 'balanced', k: 1 }; applyLight(); render(); });
   applyLight();
   const ctlF = new THREE.OrbitControls(camF, $('splitPane'));
-  function render() {
+  // many edits ask for a frame in one go: draw once, on the next animation frame
+  let renderQ = 0;
+  function render() { if (!renderQ) renderQ = requestAnimationFrame(() => { renderQ = 0; renderNow(); }); }
+  function renderNow() {
     const w = stage.clientWidth, h = stage.clientHeight;
     if (S.split) {
       const hw = Math.floor(w / 2);
@@ -121,6 +124,8 @@
     anchor: null,             // {p:Vector3, n:Vector3, axis:Vector3}
     g: { rot: 0, L: 36, W: 22, wrap: 6, wall: 2.5, clear: 0.3, bridge: 4, side: 1, split: 0, flange: 3, peri: 0, fit: 0 },
     planes: [], screws: [], sel: null, explode: 0, mode: 'orbit', result: null,
+    guideOn: false,           // the guide is built only after 'Guide oluştur', never on its own
+    resRemoved: false,        // 'Rezeksiyon bölgesini sil': the resected piece is hidden
     lesion: { from: -6, to: 6, margin: 3, ok: false }, compNames: null, segMethod: 'Eşik', crit: 0, qc: [],
   };
   const bus = new EventTarget(), emit = (t, d) => bus.dispatchEvent(new CustomEvent(t, { detail: d }));
@@ -152,7 +157,7 @@
   async function loadDicom(files) {
     const r = await readDicom(files);
     if (r.error) { busy(false); alertMsg(r.error); return; }
-    S.source = r.source;
+    S.source = r.source; scan = r.scan;
     if (S.pendingPlan && S.pendingPlan.source && S.pendingPlan.source.fp === r.source.fp) S.autoAnchor = false;
     await setVolume(r.vol, r.label, 'dicom');
   }
@@ -193,14 +198,22 @@
     const groups = Object.values(bySeries).sort((a, b) => b.length - a.length);
     let ser = groups[0];
     if (groups.length > 1) {
-      // a plan waiting for its series picks it by fingerprint; otherwise the user chooses
+      // a plan waiting for its series picks it by fingerprint; otherwise the largest real series opens and the
+      // others stay one click away in step 1 (Seri)
       const want = S.pendingPlan && S.pendingPlan.source && S.pendingPlan.source.fp;
       let hit = null;
       if (want) for (const g of groups) { const d = g[0].ds; if (await sha256(`${g[0].series}|${d.uint16('x00280011')}x${d.uint16('x00280010')}x${g.length}`) === want) { hit = g; break; } }
-      ser = hit || await pickSeries(groups);
-      if (!ser) return { error: 'Seri seçilmedi.' };
-      $('busy').hidden = false;
+      ser = hit || groups.find(g => !seriesInfo(g).warn) || groups[0];
     }
+    const sc = { groups, zipName, skipped }, res = await decodeSeries(ser, prog, zw + pw, dw, sc);
+    if (!res.error) res.scan = sc;
+    return res;
+  }
+  // series kept from the last DICOM load, so another one can be opened without reading the files again
+  let scan = null;
+  async function decodeSeries(ser, prog, p0, dw, sc) {
+    const { groups, zipName, skipped } = sc, bySeries = Object.fromEntries(groups.map(g => [g[0].series, g]));
+    sc.cur = groups.indexOf(ser);
     const r = V(...ser[0].iop.slice(0, 3)), c = V(...ser[0].iop.slice(3)), nrm = V().crossVectors(r, c);
     ser.sort((a, b) => V(...a.ipp).dot(nrm) - V(...b.ipp).dot(nrm));
     // two images at the same position (a repeated or second acquisition): keep the first
@@ -238,32 +251,34 @@
         px = signed ? new Int16Array(buf) : new Uint16Array(buf);
       }
       for (let i = 0; i < rows * cols; i++) hu[k * rows * cols + i] = Math.max(-1024, Math.min(32000, px[i] * slope + icpt));
-      await prog(zw + pw + dw * (k + 1) / ser.length, `${what} (${k + 1} / ${ser.length})…`);
+      await prog(p0 + dw * (k + 1) / ser.length, `${what} (${k + 1} / ${ser.length})…`);
     }
     return { source, vol: { hu, nx: cols, ny: rows, nz: ser.length, sp: [ps[1], ps[0], dz], origin: ser[0].ipp,
       axes: [[r.x, r.y, r.z], [c.x, c.y, c.z], [nrm.x, nrm.y, nrm.z]], meta }, label: `${zipName || ((ser[0].path || '').includes('/') ? ser[0].path.split('/')[0] : 'DICOM')}${groups.length > 1 && source.name ? ' · ' + source.name : ''} · ${ser.length} kesit${skipped ? `, ${skipped} dosya atlandı` : ''}` };
   }
   const dstr = (ds, tag) => (ds.string(tag) || '').replace(/\0/g, '').trim();
-  // several series in one folder or zip: list them and let the user pick (largest preselected)
-  function pickSeries(groups) {
-    let dlg = $('serDlg');
-    if (!dlg) { dlg = document.createElement('dialog'); dlg.id = 'serDlg'; dlg.setAttribute('aria-labelledby', 'serTitle'); document.body.appendChild(dlg); }
-    const info = g => {
-      const d = g[0].ds, desc = dstr(d, 'x0008103e') || 'Açıklamasız seri', th = parseFloat(dstr(d, 'x00180050')), ps = dstr(d, 'x00280030').split('\\').map(Number);
-      const kern = dstr(d, 'x00181210'), type = dstr(d, 'x00080008'), mod = dstr(d, 'x00080060'), num = dstr(d, 'x00200011');
-      const parts = [`${g.length} kesit`, `${d.uint16('x00280011')}×${d.uint16('x00280010')}`];
-      if (ps[0]) parts.push(`piksel ${fmt(ps[0], 2)} mm`); if (th) parts.push(`kalınlık ${fmt(th, 2)} mm`); if (kern) parts.push(`kernel ${kern}`); if (mod && mod !== 'CT') parts.push(mod);
-      const warn = g.length < 20 ? 'çok az kesit (lokalizör olabilir)' : /LOCALIZER|SCOUT/i.test(type) ? 'lokalizör' : /DERIVED|SECONDARY/i.test(type) ? 'türetilmiş görüntü' : '';
-      return { desc: (num ? `#${num} ` : '') + desc, sub: parts.join(' · '), warn };
-    };
-    dlg.innerHTML = `<form method="dialog" class="serform"><h2 id="serTitle">Seri seçin</h2><p class="hint">Bu yüklemede ${groups.length} seri var. Guide için ince kesitli (≤ 1 mm) kemik serisini seçin.</p>
-      <div class="serlist" role="radiogroup" aria-label="Seriler">${groups.map((g, i) => { const x = info(g); return `<label class="seropt"><input type="radio" name="ser" value="${i}" ${i ? '' : 'checked'}><span><b>${esc(x.desc)}</b><small>${esc(x.sub)}</small>${x.warn ? `<em>${esc(x.warn)}</em>` : ''}</span></label>`; }).join('')}</div>
-      <div class="btns"><button value="cancel" formnovalidate>Vazgeç</button><button class="primary" value="ok">Bu seriyi aç</button></div></form>`;
-    busy(false);
-    return new Promise(res => {
-      dlg.onclose = () => { const v = dlg.returnValue === 'ok' && dlg.querySelector('input[name=ser]:checked'); res(v ? groups[+v.value] : null); };
-      dlg.showModal();
-    });
+  // one line per series for the series switcher: description, size, slice thickness, kernel, and a warning for scouts
+  function seriesInfo(g) {
+    const d = g[0].ds, desc = dstr(d, 'x0008103e') || 'Açıklamasız seri', th = parseFloat(dstr(d, 'x00180050')), ps = dstr(d, 'x00280030').split('\\').map(Number);
+    const kern = dstr(d, 'x00181210'), type = dstr(d, 'x00080008'), mod = dstr(d, 'x00080060'), num = dstr(d, 'x00200011');
+    const parts = [`${g.length} kesit`, `${d.uint16('x00280011')}×${d.uint16('x00280010')}`];
+    if (ps[0]) parts.push(`piksel ${fmt(ps[0], 2)} mm`); if (th) parts.push(`kalınlık ${fmt(th, 2)} mm`); if (kern) parts.push(`kernel ${kern}`); if (mod && mod !== 'CT') parts.push(mod);
+    const warn = g.length < 20 ? 'çok az kesit (lokalizör olabilir)' : /LOCALIZER|SCOUT/i.test(type) ? 'lokalizör' : /DERIVED|SECONDARY/i.test(type) ? 'türetilmiş görüntü' : '';
+    return { desc: (num ? `#${num} ` : '') + desc, sub: parts.join(' · '), warn };
+  }
+  function renderSeries() {
+    const box = $('serBox'), sel = $('serSel');
+    if (!scan || scan.groups.length < 2 || !S.source || S.source.type !== 'dicom') { box.hidden = true; return; }
+    box.hidden = false;
+    sel.innerHTML = scan.groups.map((g, i) => { const x = seriesInfo(g); return `<option value="${i}" ${i === scan.cur ? 'selected' : ''}>${esc(x.desc)} · ${esc(x.sub)}${x.warn ? ' · ' + esc(x.warn) : ''}</option>`; }).join('');
+  }
+  async function switchSeries(i) {
+    if (!scan || !scan.groups[i] || i === scan.cur) return;
+    if (S.anchor && !confirm('Başka seri açılınca kesiler ve guide silinir. Devam edilsin mi?')) { renderSeries(); return; }
+    const prog = progress(); await prog(0, 'Seri açılıyor…');
+    const r = await decodeSeries(scan.groups[i], prog, 0, 1, scan);
+    if (r.error) { busy(false); alertMsg(r.error); renderSeries(); return; }
+    S.source = r.source; await setVolume(r.vol, r.label, 'dicom');
   }
   async function sha256(t) {
     try { const h = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t)); return [...new Uint8Array(h)].slice(0, 12).map(b => b.toString(16).padStart(2, '0')).join(''); }
@@ -286,14 +301,42 @@
     S.red = G.reduce(vol, 0.8);
     $('caseInfo').innerHTML = `<dt>Vaka</dt><dd>${esc(label)}</dd><dt>Boyut</dt><dd>${vol.nx}×${vol.ny}×${vol.nz}</dd><dt>Voksel</dt><dd>${vol.sp.map(s => fmt(s, 2)).join(' × ')} mm</dd>`;
     S.qc = qualityCheck(vol); renderQC();
-    S.anchor = null; S.planes = []; S.screws = []; S.sel = null; S.result = null; unapprove(S.lesion);
+    S.anchor = null; S.planes = []; S.screws = []; S.sel = null; S.result = null; S.guideOn = false; S.resRemoved = false; unapprove(S.lesion);
     if (S.autoAnchor !== false) { S.lesion.condyle = null; S.g.split = 0; syncGuideInputs(); syncLesion(); }
     ['guide', 'resected', 'anchor', 'lesion'].forEach(id => setPart(id, null, null));
     clearElementParts();
     await segment(true);
+    await buildSoft(); renderSeries();
     emit('volume', { restoring: S.autoAnchor === false });
     if (S.pendingPlan && S.source && S.pendingPlan.source && S.pendingPlan.source.fp === S.source.fp) { const p = S.pendingPlan; S.pendingPlan = null; await applyPlan(p); }
     S.autoAnchor = true;
+  }
+
+  // soft tissue (skin surface) as a see-through layer: the body above -350 HU on a 2x coarser grid, airway filled
+  async function buildSoft() {
+    setPart('soft', null, null);
+    const r = S.red; if (!r || !r.hu) return;
+    busy(true, 'Yumuşak doku yüzeyi oluşturuluyor…'); await sleep();
+    try { softSurface(r); } finally { busy(false); }
+  }
+  function softSurface(r) {
+    const f = 2, nx = Math.ceil(r.nx / f), ny = Math.ceil(r.ny / f), nz = Math.ceil(r.nz / f), m = new Uint8Array(nx * ny * nz);
+    for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++)
+      m[i + nx * (j + ny * k)] = r.hu[Math.min(r.nx - 1, i * f) + r.nx * (Math.min(r.ny - 1, j * f) + r.ny * Math.min(r.nz - 1, k * f))] > -350 ? 1 : 0;
+    const { labels, comps } = G.components(m, nx, ny, nz, 50);
+    if (!comps.length) return;
+    const top = comps[0].label; for (let v = 0; v < m.length; v++) m[v] = labels[v] === top ? 1 : 0;
+    const ext = G.exterior(m, nx, ny, nz), body = new Uint8Array(m.length);
+    let n = 0; for (let v = 0; v < m.length; v++) if (!ext[v]) { body[v] = 1; n++; }
+    // a volume with no soft tissue (bone only, as in the synthetic samples) has nothing to show here
+    let bone = 0; if (S.mask) for (let v = 0; v < S.mask.length; v++) bone += S.mask[v];
+    if (n * f * f * f < bone * 1.5) return;
+    const net = G.surfaceNets(G.blur(body, nx, ny, nz), nx, ny, nz);
+    const mesh = meshFromNets(net, (x, y, z) => G.worldOf(r, x * f, y * f, z * f), mat(0xe2a48c, { transparent: true, opacity: 1, depthWrite: false }));
+    mesh.renderOrder = 2;
+    setPart('soft', 'Yumuşak doku', mesh, 0xe2a48c);
+    parts.soft.visible = $('softOn').checked; mesh.visible = parts.soft.visible;
+    setOpacity(parts.soft, 0.22);
   }
 
   // ---------- image quality control (thresholds from published guide workflows; clinical team sets the final values) ----------
@@ -465,6 +508,45 @@
     return { A: pl[0], B: pl[pl.length - 1], condyle: null };
   }
 
+  // 'Rezeksiyon bölgesini sil': the piece between the cuts is hidden (it stays in the plan and the exports)
+  function showResected() {
+    const pt = parts.resected; if (!pt) return;
+    pt.visible = !S.resRemoved; pt.obj.visible = pt.visible;
+  }
+  function syncSeq() {
+    const has = !!S.anchor && S.planes.length > 0, gOn = S.guideOn && !!S.anchor;
+    $('resRemove').disabled = !has;
+    $('resRemove').innerHTML = S.resRemoved ? '<svg class="i"><use href="#i-eye"/></svg>Rezeke parçayı geri göster' : '<svg class="i"><use href="#i-trash"/></svg>Rezeksiyon bölgesini sil';
+    $('guideMake').disabled = !has; $('guideMake').hidden = gOn;
+    $('guideDel').hidden = !gOn;
+    $('planReset').disabled = !S.anchor;
+    [['sq1', has], ['sq2', has && S.resRemoved], ['sq3', gOn]].forEach(([id, ok]) => $(id).classList.toggle('done', ok));
+    $('gNone').hidden = gOn;
+  }
+  async function makeGuide() {
+    if (!S.anchor || !S.planes.length) { alertMsg('Önce kesileri belirleyin.'); return; }
+    S.guideOn = true; placeScrews(); S.sel = null;
+    busy(true, 'Rezeksiyon güncelleniyor…'); await sleep(); await rebuildResection();
+    busy(true, 'Guide oluşturuluyor…'); await sleep();
+    const f = await fitWrap();
+    $('guideStat').textContent = !f ? '' : !f.ok ? 'Guide bu yerleşimde takılamıyor; kesileri ya da guide ayarlarını kontrol edin.'
+      : `Guide oluşturuldu, ${S.screws.length} vida yerleştirildi.` + (f.split ? ' Kavisli kemik nedeniyle iki ayrı guide seçildi.' : '') + (f.wrap < (S.kind === 'leg' ? 6 : 5) ? ` Takılabilsin diye sarma derinliği ${fmt(f.wrap, 1)} mm'ye indirildi.` : '');
+    syncSeq();
+  }
+  function deleteGuide() {
+    S.guideOn = false; S.screws = []; S.sel = null; $('guideStat').textContent = 'Guide silindi. Kesiler duruyor.';
+    schedule(false); syncSeq();
+  }
+  async function resetPlan() {
+    if (S.anchor && !confirm('Kesiler, guide ve vidalar silinip baştan başlanacak. Emin misiniz?')) return;
+    S.anchor = null; S.planes = []; S.screws = []; S.sel = null; S.result = null; S.grid = null; S.guideOn = false; S.resRemoved = false;
+    unapproveAll(); $('guideStat').textContent = '';
+    if (window.Lesion && Lesion.clear) Lesion.clear();
+    ['guide', 'resected', 'anchor', 'lesion'].forEach(id => setPart(id, null, null)); clearElementParts();
+    busy(true, 'Kemik modeli yenileniyor…'); await sleep(); await rebuildResection(); busy(false);
+    setMode('orbit'); updatePanels(); syncSeq(); render(); emit('parts'); emit('changed');
+  }
+
   // ---------- anchor frame ----------
   function showAnchor() {
     if (!S.anchor) { setPart('anchor', null, null); return; }
@@ -556,7 +638,7 @@
     if (!S.anchor) return;
     const L = S.lesion, a = Math.min(L.from, L.to) - L.margin, b = Math.max(L.from, L.to) + L.margin;
     S.planes = [{ off: a, yaw: 0, pitch: 0, w: 1.2, ok: false }, { off: b, yaw: 0, pitch: 0, w: 1.2, ok: false }];
-    placeScrews();
+    if (S.guideOn) placeScrews(); else S.screws = [];
     unapprove(S.lesion); S.sel = null;
     updateLesionPart(); schedule(true);
   }
@@ -629,7 +711,7 @@
     for (const a of A) { for (const b of B) if (!pair || a.cost + b.cost < pair[0].cost + pair[1].cost) { if (!crosses(a, b)) pair = [a, b]; } }
     if (!pair) pair = [AA.find(c => !c.pl.yaw && !c.pl.pitch), BB.find(c => !c.pl.yaw && !c.pl.pitch)];
     S.planes = pair.map(c => c.pl);
-    placeScrews();
+    if (S.guideOn) placeScrews(); else S.screws = [];
     unapprove(S.lesion); S.sel = null;
     syncLesion(); updateLesionPart(); schedule(true);
     return S.planes;
@@ -782,6 +864,13 @@
   const live = { ver: 0, shown: 0, running: false, dirty: false, planes: false, resAt: 0 };
   async function regenerate() {
     if (!S.anchor) return;
+    if (!S.guideOn) {
+      // cuts only: no guide until the user asks for one
+      live.shown = live.ver; S.liveScrews = null; S.result = null; S.grid = null;
+      setPart('guide', null, null); rebuildElementParts(planesWorld(), []); showResected();
+      applyExplode(); updatePanels(); busy(false); render(); emit('parts'); emit('changed');
+      return;
+    }
     const ver = live.ver;
     busy(true, 'Guide üretiliyor…'); await sleep();
     const pls = planesWorld(), scs = screwsWorld();
@@ -791,7 +880,7 @@
     setPart('guide', 'Guide', out.mesh, COLORS.guide);
     S.result = out.result; S.grid = out.grid;
     const screwInfo = out.result.screwInfo;
-    rebuildElementParts(pls, screwInfo);
+    rebuildElementParts(pls, screwInfo); showResected();
     applyExplode(); updatePanels(); if (ver === live.ver) busy(false); render();
     emit('parts'); emit('changed');
   }
@@ -851,8 +940,8 @@
     $('scList').innerHTML = S.screws.map((s, i) => btn('s', s, i, 'Vida')).join('');
     ['plList', 'scList'].forEach(id => $(id).querySelectorAll('button').forEach(b => b.addEventListener('click', () => select(b.dataset.s))));
     const isP = S.sel && S.sel[0] === 'p', i = S.sel ? +S.sel.slice(1) : -1, o = !S.sel ? null : isP ? S.planes[i] : S.screws[i];
-    $('plProps').innerHTML = S.planes.length ? '' : '<p class="hint">Kesi yok. "Kesi ve vida öner" ya da "Kesi ekle" ile başlayın.</p>';
-    $('scProps').innerHTML = S.screws.length ? '' : '<p class="hint">Vida yok. "Vida ekle" ile guide üzerine tıklayın.</p>';
+    $('plProps').innerHTML = S.planes.length ? '' : '<p class="hint">Kesi yok. "Bölgeyi modelde seç" ile modelde bölgeye tıklayın.</p>';
+    $('scProps').innerHTML = S.screws.length ? '' : (S.guideOn ? '<p class="hint">Vida yok. "Vida ekle" ile guide üzerine tıklayın.</p>' : '<p class="hint">Vidalar 3. adımda "Guide oluştur" ile otomatik konur.</p>');
     if (S.sel && !o) S.sel = null;
     if (!o) { if (S.planes.length) $('plProps').innerHTML = '<p class="hint">Düzenlemek için bir kesi seçin ya da 3B görünümde kesiye tıklayın.</p>'; if (S.screws.length) $('scProps').innerHTML = '<p class="hint">Düzenlemek için bir vida seçin ya da 3B görünümde vidaya tıklayın.</p>'; return; }
     const box = $(isP ? 'plProps' : 'scProps');
@@ -1050,38 +1139,21 @@
   }
   function previewNow() {
     if (!S.anchor) return;
-    const pls = planesWorld(), info = screwsWorld().map(s => ({ s, ok: !!s.entry }));
+    const pls = planesWorld(), info = S.guideOn ? screwsWorld().map(s => ({ s, ok: !!s.entry })) : [];
     S.liveScrews = info;
     rebuildElementParts(pls, info); applyExplode(); emit('preview'); render();
-  }
-  async function coarseLoop() {
-    if (live.running) { live.dirty = true; return; }
-    live.running = true;
-    try {
-      do {
-        live.dirty = false;
-        if (!S.anchor) break;
-        const ver = live.ver;
-        if (live.planes && performance.now() - live.resAt > 250) { live.planes = false; await rebuildResection({ live: true }); live.resAt = performance.now(); }
-        const out = await buildGuide(Object.assign({ g: S.g, P: S.anchor.p, pls: planesWorld(), scs: screwsWorld(), bone: boneAt, h: 0.8, fast: true }, frameAxes()));
-        if (ver <= live.shown) { disposeObj(out.mesh); continue; }
-        live.shown = ver; setPart('guide', 'Guide', out.mesh, COLORS.guide); applyExplode(); emit('preview'); render();
-        await new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));   // let the frame (and pending input) through
-      } while (live.dirty);
-    } finally { live.running = false; }
   }
   function schedule(planesChanged, liveEdit) {
     live.ver++;
     if (planesChanged) live.planes = live.resDirty = true;
     if (!liveEdit) renderElements();
     previewElements();
-    if (liveEdit && S.anchor) { $('busyText').textContent = 'Önizleme'; $('busy').hidden = false; coarseLoop(); }
+    // while dragging only the cut discs and screws move; the resected piece and the guide follow on release
     clearTimeout(timer);
     timer = setTimeout(async () => {
-      if (live.running) { await new Promise(r => { const w = () => live.running ? setTimeout(w, 20) : r(); w(); }); }
       if (live.resDirty) { live.planes = live.resDirty = false; busy(true, 'Rezeksiyon güncelleniyor…'); await sleep(); await rebuildResection(); }
       await regenerate();
-    }, liveEdit ? 300 : 120);
+    }, liveEdit ? 400 : 120);
   }
   const ray = new THREE.Raycaster(), mouse = new THREE.Vector2();
   let downAt = null;
@@ -1309,13 +1381,10 @@
       from = V(-12, box.min.y - 40, box.max.z - 70); dirv = V(0, 1, 0);
       lesion = { from: -1, to: 3, margin: 3 };
       g = { rot: 0, L: 44, W: 20, wrap: 6, wall: 2.5, clear: 0.3, bridge: 4, side: 1 };
-    } else { setMode('anchor'); return; }
-    ray.set(from, dirv);
-    const hit = ray.intersectObject(bone, false)[0];
-    if (!hit) { setMode('anchor'); return; }
-    Object.assign(S.g, g); syncGuideInputs();
-    setAnchor(hit.point, dirv.clone().negate());
-    Object.assign(S.lesion, lesion); suggest();
+    } else return;
+    // sample defaults only; the region is picked on the model in the resection step
+    void from; void dirv;
+    Object.assign(S.g, g); syncGuideInputs(); Object.assign(S.lesion, lesion); syncLesion();
     setTimeout(() => fitTo(parts.bone.obj), 50);
   }
 
@@ -1351,9 +1420,17 @@
   $('expRep').addEventListener('click', () => exportReport());
   $('thr').addEventListener('input', e => { $('thrO').textContent = e.target.value + ' HU'; });
   $('thr').addEventListener('change', () => { unapproveAll(); segment(false); });
+  $('softOn').addEventListener('change', e => { if (parts.soft) { parts.soft.visible = e.target.checked; parts.soft.obj.visible = e.target.checked; renderParts(); render(); } });
+  $('serSel').addEventListener('change', e => switchSeries(+e.target.value));
   $('pickAnchor').addEventListener('click', () => { if (S.red) setMode('anchor'); });
+  $('resRemove').addEventListener('click', () => { S.resRemoved = !S.resRemoved; showResected(); syncSeq(); renderParts(); render(); emit('changed'); });
+  $('guideMake').addEventListener('click', makeGuide);
+  $('gMake2').addEventListener('click', makeGuide);
+  $('guideDel').addEventListener('click', deleteGuide);
+  $('planReset').addEventListener('click', resetPlan);
+  ['parts', 'changed', 'volume', 'planApplied'].forEach(t => bus.addEventListener(t, syncSeq));
   $('addPlane').addEventListener('click', () => { if (!S.anchor) return; S.planes.push({ off: 0, yaw: 0, pitch: 0, w: 1.2 }); S.sel = 'p' + (S.planes.length - 1); schedule(true); });
-  $('addScrew').addEventListener('click', () => { if (S.anchor) setMode('screw'); });
+  $('addScrew').addEventListener('click', () => { if (!S.anchor) return; if (!S.guideOn) { alertMsg('Önce 3. adımda "Guide oluştur"a basın.'); return; } setMode('screw'); });
   $('explode').addEventListener('input', e => { S.explode = +e.target.value; $('explodeO').textContent = fmt(S.explode, 0) + ' mm'; applyExplode(); render(); });
   $('showAll').addEventListener('click', () => { Object.values(parts).forEach(pt => { pt.visible = true; pt.obj.visible = true; }); renderParts(); render(); });
   $('guideOnly').addEventListener('click', () => { Object.values(parts).forEach(pt => { pt.visible = /guide/.test(pt.id) || pt.id.startsWith('screw'); pt.obj.visible = pt.visible; }); renderParts(); if (parts.guide) fitTo(parts.guide.obj); });
@@ -1524,7 +1601,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
       seg: { thr: +$('thr').value, method: S.segMethod || '', sel: r ? S.comps.filter(c => S.selected.has(c.label)).map(c => G.worldOf(r, ...c.centroid).map(x => Math.round(x * 10) / 10)) : [] },
       anchor: S.anchor ? { p: vec(S.anchor.p), n: vec(S.anchor.n), axis: vec(S.anchor.axis) } : null,
       g: clone(S.g), lesion: clone(S.lesion), planes: clone(S.planes), screws: clone(S.screws),
-      perSide: +$('perSide').value || 2, surgeon: $('surgeon').value.trim(), fibula: S.fib ? clone(S.fib.plan) : null,
+      perSide: +$('perSide').value || 2, guideOn: !!S.guideOn, resRemoved: !!S.resRemoved, surgeon: $('surgeon').value.trim(), fibula: S.fib ? clone(S.fib.plan) : null,
       measures: clone(S.measures || []), ext: window.PlanExt ? Object.fromEntries(Object.entries(PlanExt).map(([k, f]) => [k, f.get()])) : {},
     };
   }
@@ -1564,6 +1641,8 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
       S.screws.forEach(c => { clampTo(c, 'u', -45, 45); clampTo(c, 'v', -15, 15); clampTo(c, 'tiltU', -40, 40); clampTo(c, 'tiltV', -40, 40); clampTo(c, 'd', 0.5, 6); clampTo(c, 'D', c.d, 12); clampTo(c, 'sleeveH', 0, 20); clampTo(c, 'len', 2, 40); });
       ['from', 'to'].forEach(k => clampTo(S.lesion, k, -45, 45)); clampTo(S.lesion, 'margin', 0, 15);
       if (plan.perSide === 1 || plan.perSide === 2) $('perSide').value = String(plan.perSide);
+      // plans from before the explicit 'Guide oluştur' step always had a guide when they had screws
+      S.guideOn = typeof plan.guideOn === 'boolean' ? plan.guideOn : S.screws.length > 0; S.resRemoved = !!plan.resRemoved;
       $('surgeon').value = typeof plan.surgeon === 'string' ? plan.surgeon : '';
       if (S.sel && !(S.sel[0] === 'p' ? S.planes : S.screws)[+S.sel.slice(1)]) S.sel = null;
       if (lostScrew && S.anchor && S.planes.length) { placeScrews(); alertMsg('Planda boş bir vida kaydı vardı; vidalar yeniden yerleştirildi. Kontrol edip onaylayın.'); }
@@ -1592,7 +1671,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     await applyPlan(plan); return true;
   }
   function serverUrl() { return ($('aiUrl').value || '').trim().replace(/\/+$/, ''); }
-  function select(sel) { S.sel = sel; emit('select', sel); renderElements(); rebuildElementParts(S.result ? S.result.pls : [], S.result ? S.result.screwInfo : []); applyExplode(); render(); }
+  function select(sel) { S.sel = sel; emit('select', sel); renderElements(); rebuildElementParts(S.result ? S.result.pls : planesWorld(), S.result ? S.result.screwInfo : []); applyExplode(); render(); }
   window.Studio = { planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, resEnds, splitGap, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr };
   bus.addEventListener('planeDragged', () => { renderElements(); schedule(true, true); });
   emit('ready');

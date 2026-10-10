@@ -120,7 +120,10 @@
     };
     const capital = t => t.charAt(0).toUpperCase() + t.slice(1);
     const before = out.length;
-    if (J(a.planes) !== J(b.planes) && J(a.screws) !== J(b.screws)) out.push('Kesi ve vida önerisi uygulandı');
+    if (!!a.guideOn !== !!b.guideOn) out.push(b.guideOn ? 'Guide oluşturuldu' : 'Guide silindi');
+    if (!!a.resRemoved !== !!b.resRemoved) out.push(b.resRemoved ? 'Rezeksiyon bölgesi silindi' : 'Rezeke parça geri gösterildi');
+    if (!!a.guideOn !== !!b.guideOn) { /* the screws come and go with the guide */ }
+    else if (J(a.planes) !== J(b.planes) && J(a.screws) !== J(b.screws)) out.push('Kesi ve vida önerisi uygulandı');
     else { list(a.planes || [], b.planes || [], 'p', 'Kesi'); list(a.screws || [], b.screws || [], 's', 'Vida'); }
     diffObj(a.g || {}, b.g || {}, NAMES.g, '', out);
     diffObj(a.lesion || {}, b.lesion || {}, NAMES.l, '', out);

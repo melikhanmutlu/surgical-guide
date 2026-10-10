@@ -265,6 +265,11 @@ button.link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2p
 #measLabels .mk { pointer-events: none; }
 #toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 60; max-width: min(560px, calc(100vw - 32px)); padding: 10px 14px; border-radius: 10px; background: var(--panel); color: var(--crit); border: 1px solid var(--crit); box-shadow: var(--shadow); font: 500 13px var(--font-body); cursor: pointer; }
 #toast[hidden] { display: none; }
+.seq { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.seq > li { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; display: flex; flex-direction: column; gap: 8px; }
+.seq > li > h3.sub { margin: 0; display: flex; align-items: center; gap: 8px; }
+.seq .sn { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--line); font-size: 12px; }
+.seq > li.done .sn { background: var(--ok, #22a06b); color: #fff; }
 #serDlg { border: 1px solid var(--line-strong); border-radius: 12px; background: var(--panel); color: var(--fg); box-shadow: var(--shadow); padding: 18px; width: min(520px, calc(100vw - 32px)); }
 #serDlg::backdrop { background: rgba(0, 0, 0, .35); }
 #serDlg h2 { font: 600 16px var(--font-body); margin: 0 0 6px; }
@@ -414,6 +419,8 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
           </div>
           <p class="err" id="caseMsg" hidden></p>
           <dl class="kv" id="caseInfo"></dl>
+          <div class="ctl" id="serBox" hidden><label for="serSel" class="lbl2">Seri (bu yüklemede birden fazla var)</label><select id="serSel"></select><p class="hint">Guide için ince kesitli (≤ 1 mm) kemik serisini seçin.</p></div>
+          <label class="chk"><input type="checkbox" id="softOn" checked> Yumuşak dokuyu 3B'de göster</label>
           <dl class="kv" id="dateInfo"></dl>
           <ul class="checks" id="qc" aria-label="Görüntü kalite kontrolü"></ul>
           <h3 class="sub">Fibula (bacak) BT'si</h3>
@@ -447,21 +454,35 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
       </details>
 
       <details class="step" id="st3" name="flow">
-        <summary><span class="n">3</span>Rezeksiyon<span class="tag" id="tag3"></span><svg class="chev"><use href="#i-chev"/></svg></summary>
+        <summary><span class="n">3</span>Rezeksiyon ve guide<span class="tag" id="tag3"></span><svg class="chev"><use href="#i-chev"/></svg></summary>
         <div class="body">
-          <div class="btns"><button id="pickAnchor"><svg class="i"><use href="#i-target"/></svg>Rezeksiyon bölgesini modelde seç</button></div>
-          <div class="ctl"><label for="resType" class="lbl2">Rezeksiyon tipi</label><select id="resType"><option value="">Segment (iki kesi arası)</option><option value="R">Kondil dahil, sağ (tek kesi)</option><option value="L">Kondil dahil, sol (tek kesi)</option></select></div>
-          <p class="hint" id="resTypeHint" hidden>Ramus ve kondil, kondile en uzak kesiden itibaren çıkarılır. Diğer kesiler yalnız guide yuvası olarak kalır. Kondil konumu Anatomi adımındaki referanstan gelir.</p>
-          <div class="ctl"><label for="perSide" class="lbl2">Her tarafta vida</label><select id="perSide"><option value="1">1 vida</option><option value="2" selected>2 vida</option></select></div>
-          <div id="lesPaint" class="col"></div>
-          <h3 class="sub">Ya da sınırı elle ayarla</h3>
-          <div id="lesCtl" class="col"></div>
-          <div class="btns"><button id="suggest"><svg class="i"><use href="#i-spark"/></svg>Kesi ve vida öner</button></div>
+          <ol class="seq">
+            <li id="sq1"><h3 class="sub"><span class="sn">a</span>Kesileri belirle</h3>
+              <p class="hint">Butona basıp modelde rezeksiyon bölgesine tıklayın; iki kesi konur. Kesiyi 3B görünümde tutup sürükleyebilir ya da listeden seçip ayarlayabilirsiniz. Guide bu aşamada oluşmaz.</p>
+              <div class="btns"><button class="primary" id="pickAnchor"><svg class="i"><use href="#i-target"/></svg>Bölgeyi modelde seç</button></div>
+              <div class="ctl"><label for="resType" class="lbl2">Rezeksiyon tipi</label><select id="resType"><option value="">Segment (iki kesi arası)</option><option value="R">Kondil dahil, sağ (tek kesi)</option><option value="L">Kondil dahil, sol (tek kesi)</option></select></div>
+              <p class="hint" id="resTypeHint" hidden>Ramus ve kondil, kondile en uzak kesiden itibaren çıkarılır. Diğer kesiler yalnız guide yuvası olarak kalır. Kondil konumu Anatomi adımındaki referanstan gelir.</p>
+              <div class="btns"><button id="addPlane"><svg class="i"><use href="#i-plus"/></svg>Kesi ekle</button></div>
+              <div class="el-list" id="plList"></div>
+              <div id="plProps" class="col"></div>
+              <details class="sub-d"><summary>Lezyonu kesitlerde boyayarak kesi öner (isteğe bağlı)</summary><div id="lesPaint" class="col"></div></details>
+              <details class="sub-d"><summary>Sınırları sayıyla ayarla</summary>
+                <div id="lesCtl" class="col"></div>
+                <div class="btns"><button id="suggest"><svg class="i"><use href="#i-spark"/></svg>Kesileri bu sınıra göre koy</button></div>
+              </details>
+            </li>
+            <li id="sq2"><h3 class="sub"><span class="sn">b</span>Rezeksiyon bölgesini sil</h3>
+              <p class="hint">Kesiler arasındaki kemik (turuncu) modelden kaldırılır, kalan kemiği görürsünüz. Planda ve dışa aktarımda durur.</p>
+              <div class="btns"><button id="resRemove" disabled>Rezeksiyon bölgesini sil</button></div>
+            </li>
+            <li id="sq3"><h3 class="sub"><span class="sn">c</span>Guide oluştur</h3>
+              <div class="ctl"><label for="perSide" class="lbl2">Her tarafta vida</label><select id="perSide"><option value="1">1 vida</option><option value="2" selected>2 vida</option></select></div>
+              <div class="btns"><button class="primary" id="guideMake" disabled><svg class="i"><use href="#i-spark"/></svg>Guide oluştur</button><button id="guideDel" hidden><svg class="i"><use href="#i-trash"/></svg>Guide'ı sil</button></div>
+              <p class="hint" id="guideStat"></p>
+            </li>
+          </ol>
           <p class="hint" id="lesStatus"></p>
-          <h3 class="sub">Kesiler</h3>
-          <div class="btns"><button id="addPlane"><svg class="i"><use href="#i-plus"/></svg>Kesi ekle</button></div>
-          <div class="el-list" id="plList"></div>
-          <div id="plProps" class="col"></div>
+          <div class="btns"><button id="planReset" disabled>Baştan başla</button></div>
           <div class="stepwarn" data-for="res"></div>
           <div class="nav"><button class="primary next" data-next="st4">Fibula<svg class="i"><use href="#i-next"/></svg></button></div>
         </div>
@@ -506,6 +527,7 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
       <details class="step" id="st5" name="flow">
         <summary><span class="n">5</span>Guide'lar<span class="tag" id="tag5g"></span><svg class="chev"><use href="#i-chev"/></svg></summary>
         <div class="body">
+          <p class="hint" id="gNone">Guide henüz oluşturulmadı. Kesileri belirledikten sonra oluşturun. <button id="gMake2">Guide oluştur</button></p>
           <div id="mfgBox" class="col"></div>
           <div id="guideList" class="col"></div>
           <div class="ctl"><label for="g_split" class="lbl2">Guide düzeni</label><select id="g_split"><option value="0">Tek guide, köprülü</option><option value="1">İki guide</option></select></div>
