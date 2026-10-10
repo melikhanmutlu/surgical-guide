@@ -427,11 +427,12 @@ label.chk { display: flex; min-height: 26px; cursor: pointer; }
 label.chk input[type=checkbox] { margin: 0 4px 0 0; width: 15px; height: 15px; flex: none; }
 .layers .lay.on, .layers .lay:has(input[type=radio]:checked) { border-color: var(--accent-line); background: var(--accent-soft); }
 /* results */
-.kv { gap: 0 12px; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); }
+/* key-value rows: label on the left, value on the right, always on one row; a long value wraps inside its column */
+.kv { gap: 0; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); }
 .kv dt { font-size: 13px; }
 .kv dt, .kv dd { padding: 4px 0; border-bottom: 1px solid var(--line); }
 .kv dt:last-of-type, .kv dd:last-of-type { border-bottom: 0; }
-.kv dd { text-align: right; }
+.kv dd { text-align: right; padding-left: 12px; text-wrap: pretty; }
 .checks li { grid-template-columns: 18px 1fr; }
 .checks li b { font-size: 0; gap: 0; } .checks li b::before { font-size: 12px; }
 .checks li[data-go]::after { content: "›"; grid-column: 3; color: var(--faint); font-size: 16px; line-height: 1; align-self: center; padding-right: 6px; }
@@ -461,9 +462,6 @@ details.sec[open] > summary { margin: 0 -10px; border: 0; border-bottom: 1px sol
 .btns.end { justify-content: flex-end; }
 button.ghost { color: var(--accent); }
 button.ghost.danger { color: var(--crit); }
-.kv dt.wide, .kv dd.wide { grid-column: 1 / -1; }
-.kv dt.wide { border-bottom: 0; padding-bottom: 0; }
-.kv dd.wide { text-align: left; color: var(--fg); padding-top: 1px; }
 :is(#apprMsg, #auMsg, #expMsg, #fibMirrorMsg, #fibPickMsg, #fibStatus, #guideStat, #imMsg, #lesStatus, #lsStat, #mkStat, #plMsg, #seStat, #verMsg, #xMsg) { color: var(--fg); background: var(--sunken); border-radius: var(--r); padding: 6px 10px; }
 :is(#apprMsg, #auMsg, #expMsg, #fibMirrorMsg, #fibPickMsg, #fibStatus, #guideStat, #imMsg, #lesStatus, #lsStat, #mkStat, #oneMsg, #prodMsg, #plMsg, #seStat, #verMsg, #xMsg):empty { display: none; }
 </style>
