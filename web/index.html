@@ -131,6 +131,7 @@ body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 var(--
 .ctl { display: grid; gap: 2px; }
 .ctl-row { display: flex; justify-content: space-between; gap: 8px; color: var(--fg); }
 .ctl-row output { font: 400 12.5px var(--font-mono); font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; }
+.ctl.auto .ctl-row output::after { content: ' · oto'; color: var(--muted); font-size: 11px; }
 input[type=range] { width: 100%; margin: 3px 0; accent-color: var(--accent); height: 16px; }
 button, select, .filebtn { font: 500 13px var(--font-body); color: var(--fg); background: var(--panel); border: 1px solid var(--control); border-radius: var(--r); padding: 0 10px; height: 30px; box-sizing: border-box; cursor: pointer; transition: background .12s, border-color .12s, color .12s; }
 .filebtn { display: inline-flex; align-items: center; }
@@ -637,7 +638,7 @@ button.ghost.danger { color: var(--crit); }
             <div class="btns"><button id="fibPick" aria-pressed="false"><svg class="i"><use href="#i-target"/></svg>Modelde seç</button><button id="fibSplit" aria-pressed="false"><svg class="i"><use href="#i-scissors"/></svg>Tibiadan ayır</button></div>
             <p class="hint" id="fibPickMsg" hidden></p>
             <h3 class="sub">Segmentler</h3>
-            <div class="ctl"><span class="lbl2">Segment sayısı</span><span class="seg" id="fibN" role="group" aria-label="Segment sayısı"><button data-n="1">1</button><button data-n="2">2</button><button data-n="3">3</button></span></div>
+            <div class="ctl"><span class="lbl2">Segment sayısı</span><span class="seg" id="fibN" role="group" aria-label="Segment sayısı"><button data-n="1">1</button><button data-n="2">2</button><button data-n="3">3</button><button data-n="4">4</button></span></div>
             <div id="fibKnots" class="col"></div>
             <div class="btns"><button id="fibOpt" class="accent"><svg class="i"><use href="#i-spark"/></svg>Kesileri öner</button></div>
             <details class="sec" id="secFibAng"><summary>Segment ve eklem açıları</summary>
@@ -682,7 +683,10 @@ button.ghost.danger { color: var(--crit); }
           <div id="guideList" class="col"></div>
           <div class="btns end" id="guideDel2Box" hidden><button id="guideDel2" class="sm" title="Guide ve vidaları kaldırır; kesiler yerinde kalır"><svg class="i"><use href="#i-trash"/></svg>Guide'ı sil</button></div>
           <h3 class="sub">Yerleşim</h3>
-          <div class="ctl"><label for="g_split" class="lbl2">Düzen</label><select id="g_split" data-seg><option value="0" data-short="Tek parça">Tek parça (köprülü)</option><option value="1">İki parça</option></select></div>
+          <div class="ctl"><label for="g_split" class="lbl2">Düzen</label><select id="g_split" data-seg><option value="0" data-short="Tek parça">Tek parça (köprülü)</option><option value="1">İki parça</option><option value="2" data-short="İki eksen">İki parça, her kesi kendi ekseninde</option></select></div>
+          <div class="ctl"><label for="g_kerf" class="lbl2">Testere payı</label><select id="g_kerf" data-seg><option value="1" data-short="Rezeke tarafta">Rezeke tarafta (greft güdüğe tam oturur)</option><option value="0" data-short="Ortalı">Kesi düzlemine ortalı (her uçta yarım yuva aralık)</option></select></div>
+          <p class="hint more">Uzunluk, genişlik ve sarma derinliği kemiğe göre kendiliğinden seçilir; bir kaydırıcıyı elle değiştirince o değer korunur.</p>
+          <div class="btns end"><button id="gAutoReset" class="sm" type="button" title="Elle değiştirilen uzunluk, genişlik ve sarmayı yeniden kemiğe göre seçer">Otomatiğe dön</button></div>
           <div class="ctl"><label for="g_side" class="lbl2">Köprü tarafı</label><select id="g_side" data-seg><option value="1" data-short="+ taraf">Bir kenar (+)</option><option value="-1" data-short="− taraf">Diğer kenar (−)</option></select></div>
           <div id="gCtl" class="col"></div>
           <details class="sec" id="secStop"><summary>Stoplar</summary>

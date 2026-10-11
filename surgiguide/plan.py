@@ -25,9 +25,13 @@ def _points(vol, mask, step=1):
 
 
 class Arch:
-    """Mandibular arch centreline, parametrised by arc length s (0 = midline, + = patient left)."""
+    """Mandibular centreline from one condyle to the other, parametrised by arc length s (0 = midline, + = patient left):
+    the body arch (the lowest body_height mm of the bone, polar bins around its centre) continued up each ramus (slab
+    centroids of the lateral bone above the body band, posterior of the angle) to the top of the condyle. s_body = (s at
+    the right angle, s at the left angle): between them the arch is the body, beyond them the rami (ramus_mm = their
+    lengths), so a resection anywhere on the mandible (symphysis to condyle) is plannable."""
 
-    def __init__(self, vol, mask, body_height=24.0, bin_deg=2.0):
+    def __init__(self, vol, mask, body_height=24.0, bin_deg=2.0, ramus=True):
         P = _points(vol, mask)
         ext = np.ptp(P, axis=0)
         if ext[0] > 160 or ext[2] > 130:        # skull / spine joined to the mandible: the arch would be fitted to the wrong bone
@@ -50,9 +54,39 @@ class Arch:
         seg = np.linalg.norm(np.diff(pts, axis=0), axis=1)
         s = np.concatenate([[0], np.cumsum(seg)])
         s -= np.interp(0.0, ang, s)                                     # s = 0 at the midline
+        self.center = c
+        self.s_body = (float(s[0]), float(s[-1]))
+        self.ramus_mm = (0.0, 0.0)
+        if ramus:
+            right, left = self._ramus(P, pts[0], -1, z0 + body_height), self._ramus(P, pts[-1], +1, z0 + body_height)
+            chain = right[::-1] + [pts] + left
+            pts = np.concatenate([np.atleast_2d(q) for q in chain], 0)
+            seg = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+            s2 = np.concatenate([[0], np.cumsum(seg)])
+            s2 -= s2[len(right)]                                        # s unchanged on the body: s_body[0] at the right angle
+            s = s2 + self.s_body[0]
+            self.ramus_mm = (float(self.s_body[0] - s[0]), float(s[-1] - self.s_body[1]))
         self.s = np.arange(s.min(), s.max(), 0.5)
         self.pts = np.stack([np.interp(self.s, s, pts[:, i]) for i in range(3)], 1)
-        self.center = c
+
+    @staticmethod
+    def _ramus(P, angle_pt, side, z_from, slab=3.0, min_pts=12):
+        """Centreline of one ramus as a list of points from the angle upwards: in slabs of `slab` mm above the body band,
+        the centroid of the bone lateral of the midline (side * (x - angle x) > -12) and no more than 12 mm anterior of the
+        angle (the alveolar process and the teeth of the body lie anterior); stops at the first empty slab (condyle top)."""
+        out, z = [], z_from
+        while z < P[:, 2].max():
+            sel = (P[:, 2] >= z) & (P[:, 2] < z + slab) & (side * (P[:, 0] - angle_pt[0]) > -12) & (P[:, 1] > angle_pt[1] - 12)
+            if sel.sum() < min_pts:
+                break
+            out.append(P[sel].mean(0)); z += slab
+        if len(out) >= 3:
+            out = list(ndi.gaussian_filter1d(np.array(out), 1.0, axis=0, mode="nearest"))
+        return out
+
+    def on_ramus(self, s):
+        """True where s lies beyond the body (on a ramus)."""
+        return (s < self.s_body[0] - 1e-6) | (s > self.s_body[1] + 1e-6)
 
     def point(self, s):
         return np.stack([np.interp(s, self.s, self.pts[:, i]) for i in range(3)], -1)
@@ -61,12 +95,20 @@ class Arch:
         return _unit(self.point(s + ds) - self.point(s - ds))
 
     def buccal(self, s, t=None):
-        """Horizontal unit vector perpendicular to the arch, pointing outwards (buccal)."""
+        """Unit vector perpendicular to the arch, pointing outwards (buccal): horizontal on the body; on a ramus (tangent
+        rising) the lateral direction away from the midline, made perpendicular to the tangent."""
         t = self.tangent(s) if t is None else t
-        n = _unit(np.cross(t, UP))
-        if np.dot(n, self.point(s) - self.center) < 0:
-            n = -n
-        return n
+        p = self.point(s)
+        if abs(t[2]) < 0.6:
+            n = _unit(np.cross(t, UP))
+            if np.dot(n, p - self.center) < 0:
+                n = -n
+            return n
+        lat = np.array([np.sign(p[0] - self.center[0]) or 1.0, 0.0, 0.0])
+        n = lat - np.dot(lat, t) * t
+        if np.linalg.norm(n) < 1e-6:
+            n = np.cross(t, UP)
+        return _unit(n)
 
     def closest_s(self, q):
         from scipy.spatial import cKDTree
@@ -123,26 +165,57 @@ class Fibula:
         return self.c + np.asarray(local) @ self.axes.T
 
 
+KERF_SIDES = ("resected", "centre")      # where the mandible saw slot lies relative to the planned cut plane (web/app.js kerfSide 1 / 0)
+STUMP_GAP_WARN = 1.0                     # mm per end (web/osteo.js LIM.gap)
+
+
+def choose_segments(arch, s_a, s_b, tol_mm=2.5, min_len=20.0, max_n=4):
+    """Segment count from the defect, the same rule as web/fibula.js segmentChoice: a defect shorter than one segment is
+    one segment; otherwise the fewest segments that keep every segment >= min_len and follow the arch within tol_mm; if
+    no count reaches the tolerance, the count with the smallest deviation among those that keep every segment >= min_len
+    (fewer segments on a tie within 0.5 mm; a short segment is never traded for a smaller deviation).
+    Returns (knots, dev, n, decision) with the table of candidates in `decision`."""
+    arc = s_b - s_a
+    table = []
+    for n in range(1, max_n + 1):
+        k, dev = optimise_segments(arch, s_a, s_b, n)
+        lens = [float(np.linalg.norm(arch.point(b) - arch.point(a))) for a, b in zip(k[:-1], k[1:])]
+        table.append(dict(n=n, knots=k, dev=float(dev), min_len=min(lens)))
+        if min(lens) < min_len:                                      # more segments only get shorter
+            break
+    ok_len = [r for r in table if r["min_len"] >= min_len - 1e-9]
+    if arc < min_len:
+        pick, reason = table[0], "short"
+    elif any(r["dev"] <= tol_mm for r in ok_len):
+        pick, reason = next(r for r in ok_len if r["dev"] <= tol_mm), "dev"
+    elif ok_len:
+        pick = ok_len[0]
+        for r in ok_len[1:]:
+            if r["dev"] < pick["dev"] - 0.5:
+                pick = r
+        reason = "len"
+    else:
+        pick, reason = table[0], "short"
+    decision = dict(reason=reason, n=pick["n"], candidates=[dict(n=r["n"], deviation_mm=round(r["dev"], 2), shortest_segment_mm=round(r["min_len"], 1)) for r in table])
+    return pick["knots"], pick["dev"], pick["n"], decision
+
+
 def make_plan(arch, fibula, s_a, s_b, n_segments=None, tol_mm=2.5, min_len=20.0,
-              kerf=1.0, distal_margin=70.0, proximal_margin=60.0, roll_deg=0.0):
-    """Return the plan dict. s_a < s_b are arch positions (mm from midline) of the two mandible cuts."""
+              kerf=1.0, distal_margin=70.0, proximal_margin=60.0, roll_deg=0.0, kerf_side="resected"):
+    """Return the plan dict. s_a < s_b are arch positions (mm from midline) of the two mandible cuts.
+    kerf_side: "resected" = the slot lies on the resected side of the plane, the graft meets the stump flush (gap 0);
+    "centre" = the slot is centred on the plane, half the kerf is lost from each stump (gap kerf / 2 per end)."""
+    if kerf_side not in KERF_SIDES:
+        raise ValueError(f"kerf_side must be one of {KERF_SIDES} (got {kerf_side!r})")
     if not (np.isfinite(s_a) and np.isfinite(s_b)) or s_b - s_a < 5.0:
         raise ValueError(f"resection range must be finite and at least 5 mm long (got {s_a} .. {s_b})")
     if s_a < arch.s[0] - 1e-6 or s_b > arch.s[-1] + 1e-6:
-        raise ValueError(f"resection {s_a:.1f} .. {s_b:.1f} mm lies outside the detected mandible arch ({arch.s[0]:.1f} .. {arch.s[-1]:.1f} mm)")
+        body = getattr(arch, "s_body", (arch.s[0], arch.s[-1]))
+        raise ValueError(f"resection {s_a:.1f} .. {s_b:.1f} mm lies outside the detected mandible ({arch.s[0]:.1f} .. {arch.s[-1]:.1f} mm "
+                         f"from condyle to condyle; body {body[0]:.1f} .. {body[1]:.1f} mm)")
+    decision = None
     if n_segments is None:                                           # automatic choice
-        best = None
-        for n in range(1, 5):
-            k, dev = optimise_segments(arch, s_a, s_b, n)
-            lens = [np.linalg.norm(arch.point(b) - arch.point(a)) for a, b in zip(k[:-1], k[1:])]
-            if min(lens) < min_len:                                  # segments too short to survive
-                break
-            best = (k, dev, n)
-            if dev <= tol_mm:
-                break
-        if best is None:
-            best = (*optimise_segments(arch, s_a, s_b, 1), 1)
-        knots, dev, n_segments = best
+        knots, dev, n_segments, decision = choose_segments(arch, s_a, s_b, tol_mm, min_len)
     else:
         knots, dev = optimise_segments(arch, s_a, s_b, n_segments)
 
@@ -176,27 +249,37 @@ def make_plan(arch, fibula, s_a, s_b, n_segments=None, tol_mm=2.5, min_len=20.0,
         s_cursor += L
         prev_end_normal_f = n1f
     overflow = s_cursor - (fibula.s_max - proximal_margin)
-    warnings = plan_warnings(segs, dev, n_segments, tol_mm, min_len, overflow, s_b - s_a)
+    stump_gap = 0.0 if kerf_side == "resected" else kerf / 2
+    warnings = plan_warnings(segs, dev, n_segments, tol_mm, min_len, overflow, s_b - s_a, decision, stump_gap, kerf_side)
     return dict(knots=knots, points=P, normals=normals, segments=segs, max_deviation_mm=float(dev),
-                n_segments=n_segments, kerf=kerf, fibula_fits=bool(overflow <= 0),
+                n_segments=n_segments, kerf=kerf, kerf_side=kerf_side, stump_gap_mm=[stump_gap, stump_gap], segment_decision=decision,
+                fibula_fits=bool(overflow <= 0),
                 fibula_overflow_mm=float(max(0, overflow)), defect_arc_mm=float(s_b - s_a), warnings=warnings)
 
 
 ANGLE_WARN = 35.0               # deg: a cut this oblique is hard to saw and to fit (web/fibula.js ANGLE_WARN)
 
 
-def plan_warnings(segs, dev, n_segments, tol_mm, min_len, overflow, arc):
+def plan_warnings(segs, dev, n_segments, tol_mm, min_len, overflow, arc, decision=None, stump_gap=0.0, kerf_side="resected"):
     """What the plan does outside its own tolerances (web/fibula.js reports the same as critical): never silent."""
     w = []
     if dev > tol_mm:
         w.append(f"graft-to-arch deviation {dev:.2f} mm is above the {tol_mm:.1f} mm tolerance "
                  f"({n_segments} segment(s) for a {arc:.0f} mm defect); more or shorter segments follow the arch better")
+    short_defect = decision is not None and decision["reason"] == "short" and n_segments == 1
+    if short_defect:
+        w.append(f"the defect ({arc:.1f} mm along the arch) is shorter than one {min_len:.0f} mm segment: one segment planned, it cannot be made longer")
     for g in segs:
-        if g["length_mm"] < min_len:
+        if g["length_mm"] < min_len and not short_defect:
             w.append(f"segment {g['index'] + 1} is {g['length_mm']:.1f} mm long, below the {min_len:.0f} mm a segment needs to keep its blood supply and fixation")
         a = max(g["angle_start_deg"], g["angle_end_deg"])
         if a > ANGLE_WARN:
             w.append(f"segment {g['index'] + 1}: a cut is {a:.0f} deg off the fibula axis (more than {ANGLE_WARN:.0f} deg)")
+    if decision is not None and decision["reason"] == "len":
+        w.append(f"segment count {n_segments} chosen for the smallest deviation among the counts that keep every segment >= {min_len:.0f} mm; no count reaches the {tol_mm:.1f} mm deviation target "
+                 + "(" + ", ".join(f"{c['n']}: shortest {c['shortest_segment_mm']} mm, deviation {c['deviation_mm']} mm" for c in decision["candidates"]) + ")")
+    if stump_gap > STUMP_GAP_WARN:
+        w.append(f"graft-to-stump gap {stump_gap:.2f} mm per end (kerf {kerf_side}) is above {STUMP_GAP_WARN:.1f} mm")
     if overflow > 0:
         w.append(f"the fibula is {overflow:.1f} mm too short for this plan (distal / proximal safety margins included)")
     return w
@@ -211,7 +294,10 @@ def plan_summary(plan, fibula):
                          end_cut_angle_deg=round(g["angle_end_deg"], 1)))
     return dict(n_segments=plan["n_segments"], defect_arc_length_mm=round(plan["defect_arc_mm"], 1),
                 max_graft_to_arch_deviation_mm=round(plan["max_deviation_mm"], 2),
-                kerf_mm=plan["kerf"], fibula_length_sufficient=plan["fibula_fits"], plan_warnings=list(plan.get("warnings", [])),
+                kerf_mm=plan["kerf"], kerf_side=plan.get("kerf_side", "resected"),
+                graft_to_stump_gap_mm=[round(x, 2) for x in plan.get("stump_gap_mm", [0.0, 0.0])],
+                segment_decision=plan.get("segment_decision"),
+                fibula_length_sufficient=plan["fibula_fits"], plan_warnings=list(plan.get("warnings", [])),
                 mandible_cut_points_mm=[[round(v, 1) for v in plan["points"][0]],
                                         [round(v, 1) for v in plan["points"][-1]]],
                 segments=rows)

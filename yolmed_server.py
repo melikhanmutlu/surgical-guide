@@ -272,7 +272,9 @@ def build_guide(req):
     L, W = float(g["L"]), float(g["W"])
     wrap, wall, clear = float(g["wrap"]), float(g["wall"]), float(g["clear"])
     bridge, side = float(g["bridge"]), (1.0 if float(g.get("side", 1)) >= 0 else -1.0)
-    _check_ranges({"L": (L, 5, 200), "W": (W, 3, 100), "wrap": (wrap, 0, 40), "wall": (wall, 0.5, 10), "clear": (clear, 0, 3), "bridge": (bridge, 0, 30)})
+    vc = float(g.get("vc", 0) or 0)                      # lateral (v) centre of the body relative to the frame origin
+    _check_ranges({"L": (L, 5, 200), "W": (W, 3, 100), "wrap": (wrap, 0, 40), "wall": (wall, 0.5, 10), "clear": (clear, 0, 3), "bridge": (bridge, 0, 30), "vc": (vc, -50, 50)})
+    v_lo_b, v_hi_b = vc - W / 2, vc + W / 2
     if len(req.get("planes") or []) > MAX_PLANES or len(req.get("screws") or []) > MAX_SCREWS:
         raise HttpError(400, f"at most {MAX_PLANES} planes and {MAX_SCREWS} screws per guide")
     for pl in req.get("planes") or []:
@@ -334,13 +336,13 @@ def build_guide(req):
     kk, jj, ii = np.nonzero(surf)
     A = (axes * sp[:, None]).T                          # columns: world step per i, j, k
     bone_f = (np.stack([ii, jj, kk], 1) @ A.T + corg - p) @ R
-    inside = ((np.abs(bone_f[:, 0]) <= L / 2 + 1) & (np.abs(bone_f[:, 1]) <= W / 2 + 1)
+    inside = ((np.abs(bone_f[:, 0]) <= L / 2 + 1) & (np.abs(bone_f[:, 1] - vc) <= W / 2 + 1)
               & (bone_f[:, 2] >= -deep - 1))
     if not inside.any():
         raise HttpError(422, "no bone inside the guide footprint")
     top = bone_f[inside, 2].max() + bridge_hi + 1.0
-    lo = np.array([-L / 2, -W / 2 - ext_neg, -deep - dstop]) - 2 * r
-    hi = np.array([L / 2, W / 2 + ext_pos, top]) + 2 * r
+    lo = np.array([-L / 2, v_lo_b - ext_neg, -deep - dstop]) - 2 * r
+    hi = np.array([L / 2, v_hi_b + ext_pos, top]) + 2 * r
     screws = req.get("screws") or []
     for s in screws:
         dirn = _unit(s["dir"])
@@ -393,9 +395,9 @@ def build_guide(req):
         vv_ = glo[1] + r * np.arange(shape[1])
         band = np.zeros(shape[1], bool)
         if "pos" in stop:
-            band |= vv_ > W / 2 - 2
+            band |= vv_ > v_hi_b - 2
         if "neg" in stop:
-            band |= vv_ < -W / 2 + 2
+            band |= vv_ < v_lo_b + 2
         shadow[:, ~band, :] = 0
         shell = _mc_manifold(m3d, np.maximum(f_shell, ndi.gaussian_filter(shadow, 0.6) - 0.5), glo, r, sl)
         del above, shadow
@@ -420,16 +422,16 @@ def build_guide(req):
             return m3d.Manifold.extrude(m3d.CrossSection([pts] if _ccw(pts) else [pts[::-1]]), v_hi - v_lo).rotate((90, 0, 0)).translate((0, v_hi, 0))
         return m3d.Manifold.cube((L, v_hi - v_lo, zhi + wrap + shift)).translate((-L / 2, v_lo, -wrap - shift))
 
-    box = make_box(-W / 2, W / 2, 0.0)
+    box = make_box(v_lo_b, v_hi_b, 0.0)
     # stops: the shell continues past the edge and deeper, but only where no bone lies above it along the seating
     # normal (the bone's "shadow"), so a stop rests on the bone edge without creating an undercut
     stop_box = None
     if "pos" in stop:
-        stop_box = make_box(W / 2 - 2, W / 2 + stop["pos"][0], stop["pos"][1])
+        stop_box = make_box(v_hi_b - 2, v_hi_b + stop["pos"][0], stop["pos"][1])
     if "neg" in stop:
-        nb_ = make_box(-W / 2 - stop["neg"][0], -W / 2 + 2, stop["neg"][1])
+        nb_ = make_box(v_lo_b - stop["neg"][0], v_lo_b + 2, stop["neg"][1])
         stop_box = nb_ if stop_box is None else stop_box + nb_
-    v0 = W / 2 - bridge if side > 0 else -W / 2 - BIG
+    v0 = v_hi_b - bridge if side > 0 else v_lo_b - BIG
     vslab = m3d.Manifold.cube((BIG, bridge + BIG, BIG)).translate((-BIG / 2, v0, -BIG / 2))
 
     # slots: thin slabs, cut from the shell only (the bridge keeps the guide in one piece)

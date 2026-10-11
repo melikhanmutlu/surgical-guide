@@ -46,12 +46,14 @@ window.Osteo = (function () {
     const mand = (g, end) => {
       // end 'A': stump behind -N of the first cut; end 'B': stump beyond +N of the last cut. N runs A -> B.
       const P = end === 'A' ? E.A : E.B, N = (end === 'A' ? g.N0 : g.N1).clone(), sgn = end === 'A' ? -1 : 1, p = end === 'A' ? g.P0 : g.P1;
-      const back = P.w / 2 + 0.4, sec = section(p, N, Math.max(18, FR + 6), q => St.boneAt(q.clone().addScaledVector(N, sgn * back)), q => gb(g.i, q.clone().addScaledVector(N, -sgn * 0.4)));
-      const ax = stumpAxis(p.clone().addScaledVector(N, sgn * P.w / 2), N.clone().multiplyScalar(sgn));
+      // planned gap at this end: the half slot behind the plane (0 when the kerf lies on the resected side, Studio.stumpGap)
+      const gap = St.stumpGap ? St.stumpGap(P) : P.w / 2;
+      const back = gap + 0.4, sec = section(p, N, Math.max(18, FR + 6), q => St.boneAt(q.clone().addScaledVector(N, sgn * back)), q => gb(g.i, q.clone().addScaledVector(N, -sgn * 0.4)));
+      const ax = stumpAxis(p.clone().addScaledVector(N, sgn * gap), N.clone().multiplyScalar(sgn));
       // graft direction leaving the stump into the defect
       const into = g.x.clone().multiplyScalar(-sgn), axis = ax ? r2d(ax.angleTo(into)) : null;
       return { kind: end, name: `Mandibula ${end === 'A' ? '1' : '2'} – segment ${g.i + 1}${g.barrel ? ' (üst)' : ''}`, short: end === 'A' ? `M1–S${g.i + 1}${g.barrel ? 'ü' : ''}` : `S${g.i + 1}${g.barrel ? 'ü' : ''}–M2`, seg: g.i, angle: axis, angleKind: 'eksen',
-        contact: sec.contact, graftArea: sec.areaB, otherArea: sec.areaA, gap: P.w / 2 };
+        contact: sec.contact, graftArea: sec.areaB, otherArea: sec.areaA, gap };
     };
     lower.length && out.push(mand(lower[0], 'A'));
     for (let j = 0; j < lower.length - 1; j++) {
@@ -74,7 +76,7 @@ window.Osteo = (function () {
       if (o.graftArea > 0 && o.overlap < LIM.overlap) out.push(['warn', 'Uyarı', `Osteotomi ${o.name}: kemik teması greft kesitinin %${fmt(o.overlap * 100, 0)}'i (örnek eşik %${LIM.overlap * 100}). Kemik iyileşmesi için temas artırılmalı.`, 'fib']);
       else if (o.contact < LIM.area) out.push(['warn', 'Uyarı', `Osteotomi ${o.name}: temas alanı ${fmt(o.contact, 0)} mm² (örnek eşik ${LIM.area} mm²).`, 'fib']);
       if (o.kind === 'J' && o.angle > LIM.wedge) out.push(['warn', 'Uyarı', `Osteotomi ${o.name}: kapama kaması ${fmt(o.angle, 0)}° (örnek eşik ${LIM.wedge}°); kesi yüzeyleri uzar, temas zayıflar.`, 'fib']);
-      if (o.gap > LIM.gap) out.push(['warn', 'Uyarı', `Osteotomi ${o.name}: planlanan aralık ${fmt(o.gap)} mm (örnek eşik ${fmt(LIM.gap)} mm). Kesi yuvasını daraltın.`, 'fib']);
+      if (o.gap > LIM.gap) out.push(['warn', 'Uyarı', `Osteotomi ${o.name}: planlanan aralık ${fmt(o.gap)} mm (örnek eşik ${fmt(LIM.gap)} mm). Kesi yuvasını daraltın ya da testere payını rezeke tarafa alın.`, 'fib']);
       if (o.kind !== 'J' && o.angle != null && o.angle > LIM.axis) out.push(['info', 'Bilgi', `Osteotomi ${o.name}: greft ekseni mandibula ekseninden ${fmt(o.angle, 0)}° sapıyor.`, 'fib']);
     });
     return out;

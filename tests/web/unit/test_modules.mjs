@@ -120,7 +120,18 @@ test('fibula: segments do not overlap on the fibula and keep the distal margin',
 test('osteo: straight bar -> graft axis within 5° of the stump axis, contact ≥ 80 % of the graft section at both ends', async () => {
   await sleep(400); W.Osteo.update(); const r = W.Osteo.get();
   assert.ok(r && r.length >= 2, 'junctions: ' + JSON.stringify(r));
-  r.filter(o => o.kind !== 'J').forEach(o => { assert.ok(o.angle != null && o.angle < 5, o.name + ' angle ' + o.angle); assert.ok(o.overlap > 0.8, o.name + ' overlap ' + o.overlap); near(o.gap, 0.6, 1e-9, 'gap = slot/2'); });
+  // kerf on the resected side (default): the graft meets the stump flush, planned gap 0 at both ends
+  assert.equal(S.g.kerfSide, 1);
+  r.filter(o => o.kind !== 'J').forEach(o => { assert.ok(o.angle != null && o.angle < 5, o.name + ' angle ' + o.angle); assert.ok(o.overlap > 0.8, o.name + ' overlap ' + o.overlap); near(o.gap, 0, 1e-9, 'gap 0 with the kerf on the resected side'); });
+  // slot centred on the plane: half the slot (0.6 mm) is lost from each stump, and the slot centre moves back onto the plane
+  S.g.kerfSide = 0; St.placeScrews(); await St.rebuildResection(); await St.regenerate(); await sleep(400); W.Osteo.update();
+  const r0 = W.Osteo.get();
+  r0.filter(o => o.kind !== 'J').forEach(o => near(o.gap, 0.6, 1e-9, 'gap = slot/2 when centred'));
+  St.planesWorld().forEach(pw => { near(pw.shift, 0, 1e-12); near(pw.pSlot.distanceTo(pw.p), 0, 1e-12); });
+  S.g.kerfSide = 1; St.placeScrews(); await St.rebuildResection(); await St.regenerate();
+  const pw = St.planesWorld().sort((a, b) => a.off - b.off);
+  near(pw[0].shift, 0.6, 1e-12, 'first cut: slot shifted towards the defect (+u)'); near(pw[1].shift, -0.6, 1e-12, 'last cut: towards the defect (-u)');
+  near(pw[0].pSlot.x, -10 + 0.6, 1e-9); near(pw[1].pSlot.x, 10 - 0.6, 1e-9);
 });
 test('fibula guide: built on the fibula, slots of kerf width, one piece', async () => {
   await until(() => S.fib.guide && S.fib.guide.result, 60000);

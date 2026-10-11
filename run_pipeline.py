@@ -69,6 +69,9 @@ def main():
     ap.add_argument("--segments", type=int, default=None, help="number of fibula segments (default: auto)")
     ap.add_argument("--side", choices=["right", "left"], default="right", help="donor leg")
     ap.add_argument("--kerf", type=float, default=1.0, help="saw blade thickness + tolerance, mm")
+    ap.add_argument("--kerf-side", choices=["resected", "centre"], default="resected",
+                    help="mandible saw slot relative to the planned cut plane: 'resected' = the slot lies on the resected side and the graft meets "
+                         "the stump flush (gap 0, default, the browser's default too); 'centre' = centred on the plane, kerf/2 lost from each stump")
     ap.add_argument("--clearance", type=float, default=0.3); ap.add_argument("--wall", type=float, default=2.5)
     ap.add_argument("--out", default="outputs/run")
     a = ap.parse_args()
@@ -92,11 +95,18 @@ def main():
     log("planning")
     arch = planning.Arch(vm, mm)
     fib = planning.Fibula(vf, fm, side=a.side)
-    p = planning.make_plan(arch, fib, a.resect_from, a.resect_to, n_segments=a.segments, kerf=a.kerf)
+    p = planning.make_plan(arch, fib, a.resect_from, a.resect_to, n_segments=a.segments, kerf=a.kerf, kerf_side=a.kerf_side)
     summary = planning.plan_summary(p, fib)
     print(json.dumps(summary, indent=2))
     for w in p.get("warnings", []):
         warn("plan: " + w)
+    log(f"graft-to-stump gap: {p['stump_gap_mm'][0]:.2f} mm at each end (kerf {p['kerf']:.2f} mm on the {p['kerf_side']} side of the cut plane)")
+    if p.get("segment_decision"):
+        d = p["segment_decision"]
+        why = {"short": "defect shorter than one segment", "dev": "fewest segments within the deviation tolerance",
+               "len": "smallest deviation among the counts that keep every segment long enough"}[d["reason"]]
+        log(f"segment count {d['n']} ({why}); candidates: "
+            + ", ".join(f"{c['n']}: shortest {c['shortest_segment_mm']} mm / deviation {c['deviation_mm']} mm" for c in d["candidates"]))
 
     log("generating guides")
     fg, fplanes, frep = guides.fibula_guide(vf, fm, fib, p, clearance=a.clearance, wall=a.wall)
@@ -106,6 +116,12 @@ def main():
         m.export(os.path.join(a.out, f"guide_mandible_{'ab'[i]}.stl"))
     summary["guides"] = [frep] + [r for _, _, r in mg]
     for r in summary["guides"]:
+        if r.get("seat"):
+            st = r["seat"]
+            log(f"{r['name']}: seat check {st['free_directions']}/{st['directions']} directions free, best tilt {st['best_tilt_deg']:.0f} deg, "
+                f"{st['blocked_mm2_along_normal']:.0f} mm2 of bone over the guide along the buccal normal")
+        if r.get("note"):
+            log(r["note"])
         if r.get("warning"):
             warn(r["warning"])
     if WARNINGS:
