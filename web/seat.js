@@ -1,6 +1,8 @@
 /* Seating analysis of a guide on bone, on the guide's local voxel grid (x = u along bone, y = v lateral, z = n seating normal).
    1) Insertion: for candidate directions in a cone around n, project guide and bone onto the plane normal to the
-      direction; the guide can be lifted off along d only if no bone lies "above" guide material in any column.
+      direction (cells one voxel wide); the guide can be lifted off along d only if no bone lies "above" guide material
+      in any cell. Every voxel takes part: on a steep face a coarser cell would put the bone of the slope and the shell
+      beside it in one cell and report a block that is not there.
    2) Stability: contacts are guide voxels next to bone, with the bone's outward normal. A small motion m is resisted at a
       contact when it pushes into bone (m·normal clearly negative). We report the resisted share of contact area for
       in-plane slides and for rotations about u, v and n. */
@@ -14,29 +16,45 @@ window.Seat = (() => {
   function analyze({ Gm, B, D, nx, ny, nz, h, lo, clear }) {
     const t0 = performance.now(), N = nx * ny * nz, nxy = nx * ny;
     const pos = id => { const i = id % nx, j = ((id / nx) | 0) % ny, k = (id / nxy) | 0; return [lo[0] + i * h, lo[1] + j * h, lo[2] + k * h]; };
-    // ----- samples (every 2nd voxel per axis keeps this fast) -----
-    const gPts = [], bPts = [], contacts = [];
+    // ----- samples: every guide and bone voxel (as grid indices), contacts with the bone's outward normal -----
+    let ng = 0, nb = 0;
+    for (let id = 0; id < N; id++) { if (Gm[id]) ng++; else if (B[id]) nb++; }
+    const gIds = new Int32Array(ng), bIds = new Int32Array(nb), contacts = [];
+    ng = 0; nb = 0;
     for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
       const id = i + nx * (j + ny * k);
       if (Gm[id]) {
-        if (!(i & 1) && !(j & 1) && !(k & 1)) gPts.push(pos(id));
+        gIds[ng++] = id;
         if (D[id] * h <= clear + 1.5 * h && i > 0 && j > 0 && k > 0 && i < nx - 1 && j < ny - 1 && k < nz - 1) {
           const g = norm([D[id + 1] - D[id - 1], D[id + nx] - D[id - nx], D[id + nxy] - D[id - nxy]]);
           contacts.push({ r: pos(id), n: g });
         }
-      } else if (B[id] && !(i & 1) && !(j & 1) && !(k & 1)) bPts.push(pos(id));
+      } else if (B[id]) bIds[nb++] = id;
     }
     const area = contacts.length * h * h;
     if (!contacts.length) return { ok: false, area: 0, ms: performance.now() - t0 };
 
     // ----- 1) insertion directions -----
-    const cell = 2 * h, tol = clear + h;
+    // projection in voxel units: cell = one voxel; an axis-aligned d maps every grid column to its own cell
+    const tol = clear + h;
     function blocked(d, pts) {
-      const [a, b] = basis(d), top = new Map();
-      for (const p of gPts) { const key = Math.round(dot(p, a) / cell) * 100003 + Math.round(dot(p, b) / cell), t = dot(p, d); const m = top.get(key); if (m === undefined || t < m) top.set(key, t); }
+      const [ea, eb] = basis(d);
+      let amin = Infinity, amax = -Infinity, bmin = Infinity, bmax = -Infinity;
+      for (const x of [0, nx - 1]) for (const y of [0, ny - 1]) for (const z of [0, nz - 1]) { const a = x * ea[0] + y * ea[1] + z * ea[2], b = x * eb[0] + y * eb[1] + z * eb[2]; if (a < amin) amin = a; if (a > amax) amax = a; if (b < bmin) bmin = b; if (b > bmax) bmax = b; }
+      const na = Math.floor(amax - amin) + 2, nbb = Math.floor(bmax - bmin) + 2, top = new Float32Array(na * nbb).fill(Infinity);
+      const a0 = amin - 0.5, b0 = bmin - 0.5;
+      for (let q = 0; q < gIds.length; q++) {
+        const id = gIds[q], i = id % nx, j = ((id / nx) | 0) % ny, k = (id / nxy) | 0;
+        const ci = Math.floor(i * ea[0] + j * ea[1] + k * ea[2] - a0) + na * Math.floor(i * eb[0] + j * eb[1] + k * eb[2] - b0), t = (i * d[0] + j * d[1] + k * d[2]) * h;
+        if (t < top[ci]) top[ci] = t;
+      }
       let n = 0;
-      for (const p of bPts) { const key = Math.round(dot(p, a) / cell) * 100003 + Math.round(dot(p, b) / cell), m = top.get(key); if (m !== undefined && dot(p, d) > m + tol) { n++; if (pts && pts.length < 4000) pts.push(p); } }
-      return n * cell * cell;   // mm² of bone overhanging the guide along d
+      for (let q = 0; q < bIds.length; q++) {
+        const id = bIds[q], i = id % nx, j = ((id / nx) | 0) % ny, k = (id / nxy) | 0;
+        const ci = Math.floor(i * ea[0] + j * ea[1] + k * ea[2] - a0) + na * Math.floor(i * eb[0] + j * eb[1] + k * eb[2] - b0), m = top[ci];
+        if (m !== Infinity && (i * d[0] + j * d[1] + k * d[2]) * h > m + tol) { n++; if (pts && pts.length < 4000) pts.push(pos(id)); }
+      }
+      return n * h * h;   // mm² of bone overhanging the guide along d
     }
     const dirs = [];
     for (let tilt = 0; tilt <= 40; tilt += 10) for (let az = 0; az < (tilt ? 360 : 1); az += 45) {
