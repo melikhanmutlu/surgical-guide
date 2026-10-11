@@ -2070,7 +2070,8 @@
     if (!dd.moved && Math.hypot(e.clientX - dd.x, e.clientY - dd.y) < 4) return;
     if (!dd.moved) { dd.moved = true; select((dd.on.isP ? 'p' : 's') + dd.on.i); }
     const r = pickAt(e); if (!r) return;
-    const targets = ['bone', 'resected'].filter(k => parts[k] && parts[k].visible).map(k => parts[k].obj);
+    // the bone under the pointer, or the guide where it covers the bone (a screw dragged along the body)
+    const targets = ['bone', 'resected', 'guide'].filter(k => parts[k] && parts[k].visible).map(k => parts[k].obj);
     const hit = r.intersectObjects(targets, false)[0]; if (!hit) return;
     const { o, isP } = dd.on, { u, v } = frameAxes(), d = hit.point.clone().sub(S.anchor.p);
     if (isP) {
