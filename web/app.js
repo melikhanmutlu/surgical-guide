@@ -1757,6 +1757,9 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   }
   async function exportPackage() {
     if (!parts.guide) return;
+    // the plate is planned but has no computed path (a stale state): recompute once, and warn if the plate files are still missing
+    if (window.Plate && Plate.missing()) { try { await Plate.update(); } catch (e) { /* warned below */ } }
+    const plateMissing = !!(window.Plate && Plate.missing());
     const prod = S.prod && S.prod.key === prodKey() ? S.prod : null;
     const files = [{ name: prod ? 'guide_onizleme.stl' : 'guide.stl', data: stlOf(parts.guide.obj) }, { name: 'kemik_kalan.stl', data: stlOf(parts.bone.obj) }];
     const fg = fullBoneGeo(); if (fg) files.push({ name: 'kemik_tam.stl', data: stlOf(new THREE.Mesh(fg)) });
@@ -1767,6 +1770,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     files.push({ name: 'plan.json', data: $('json').textContent }, { name: 'rapor.html', data: reportHTML() });
     if (window.Report) try { files.push({ name: 'cerrahi_rapor.pdf', data: new Uint8Array(await (await Report.build()).arrayBuffer()) }); } catch (e) { /* the HTML report is still in the package */ }
     await offer('guide_paketi.zip', zip(files));
+    if (plateMissing) alertMsg('UYARI: Plak planlı ama plak hattı hesaplanamadı; pakette plak dosyaları YOK. Plak bölümünü kontrol edip paketi yeniden alın.');
     emit('exported');
   }
   // single files from the Teslim step: bone models any time, the guide only once the plan is ready for production

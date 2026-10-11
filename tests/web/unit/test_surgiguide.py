@@ -1,0 +1,225 @@
+"""Unit tests for surgiguide/plan.py and surgiguide/guides.py (offline pipeline used by run_pipeline.py / seg_server.py).
+Synthetic inputs only: the package's own mandible phantom at 1 mm and hand-made cylinder fibulae. The audited checkout is
+imported read-only (no bytecode is written into it).
+
+    python3 -I test_surgiguide.py          (SG_REPO overrides the checkout path)
+"""
+import os
+import sys
+import unittest
+
+sys.dont_write_bytecode = True
+REPO = os.environ.get("SG_REPO") or os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))
+sys.path.insert(0, REPO)
+
+import numpy as np                                   # noqa: E402
+from scipy import ndimage as ndi                     # noqa: E402
+from surgiguide import plan as P, guides as Gd, phantom  # noqa: E402
+from surgiguide.volume import Volume                 # noqa: E402
+
+
+def mandible():
+    vol = phantom.mandible_phantom(spacing=(1.0, 1.0, 1.0))
+    m = vol.array > 250
+    lab, n = ndi.label(m)
+    m = lab == (np.argmax(ndi.sum(m, lab, range(1, n + 1))) + 1)   # drop the hyoid distractor
+    return vol, m
+
+
+def cylinder(radius=7.0, length=200.0, tilt=(0.05, 0.02), h=0.5):
+    """Straight cylinder along a slightly tilted axis, voxel mask on an axis-aligned grid (spacing h)."""
+    a = np.array([tilt[0], tilt[1], 1.0]); a /= np.linalg.norm(a)
+    R = radius + 6
+    shape = (int((length + 20) / h), int(2 * R / h) + 4 + int(length * abs(tilt[1]) / h), int(2 * R / h) + 4 + int(length * abs(tilt[0]) / h))
+    origin = np.array([-R - 2 - length * max(0, -tilt[0]), -R - 2 - length * max(0, -tilt[1]), -10.0])
+    vol = Volume(np.zeros(shape, np.float32), (h, h, h), origin)
+    z, y, x = np.meshgrid(*(np.arange(n) for n in shape), indexing="ij")
+    pts = vol.index_to_physical(np.stack([x, y, z], -1).reshape(-1, 3)).reshape(shape + (3,))
+    t = pts @ a
+    radial = np.linalg.norm(pts - t[..., None] * a, axis=-1)
+    m = (radial <= radius) & (t >= 0) & (t <= length)
+    return vol, m, a
+
+
+ARCH = None
+
+
+def arch():
+    global ARCH
+    if ARCH is None:
+        vol, m = mandible()
+        ARCH = (vol, m, P.Arch(vol, m))
+    return ARCH
+
+
+class TestArch(unittest.TestCase):
+    def test_midline_and_direction(self):
+        _, _, A = arch()
+        self.assertLess(abs(A.point(0.0)[0]), 1.5, "s = 0 is at the midline (x ~ 0)")
+        self.assertGreater(A.point(30.0)[0], 10, "+s goes to patient left (+x in LPS)")
+        self.assertLess(A.point(-30.0)[0], -10)
+
+    def test_arc_length_parametrisation(self):
+        _, _, A = arch()
+        ss = np.arange(-30, 30.01, 0.5)
+        steps = np.linalg.norm(np.diff(A.point(ss), axis=0), axis=1)
+        self.assertTrue(np.all(np.abs(steps - 0.5) < 0.05), f"0.5 mm in s is 0.5 mm along the curve (max err {np.abs(steps - 0.5).max():.3f})")
+
+    def test_buccal_points_outward_and_is_horizontal_unit(self):
+        _, _, A = arch()
+        for s in (-35, -10, 0, 10, 35):
+            b = A.buccal(s)
+            self.assertAlmostEqual(float(np.linalg.norm(b)), 1.0, places=6)
+            self.assertLess(abs(b[2]), 1e-9)
+            self.assertGreater(np.dot(b, A.point(s) - A.center), 0)
+            self.assertLess(abs(np.dot(b, A.tangent(s))), 1e-6)
+
+    def test_closest_s_inverts_point(self):
+        _, _, A = arch()
+        for s in (-25.0, 0.0, 17.5):
+            self.assertLess(abs(A.closest_s(A.point(s)) - s), 0.51)
+
+
+class TestSegments(unittest.TestCase):
+    def test_more_segments_follow_the_arch_better(self):
+        _, _, A = arch()
+        k1, d1 = P.optimise_segments(A, -30, 30, 1)
+        k3, d3 = P.optimise_segments(A, -30, 30, 3)
+        self.assertEqual(len(k3), 4)
+        self.assertAlmostEqual(k3[0], -30); self.assertAlmostEqual(k3[-1], 30)
+        self.assertTrue(np.all(np.diff(k3) > 0), "knots strictly increasing")
+        self.assertLess(d3, d1 / 2, f"3 segments deviate less ({d3:.2f}) than 1 ({d1:.2f})")
+
+    def test_max_deviation_zero_for_straight_chord(self):
+        class Line:
+            def point(self, s): return np.stack([s, 0 * s, 0 * s], -1) if np.ndim(s) else np.array([s, 0.0, 0.0])
+        self.assertLess(P._max_deviation(Line(), np.array([0.0, 10.0, 25.0])), 1e-9)
+
+
+class TestFibula(unittest.TestCase):
+    def test_pca_frame_radius_and_extent(self):
+        vol, m, a = cylinder()
+        F = P.Fibula(vol, m, side="right")
+        self.assertGreater(float(np.dot(F.axes[:, 0], a)), 0.9999, "long axis recovered, pointing up (distal -> proximal)")
+        self.assertTrue(np.allclose(F.axes.T @ F.axes, np.eye(3), atol=1e-9), "orthonormal")
+        self.assertAlmostEqual(float(np.linalg.det(F.axes)), 1.0, places=9)
+        self.assertLess(F.axes[0, 1], 0, "right leg: lateral axis points to -x")
+        self.assertLess(abs(F.radius - 7.0), 0.6, f"radius {F.radius:.2f}")
+        self.assertLess(abs((F.s_max - F.s_min) - 200.0), 1.5)
+        self.assertGreater(P.Fibula(vol, m, side="left").axes[0, 1], 0)
+
+
+class TestPlan(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        _, _, cls.A = arch()
+        vol, m, _ = cylinder(length=260.0)
+        cls.F = P.Fibula(vol, m)
+
+    def test_plan_geometry(self):
+        p = P.make_plan(self.A, self.F, -25, 25, n_segments=3, kerf=1.0)
+        segs = p["segments"]
+        self.assertEqual(len(segs), 3); self.assertEqual(p["n_segments"], 3)
+        for g in segs:
+            R = g["R"]
+            self.assertTrue(np.allclose(R.T @ R, np.eye(3), atol=1e-9))
+            chord = g["P_end"] - g["P_start"]
+            self.assertAlmostEqual(g["length_mm"], float(np.linalg.norm(chord)), places=9)
+            self.assertTrue(np.allclose(R[:, 0], chord / np.linalg.norm(chord)), "fibula axis maps to the segment chord")
+            self.assertAlmostEqual(g["fib_end"] - g["fib_start"], g["length_mm"], places=9)
+            for key in ("n_start_fib", "n_end_fib"):
+                self.assertAlmostEqual(float(np.linalg.norm(g[key])), 1.0, places=9)
+        for a, b in zip(segs[:-1], segs[1:]):
+            self.assertTrue(np.allclose(a["n_end_fib"] @ a["R"].T, b["n_start_fib"] @ b["R"].T), "shared wedge plane, same mandible normal")
+            self.assertGreaterEqual(b["fib_start"] - a["fib_end"], p["kerf"] + 1.0, "cuts of neighbours are kept apart")
+        self.assertAlmostEqual(segs[0]["fib_start"] - self.F.s_min, 70.0, places=6, msg="distal margin")
+        self.assertTrue(np.allclose(p["points"][0], self.A.point(-25)))
+
+    def test_wedge_spacing_keeps_cuts_from_crossing_inside_bone(self):
+        p = P.make_plan(self.A, self.F, -25, 25, n_segments=3, kerf=1.0)
+        r = self.F.radius
+        for a, b in zip(p["segments"][:-1], p["segments"][1:]):
+            n0, n1 = a["n_end_fib"], b["n_start_fib"]
+            # worst case across the bone cross-section (radius r): the two planes must not meet
+            for ang in np.linspace(0, 2 * np.pi, 72, endpoint=False):
+                q = np.array([0.0, r * np.cos(ang), r * np.sin(ang)])
+                s_end = a["fib_end"] - (q[1:] @ n0[1:]) / n0[0]
+                s_start = b["fib_start"] - (q[1:] @ n1[1:]) / n1[0]
+                self.assertGreater(s_start - s_end, p["kerf"], "segment n+1 starts after segment n ends at every rim point")
+
+    def test_automatic_segment_count_respects_min_length_and_tolerance(self):
+        p = P.make_plan(self.A, self.F, -30, 30, n_segments=None, tol_mm=2.5, min_len=20.0)
+        self.assertTrue(all(g["length_mm"] >= 20.0 for g in p["segments"]))
+        self.assertTrue(p["max_deviation_mm"] <= 2.5 or p["n_segments"] == 4 or min(g["length_mm"] for g in p["segments"]) < 40)
+        short = P.make_plan(self.A, self.F, -8, 8, n_segments=None, min_len=20.0)
+        self.assertEqual(short["n_segments"], 1, "a 16 mm defect falls back to one segment even below min_len")
+
+    def test_fibula_too_short_is_flagged(self):
+        vol, m, _ = cylinder(length=150.0)
+        F = P.Fibula(vol, m)
+        p = P.make_plan(self.A, F, -30, 30, n_segments=3)
+        self.assertFalse(p["fibula_fits"]); self.assertGreater(p["fibula_overflow_mm"], 0)
+        ok = P.make_plan(self.A, self.F, -15, 15, n_segments=1)
+        self.assertTrue(ok["fibula_fits"]); self.assertEqual(ok["fibula_overflow_mm"], 0)
+
+    def test_summary(self):
+        p = P.make_plan(self.A, self.F, -25, 25, n_segments=2)
+        s = P.plan_summary(p, self.F)
+        self.assertEqual(s["n_segments"], 2); self.assertEqual(len(s["segments"]), 2)
+        self.assertEqual(s["segments"][0]["fibula_from_distal_tip_mm"], 70.0)
+        self.assertEqual(s["defect_arc_length_mm"], 50.0)
+
+
+class TestGuides(unittest.TestCase):
+    def test_hole_and_largest(self):
+        L = np.stack(np.meshgrid(np.arange(-5, 5.01, 0.5), np.arange(-5, 5.01, 0.5), np.arange(-5, 5.01, 0.5), indexing="ij"), -1)
+        h = Gd._hole(L, np.zeros(3), np.array([0, 0, 1.0]), 1.0)
+        self.assertTrue(h[10, 10, 15]); self.assertFalse(h[13, 10, 15], "1.5 mm off axis is outside r = 1")
+        self.assertFalse(h[10, 10, 0], "more than 2 mm behind the start point is not drilled")
+        g = np.zeros((10, 10, 10), bool); g[1:4, 1:4, 1:4] = True; g[6:8, 6:8, 6:8] = True
+        out, rep = Gd._largest("x", g, 0.5)
+        self.assertEqual(int(out.sum()), 27); self.assertEqual(rep["pieces_before_cleanup"], 2)
+        self.assertAlmostEqual(rep["dropped_islands_mm3"], 1.0)
+
+    def test_fibula_guide_clearance_slots_and_single_piece(self):
+        vol, m, _ = cylinder(length=260.0)
+        F = P.Fibula(vol, m)
+        _, _, A = arch()
+        p = P.make_plan(A, F, -25, 25, n_segments=2, kerf=1.0)
+        mesh, planes, rep = Gd.fibula_guide(vol, m, F, p, h=0.3, clearance=0.3, wall=2.5)
+        # the shell strip between the two tilted slots of a closing wedge is cut through where the slots meet above the
+        # bone rim (spacing is computed at the bone radius, the guide wall is further out), leaving small side islands
+        # that _largest drops and reports; they lie over the discarded wedge, so the kept guide is one piece
+        self.assertLess(rep["dropped_islands_mm3"], 0.02 * mesh.volume, rep)
+        self.assertEqual(len(mesh.split(only_watertight=False)), 1)
+        self.assertEqual(len(planes), 4)
+        self.assertTrue(mesh.is_watertight)
+        loc = (mesh.vertices - F.c) @ F.axes
+        rad = np.linalg.norm(loc[:, 1:], axis=1)
+        mid = (p["segments"][0]["fib_start"] + p["segments"][0]["fib_end"]) / 2
+        inner = rad[(np.abs(loc[:, 0] - mid) < 4) & (rad < F.radius + 1.5)]
+        self.assertGreater(inner.size, 20)
+        gap = float(np.median(inner)) - 7.0
+        print(f"    fibula guide inner surface: median {gap:.2f} mm from the bone (design 0.30)")
+        self.assertLess(abs(gap - 0.3), 0.2, f"clearance {gap:.2f}")
+        # kerf slot: no guide vertex lies strictly inside a slot (|dist to plane| < kerf/2 - h) within the wall
+        for pt, n in planes:
+            d = np.abs((loc - pt) @ n)
+            self.assertFalse(np.any((d < 0.5 - 0.3) & (rad < F.radius + 2.5)), "slot is open through the wall (the rail above it stays, by design)")
+
+    def test_shell_offset_quantisation_matches_browser_finding(self):
+        # the same shell rule (dout = EDT * h > clearance) at h = 0.4 / clearance 0.3 puts the inner face on the bone
+        # (see B-1 for app.js); at h = 0.3 the rule happens to give 0.3. Measured on a flat slab, analytic surface at z = 0.
+        def inner_face(h, c):
+            z = np.arange(-4, 6, h) + h / 2 * 0.37            # arbitrary grid phase
+            bone = z <= 0
+            dout = ndi.distance_transform_edt(~bone) * h
+            shell = (dout > c) & (dout <= c + 2.5)
+            i = np.argmax(shell)
+            return (z[i - 1] + z[i]) / 2                       # marching-cubes 0.5 iso between voxels
+        self.assertLess(abs(inner_face(0.3, 0.3) - 0.3), 0.16)
+        self.assertLess(inner_face(0.4, 0.3), 0.15, "h = 0.4: clearance collapses to ~0")
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
