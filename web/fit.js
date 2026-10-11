@@ -89,7 +89,7 @@ window.Fit = (function () {
   // ---------- refresh when a guide is rebuilt ----------
   function refresh() {
     const gm = St.parts.guide && St.parts.guide.obj, fg = S.fib && S.fib.guide;
-    const km = gm && S.grid ? gm.uuid + view.map + S.g.clear + (S.g.peri || 0) : '', kf = fg && fg.grid ? fg.mesh.uuid + view.map : '';
+    const km = gm && S.grid ? gm.uuid + view.map + S.g.clear + (S.g.peri || 0) + '|' + gm.geometry.attributes.position.count : '', kf = fg && fg.grid ? fg.mesh.uuid + view.map + '|' + fg.mesh.geometry.attributes.position.count : '';
     // the coarse live preview has no grid of its own: leave it plain
     if (km !== done.m) { done.m = km; stats.m = gm && S.grid && gm.geometry.attributes.position.count > 0 && S.result && S.grid.Gm ? paint(gm, S.grid, S.g, view.map) : null; if (gm && view.map === 'none') restore(gm, St.COLORS.guide); }
     if (kf !== done.f) { done.f = kf; stats.f = fg && fg.grid ? paint(fg.mesh, fg.grid, fg.ctx.g, view.map) : null; if (fg && view.map === 'none') restore(fg.mesh, St.COLORS.fguide); }

@@ -398,13 +398,42 @@ window.Fibula = (function () {
       for (let t = 0; t < FR + 30; t += 0.2) { const q = t0.clone().add(dir.clone().multiplyScalar(t)); if (fibBone(q)) { entry = q; break; } }
       return { sc, dir, entry };
     });
-    return { g, P: Pg, u: u.clone(), v, n, pls, scs, bone: fibBone };
+    return { g, P: Pg, u: u.clone(), v, n, pls, scs, bone: fibBone, field: q => St.fieldAt(F.red, F.c.Fm, [q.x, q.y, q.z]) };
   }
   // fibula guide body: automatic values unless the plan overrides them (fg); the material profile's fit and the
   // periosteum allowance follow the mandible guide
+  // Size the guide from the bone where it sits. FR (90th-percentile radius of the whole candidate) also counts the wider
+  // head and any tibia stump, so a guide sized from it stands clear of a slender shaft: the bridge strip floats free of
+  // the shell (several bodies) and the wrap runs past the shaft's widest level (an undercut, no direction to seat it).
+  // Cross-sections every few mm over the guide span: half-width across the guide, and the depth from the top of the
+  // bone down to its widest level (the deepest wrap that stays undercut-free), worst case over the span.
+  let secKey = '', secVal = null;
+  function localSection(sA, sB) {
+    const key = F.c.i + '|' + sA.toFixed(1) + '|' + sB.toFixed(1) + '|' + F.c.FR.toFixed(2);
+    if (key === secKey) return secVal;
+    const R0 = F.c.FR + 4, st = 0.5, q = V(), [a, e2, e3] = F.c.FA, base = F.c.FC, step = Math.max(2, (sB - sA) / 12);
+    let half = 0, depth = Infinity;
+    for (let s = sA; s <= sB + 1e-6; s += step) {
+      const o = offAt(s), wid = []; let maxW = 0, topY = -Infinity;
+      for (let y = -R0; y <= R0; y += st) {
+        let z0 = Infinity, z1 = -Infinity;
+        for (let z = -R0; z <= R0; z += st) {
+          q.copy(base).addScaledVector(a, s).addScaledVector(e2, o[0] + y).addScaledVector(e3, o[1] + z);
+          if (fibBone(q)) { if (z < z0) z0 = z; if (z > z1) z1 = z; }
+        }
+        const w = z1 >= z0 ? z1 - z0 + st : 0; wid.push([y, w]); if (w > maxW) maxW = w; if (w > 0 && y > topY) topY = y;
+      }
+      if (maxW <= 0) continue;
+      // widest level = middle of the levels within 3 % of the maximum width (a round section is flat at its equator)
+      const eq = wid.filter(([, w]) => w >= 0.97 * maxW).map(([y]) => y), yEq = eq.reduce((x, y) => x + y, 0) / eq.length;
+      half = Math.max(half, maxW / 2); depth = Math.min(depth, topY - yEq);
+    }
+    secKey = key; secVal = half > 0 ? { half, depth } : null;
+    return secVal;
+  }
   function guideAuto(c) {
-    const FR = F.c.FR, sA = c.segs[0].s0, sB = c.segs[c.segs.length - 1].s1;
-    return { span: sB - sA, Lm: 8, W: Math.round(2 * (FR + 2.8) + 2), wrap: Math.round(FR * 0.8 * 2) / 2, wall: 2.5, clear: S.g.clear };
+    const FR = F.c.FR, sA = c.segs[0].s0, sB = c.segs[c.segs.length - 1].s1, sec = localSection(sA, sB), Rl = sec ? Math.min(FR, sec.half) : FR, dp = sec ? Math.min(FR, sec.depth) : FR;
+    return { span: sB - sA, Lm: 8, W: Math.round(2 * (Rl + 2.8) + 2), wrap: Math.max(2, Math.round(dp * 0.8 * 2) / 2), wall: 2.5, clear: S.g.clear };
   }
   function guideBody(c) {
     const a = guideAuto(c), e = Object.assign({}, a, plan().fg || {});
@@ -427,9 +456,19 @@ window.Fibula = (function () {
     building = true;
     St.busy(true, 'Fibula guide\'ı üretiliyor…'); await St.sleep();
     try {
-      const out = await St.buildGuide(ctx);
+      let out = await St.buildGuide(ctx), adapt = null;
+      // automatic wrap that still cannot be put on (the section is not round, the bone bends under the guide) or splits the
+      // guide: try shallower wraps, half a mm at a time; a wrap set by hand (fg.wrap) is left alone
+      const bad = R => R.pieces > 1 || (R.seat && R.seat.ok && !R.seat.free), w0 = ctx.g.wrap;
+      if (bad(out.result) && !(plan().fg && plan().fg.wrap != null)) {
+        for (let w = w0 - 0.5; w >= 2 && bad(out.result); w -= 0.5) {
+          const o2 = await St.buildGuide(Object.assign({}, ctx, { g: Object.assign({}, ctx.g, { wrap: w }) }));
+          out.mesh.geometry.dispose(); out = o2; adapt = w;
+        }
+        if (adapt !== null) { ctx.g = Object.assign({}, ctx.g, { wrap: adapt }); out.result.adapt = { from: w0, to: adapt, ok: !bad(out.result) }; }
+      }
       leg.children.filter(o => o.userData.guide).forEach(o => { leg.remove(o); St.mat && o.material.dispose(); o.geometry.dispose(); });
-      out.mesh.material = mat(FGUIDE); out.mesh.userData.guide = true; onLeg(out.mesh);
+      out.mesh.material = mat(FGUIDE); out.mesh.userData.guide = true; onLeg(out.mesh); St.simplifyMesh(out.mesh);
       S.fib.guide = { mesh: out.mesh, result: out.result, ctx, key, grid: out.grid }; guideKey = key;
     } finally { building = false; St.busy(false); }
     renderStep(); St.updatePanels(); St.render(); St.emit('fibGuide');
@@ -451,8 +490,10 @@ window.Fibula = (function () {
     const R = S.fib.guide && S.fib.guide.result;
     if (!R && !building && S.fib.guideFail) out.push(['warn', 'Uyarı', 'Fibula guide\'ı üretilemedi; fibula yüzeyi bulunamadı.']);
     if (R) {
-      if (R.pieces > 1) out.push(['crit', 'Kritik', `Fibula guide'ı ${R.pieces} parçaya bölünüyor.`]);
-      if (R.seat && R.seat.ok && !R.seat.free) out.push(['crit', 'Kritik', 'Fibula guide\'ı hiçbir yönde takılamıyor; sarma derinliği fazla.']);
+      const shortSeg = c.segs.some(g => g.L < MIN_LEN), ad = R.adapt;
+      if (R.pieces > 1) out.push(['crit', 'Kritik', `Fibula guide'ı ${R.pieces} parçaya bölünüyor.${shortSeg ? ' Segment 20 mm\'den kısa: iki kesi yuvası arasında guide tutunamıyor; segmenti uzatın ya da segment sayısını azaltın.' : ''}`]);
+      if (R.seat && R.seat.ok && !R.seat.free) out.push(['crit', 'Kritik', ad ? `Fibula guide'ı hiçbir yönde takılamıyor; sarma derinliği ${fmt(ad.from, 1)} mm'den ${fmt(ad.to, 1)} mm'ye indirildi, yine de takılamıyor.${shortSeg ? ' Segment 20 mm\'den kısa; kesileri kısa tutmak guide\'ın oturmasını bozuyor.' : ''}` : 'Fibula guide\'ı hiçbir yönde takılamıyor; sarma derinliği fazla.']);
+      else if (ad && ad.ok) out.push(['info', 'Bilgi', `Fibula guide'ı takılabilsin diye sarma derinliği ${fmt(ad.from, 1)} mm'den ${fmt(ad.to, 1)} mm'ye indirildi.`]);
       if (R.contact < 100) out.push(['warn', 'Uyarı', `Fibula guide'ı temas alanı ${fmt(R.contact, 0)} mm²; oturma belirsiz olabilir.`]);
       R.screwInfo.forEach((si, i) => { if (!si.ok) out.push(['crit', 'Kritik', `Fibula vidası ${i + 1} kemiğe ulaşmıyor.`]); else if (si.crossesPlane) out.push(['crit', 'Kritik', `Fibula vidası ${i + 1} kesi hattından geçiyor.`]); });
     }
@@ -615,7 +656,7 @@ window.Fibula = (function () {
   async function production(signal) {
     if (!active() || !S.fib.guide) return;
     const x = S.fib.guide.ctx;
-    const r = await St.serverGuide({ vol: F.vol, red: F.red, F: F.c.Fm, thr: THR, g: x.g, P: x.P, u: x.u, v: x.v, n: x.n, pls: x.pls, scs: x.scs }, signal);
+    const r = await St.serverGuide({ vol: F.vol, red: F.red, F: F.c.Fm, thr: THR, g: x.g, P: x.P, u: x.u, v: x.v, n: x.n, pls: x.pls, scs: x.scs, wrapProfile: S.fib.guide.result.wrapProfile }, signal);
     S.fib.prod = Object.assign(r, { key: S.fib.guide.key });
     $('prodMsg').textContent += ` Fibula guide'ı: ${r.watertight ? 'su geçirmez' : 'SU GEÇİRMEZ DEĞİL'}, ${r.bodies} parça${r.bodies > 1 ? ' (BİRDEN FAZLA PARÇA)' : ''}.`;
   }

@@ -129,6 +129,28 @@
     return new THREE.Mesh(g, material);
   }
 
+  // Marching tetrahedra triangulate smooth areas much finer than the shape needs. In the background (a few ms at a time, so
+  // the page stays usable) the displayed guide's edges are collapsed while the surface moves less than LITE_TOL mm, which
+  // cuts the STL / 3MF size several times over; the mesh stays closed and 2-manifold. A newer guide (the mesh leaves its
+  // parent) cancels the job. window.GUIDE_LITE = false switches it off.
+  const LITE_TOL = 0.03;
+  async function simplifyMesh(mesh) {
+    const g0 = mesh && mesh.geometry;
+    if (!g0 || !g0.index || window.GUIDE_LITE === false) return false;
+    const it = G.decimateGen({ positions: g0.attributes.position.array, indices: g0.index.array }, LITE_TOL);
+    let t = performance.now(), r;
+    for (;;) {
+      r = it.next(); if (r.done) break;
+      if (performance.now() - t > 14) { await new Promise(res => setTimeout(res, 0)); t = performance.now(); if (!mesh.parent || mesh.geometry !== g0) return false; }
+    }
+    if (!mesh.parent || mesh.geometry !== g0) return false;
+    const ng = new THREE.BufferGeometry();
+    ng.setAttribute('position', new THREE.BufferAttribute(r.value.positions, 3)); ng.setIndex(new THREE.BufferAttribute(r.value.indices, 1)); ng.computeVertexNormals();
+    mesh.geometry = ng; g0.dispose();
+    render();
+    return true;
+  }
+
   // ---------- case state ----------
   const G_DEFAULT = { rot: 0, roll: 0, L: 36, W: 22, wrap: 6, wall: 2.5, clear: 0.3, bridge: 4, side: 1, split: 0, flange: 3, peri: 0, fit: 0, stopT: 0, stopB: 0, stopL: 6, stopD: 5 };
   const S = {
@@ -651,6 +673,7 @@
     }
   }
   function boneAt(q) { return boneAtIn(S.red, S.maskF, q); }
+  function boneField(q) { return fieldAt(S.red, S.maskF, [q.x, q.y, q.z]); }
   function boneAtIn(r, F, q) { return fieldAt(r, F, [q.x, q.y, q.z]) > 0.5; }
   function fieldAt(r, F, w) {
     const ix = G.indexOf(r, w);
@@ -775,7 +798,7 @@
   // after an automatic plan: if the guide cannot be put on (or splits), try a shallower wrap, 1 mm at a time
   async function fitWrap() {
     if (!S.anchor) return null;
-    const w0 = S.g.wrap, test = async (h = 0.8) => { const o = await buildGuide(Object.assign({ g: S.g, P: S.anchor.p, pls: planesWorld(), scs: screwsWorld(), bone: boneAt, h }, frameAxes())); const R = o.result, want = S.g.split && S.planes.length >= 2 ? 2 : 1; return R.pieces === want && (!R.seat || !R.seat.ok || R.seat.free > 0); };
+    const w0 = S.g.wrap, test = async (h = 0.8) => { const o = await buildGuide(Object.assign({ g: S.g, P: S.anchor.p, pls: planesWorld(), scs: screwsWorld(), bone: boneAt, field: boneField, h }, frameAxes())); const R = o.result, want = S.g.split && S.planes.length >= 2 ? 2 : 1; return R.pieces === want && (!R.seat || !R.seat.ok || R.seat.free > 0); };
     // coarse grid first, then confirm at the resolution of the final guide
     const okAt = async () => (await test()) && (await test(0.4));
     // start from the usual depth (an earlier plan may have lowered it), never below 2 mm (the bridge needs it)
@@ -829,20 +852,43 @@
     // optional stops: lips past the upper / lower guide edge that reach around the bone edge (crest, lower border)
     const sUp = stopSides(g, v), stopX = g.stopT || g.stopB ? (g.stopL || 6) : 0, stopZ = g.stopT || g.stopB ? (g.stopD || 5) : 0;
     const lo = [-g.L / 2 - 4, -g.W / 2 - 4 - stopX, -Math.max(g.wrap + 10, 30) - Math.max(0, g.L / 2 - 15) * 0.6], hi = [g.L / 2 + 4, g.W / 2 + 4 + stopX, g.clear + g.wall + Math.max(maxSleeve, g.bridge) + 6];
-    const nx = Math.ceil((hi[0] - lo[0]) / h) + 1, ny = Math.ceil((hi[1] - lo[1]) / h) + 1, nz = Math.ceil((hi[2] - lo[2]) / h) + 1, N = nx * ny * nz;
-    const world = (a, b, c) => P.clone().add(u.clone().multiplyScalar(lo[0] + a * h)).add(v.clone().multiplyScalar(lo[1] + b * h)).add(n.clone().multiplyScalar(lo[2] + c * h));
-    const toWorld = (a, b, c) => { const q = world(a, b, c); return [q.x, q.y, q.z]; };
+    const nx = Math.ceil((hi[0] - lo[0]) / h) + 1, ny = Math.ceil((hi[1] - lo[1]) / h) + 1, nz = Math.ceil((hi[2] - lo[2]) / h) + 1, N = nx * ny * nz, nxy = nx * ny;
+    const toWorld = (a, b, c) => { const x = lo[0] + a * h, y = lo[1] + b * h, z = lo[2] + c * h; return [P.x + u.x * x + v.x * y + n.x * z, P.y + u.y * x + v.y * y + n.y * z, P.z + u.z * x + v.z * y + n.z * z]; };
     // bone in the local grid
-    const B = new Uint8Array(N);
-    for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) if (boneAt(world(i, j, k))) B[i + nx * (j + ny * k)] = 1;
+    // (ctx.field, when given, is the bone density behind ctx.bone (bone = field > 0.5): it places the surface between grid nodes)
+    const B = new Uint8Array(N), qv = new THREE.Vector3(), soft = ctx.field ? new Float32Array(N) : null;
+    for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) {
+      const z = lo[2] + k * h, y = lo[1] + j * h, bx = P.x + v.x * y + n.x * z, by = P.y + v.y * y + n.y * z, bz = P.z + v.z * y + n.z * z, r = nx * (j + ny * k);
+      for (let i = 0; i < nx; i++) {
+        const x = lo[0] + i * h; qv.set(bx + u.x * x, by + u.y * x, bz + u.z * x);
+        if (soft) { const f = ctx.field(qv); soft[r + i] = f; if (f > 0.5) B[r + i] = 1; } else if (boneAt(qv)) B[r + i] = 1;
+      }
+    }
     T.bone = performance.now() - t0; await sleep();
-    const O = G.exterior(B, nx, ny, nz), D = G.edt(B, nx, ny, nz); T.edt = performance.now() - t0;
+    // solid = bone plus every void the outside cannot reach; d = signed distance to its surface (outside > 0), lightly smoothed
+    // as the server does; the guide is the level set of a few such fields (shell band, box, slots, sleeves) combined with
+    // min / max, so every plane in the design stays a plane and the mesh below can be marched on exact distances
+    const O = G.exterior(B, nx, ny, nz), Bs = new Uint8Array(N); for (let i = 0; i < N; i++) Bs[i] = O[i] ? 0 : 1;
+    const D = G.edt(Bs, nx, ny, nz); T.edt = performance.now() - t0;
     await sleep();
+    const dist = new Float32Array(N); for (let i = 0; i < N; i++) dist[i] = Bs[i] ? -h / 2 : D[i] * h - h / 2;
+    // within a voxel and a half of the surface the distance comes from the density itself, (0.5 - density) / |gradient|,
+    // which places the surface to a fraction of a voxel instead of the voxel the node-to-node distance lands in
+    if (soft) {
+      const near = 1.5 * h, g2 = 1 / (2 * h), fade = 0.5 * h;
+      for (let k = 1; k < nz - 1; k++) for (let j = 1; j < ny - 1; j++) for (let i = 1; i < nx - 1; i++) {
+        const id = i + nx * (j + ny * k), de = dist[id]; if (de > near || (Bs[id] && soft[id] <= 0.5)) continue;
+        const gx = (soft[id + 1] - soft[id - 1]) * g2, gy = (soft[id + nx] - soft[id - nx]) * g2, gz = (soft[id + nxy] - soft[id - nxy]) * g2, gm = Math.sqrt(gx * gx + gy * gy + gz * gz);
+        if (gm < 0.05) continue;
+        const sd = Math.max(-near, Math.min(near, (0.5 - soft[id]) / gm)), wgt = de <= near - fade ? 1 : (near - de) / fade;
+        dist[id] = de + wgt * (sd - de);
+      }
+    }
+    const dd = G.blur(dist, nx, ny, nz);
     // periosteum allowance (soft tissue left on the bone) adds to the clearance
-    const c = g.clear + (g.peri || 0), w = g.wall, Gm = new Uint8Array(N), gap = splitGap(g, pls);
-    let undercutCols = 0, contact = 0;
+    const c = g.clear + (g.peri || 0), w = g.wall, gap = splitGap(g, pls), cw = c + w;
     const colTopBone = new Float32Array(nx * ny).fill(-Infinity);
-    for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) if (B[i + nx * (j + ny * k)]) colTopBone[i + nx * j] = lo[2] + k * h;
+    for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) if (Bs[i + nx * (j + ny * k)]) colTopBone[i + nx * j] = lo[2] + k * h;
     // the wrap depth follows the bone: on a curved jaw the bone drops away from the guide plane towards the guide
     // ends, so the depth limit is measured from the top of the bone at each position along the guide (never above
     // the plane through the anchor)
@@ -854,50 +900,46 @@
     }
     const win = Math.max(1, Math.round(1.5 / h)), wrapAt = new Float32Array(nx);
     for (let i = 0; i < nx; i++) { let m = 0; for (let a = Math.max(0, i - win); a <= Math.min(nx - 1, i + win); a++) m = Math.min(m, topU[a]); wrapAt[i] = m - g.wrap; }
-    for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
-      // D is the distance to the nearest bone voxel centre; the bone surface lies half a voxel nearer, so d is measured to the surface
-      const id = i + nx * (j + ny * k), d = D[id] * h - h / 2;
-      if (!O[id]) continue;
-      const uu = lo[0] + i * h, vv = lo[1] + j * h, nn = lo[2] + k * h;
-      // a stop side: the shell continues past the edge by stopL and deeper by stopD
-      // (only where no bone lies above in the seating direction, so a stop rests on the bone edge without an undercut)
-      const sd = vv > 0 ? sUp.pos : sUp.neg;
-      if (Math.abs(uu) > g.L / 2) continue;
-      const band = sd && Math.abs(vv) > g.W / 2 - 2, shadow = colTopBone[i + nx * j] > nn;
-      const inBox = Math.abs(vv) <= g.W / 2 && nn >= wrapAt[i] && !(band && shadow);
-      const inStop = band && Math.abs(vv) <= g.W / 2 + stopX && nn >= wrapAt[i] - stopZ && !shadow;
-      if (!inBox && !inStop) continue;
-      const inShell = d > c && d <= c + w;
-      const edge = g.side > 0 ? vv >= g.W / 2 - g.bridge : vv <= -g.W / 2 + g.bridge;
-      const inBridge = edge && d > c + w - 0.5 && d <= c + w + 2.5;
-      if (!inShell && !inBridge) continue;
-      const q = world(i, j, k);
-      if (gap && q.clone().sub(gap.A.p).dot(gap.A.N) > gap.A.w / 2 + g.flange && q.clone().sub(gap.B.p).dot(gap.B.N) < -gap.B.w / 2 - g.flange) continue;
-      let cut = false;
-      if (d <= c + w + 0.05) for (const pw of pls) if (Math.abs(q.clone().sub(pw.p).dot(pw.N)) <= pw.w / 2) { cut = true; break; }
-      if (cut) continue;
-      Gm[id] = 1;
-      if (inShell && d <= c + h) contact++;
-      if (colTopBone[i + nx * j] > nn) undercutCols++;
+    // planes in guide-frame coordinates: signed distance = a*uu + b*vv + c*nn - e
+    const toF = (p, N_) => { const l = Math.hypot(N_.x, N_.y, N_.z); if (!(l > 1e-9) || !isFinite(l)) return null; const a = N_.dot(u) / l, b = N_.dot(v) / l, cc = N_.dot(n) / l, dx = p.x - P.x, dy = p.y - P.y, dz = p.z - P.z; return { a, b, c: cc, e: a * (dx * u.x + dy * u.y + dz * u.z) + b * (dx * v.x + dy * v.y + dz * v.z) + cc * (dx * n.x + dy * n.y + dz * n.z) }; };
+    const slots = pls.map(pw => { const f = toF(pw.p, pw.N); return f && pw.w > 0 ? Object.assign(f, { half: pw.w / 2 }) : null; }).filter(Boolean);
+    const gp = gap && { A: toF(gap.A.p, gap.A.N), B: toF(gap.B.p, gap.B.N), ta: gap.A.w / 2 + g.flange, tb: gap.B.w / 2 + g.flange };
+    const F = new Float32Array(N).fill(h * 4);
+    const bridgeLo = cw - 0.5, bridgeHi = cw + 2.5, edge0 = g.side > 0 ? g.W / 2 - g.bridge : -g.W / 2 + g.bridge;
+    for (let k = 0; k < nz; k++) {
+      const nn = lo[2] + k * h;
+      for (let j = 0; j < ny; j++) {
+        const vv = lo[1] + j * h, av = Math.abs(vv), sd = vv > 0 ? sUp.pos : sUp.neg, band = sd && av > g.W / 2 - 2;
+        const eT = g.side > 0 ? edge0 - vv : vv - edge0;
+        for (let i = 0; i < nx; i++) {
+          const id = i + nx * (j + ny * k), uu = lo[0] + i * h, d = dd[id];
+          const outer = Math.abs(uu) - g.L / 2;
+          if (outer > 0 || d > bridgeHi + h) { F[id] = Math.max(outer, d - bridgeHi); continue; }
+          // box: guide length and width, depth below the wrap line (stops: a lip past the edge, only off the bone's shadow)
+          const shadow = colTopBone[i + nx * j] > nn;
+          let box = Math.max(outer, av - g.W / 2, wrapAt[i] - nn);
+          if (band && shadow) box = Math.max(box, h);
+          if (sd) {
+            const stop = (band && !shadow) ? Math.max(outer, av - g.W / 2 - stopX, wrapAt[i] - stopZ - nn) : 1e3;
+            box = Math.min(box, stop);
+          }
+          let shell = Math.max(c - d, d - cw);
+          for (const s of slots) shell = Math.max(shell, s.half - Math.abs(s.a * uu + s.b * vv + s.c * nn - s.e));
+          const bridge = Math.max(bridgeLo - d, d - bridgeHi, eT);
+          F[id] = Math.max(box, Math.min(shell, bridge));
+        }
+      }
     }
     // screw sleeves (added) and drill holes (removed)
-    const screwInfo = [];
+    const screwInfo = [], axes = [];
     for (const s of scs) {
       if (!s.entry) { screwInfo.push({ s, ok: false }); continue; }
       // the hole is the drill plus the material profile's sleeve fit
-      const out = s.dir.clone().negate(), R = s.sc.D / 2, r = (s.sc.d + (g.fit || 0)) / 2, top = c + w + s.sc.sleeveH;
+      const out = s.dir.clone().negate(), R = s.sc.D / 2, r = (s.sc.d + (g.fit || 0)) / 2, top = cw + s.sc.sleeveH;
       const e0 = s.entry.clone().sub(P), el = [e0.dot(u), e0.dot(v), e0.dot(n)], ol = [out.dot(u), out.dot(v), out.dot(n)];
       // only the grid cells within R of the drill axis (the hole runs through the whole grid)
       const rng = [0, 1, 2].map(a => { const p1 = el[a] - ol[a] * 400, p2 = el[a] + ol[a] * 400; return [Math.max(0, Math.floor((Math.min(p1, p2) - R - lo[a]) / h) - 1), Math.min([nx, ny, nz][a] - 1, Math.ceil((Math.max(p1, p2) + R - lo[a]) / h) + 1)]; });
-      for (let k = rng[2][0]; k <= rng[2][1]; k++) for (let j = rng[1][0]; j <= rng[1][1]; j++) for (let i = rng[0][0]; i <= rng[0][1]; i++) {
-        const qa = lo[0] + i * h - el[0], qb = lo[1] + j * h - el[1], qc = lo[2] + k * h - el[2];
-        const t = qa * ol[0] + qb * ol[1] + qc * ol[2];
-        const ra = qa - t * ol[0], rb = qb - t * ol[1], rc = qc - t * ol[2], radial = Math.sqrt(ra * ra + rb * rb + rc * rc);
-        if (radial > R) continue;
-        const id = i + nx * (j + ny * k);
-        if (radial <= r) { Gm[id] = 0; continue; }
-        if (t >= -1 && t <= top && O[id] && D[id] * h - h / 2 > c) Gm[id] = 1;
-      }
+      axes.push({ el, ol, R, r, top, rng });
       // screw path through bone
       let inBone = 0, crossesPlane = false, exitAt = null, slotGap = Infinity;
       for (let t = 0; t <= s.sc.len; t += 0.25) {
@@ -907,22 +949,52 @@
       }
       screwInfo.push({ s, ok: true, inBone: Math.min(inBone, s.sc.len), crossesPlane, slotGap, exitAt });
     }
-    if (gap) for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
-      const id = i + nx * (j + ny * k); if (!Gm[id]) continue;
-      const q = world(i, j, k); if (q.clone().sub(gap.A.p).dot(gap.A.N) > gap.A.w / 2 + g.flange && q.clone().sub(gap.B.p).dot(gap.B.N) < -gap.B.w / 2 - g.flange) Gm[id] = 0;
+    const radialAt = (A, i, j, k) => {
+      const qa = lo[0] + i * h - A.el[0], qb = lo[1] + j * h - A.el[1], qc = lo[2] + k * h - A.el[2], t = qa * A.ol[0] + qb * A.ol[1] + qc * A.ol[2];
+      const ra = qa - t * A.ol[0], rb = qb - t * A.ol[1], rc = qc - t * A.ol[2];
+      return [Math.sqrt(ra * ra + rb * rb + rc * rc), t];
+    };
+    for (const A of axes) for (let k = A.rng[2][0]; k <= A.rng[2][1]; k++) for (let j = A.rng[1][0]; j <= A.rng[1][1]; j++) for (let i = A.rng[0][0]; i <= A.rng[0][1]; i++) {
+      const [rad, t] = radialAt(A, i, j, k); if (rad > A.R + h) continue;
+      const id = i + nx * (j + ny * k);
+      F[id] = Math.min(F[id], Math.max(rad - A.R, -1 - t, t - A.top, c - dd[id]));
     }
+    for (const A of axes) for (let k = A.rng[2][0]; k <= A.rng[2][1]; k++) for (let j = A.rng[1][0]; j <= A.rng[1][1]; j++) for (let i = A.rng[0][0]; i <= A.rng[0][1]; i++) {
+      const rad = radialAt(A, i, j, k)[0]; if (rad > A.r + h) continue;
+      const id = i + nx * (j + ny * k); F[id] = Math.max(F[id], A.r - rad);
+    }
+    if (gp) for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      const id = i + nx * (j + ny * k); if (F[id] >= 0) continue;
+      const uu = lo[0] + i * h, vv = lo[1] + j * h, nn = lo[2] + k * h;
+      F[id] = Math.max(F[id], Math.min(gp.A.a * uu + gp.A.b * vv + gp.A.c * nn - gp.A.e - gp.ta, -(gp.B.a * uu + gp.B.b * vv + gp.B.c * nn - gp.B.e) - gp.tb));
+    }
+    // the surface must close inside the grid
+    for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) if (i === 0 || j === 0 || k === 0 || i === nx - 1 || j === ny - 1 || k === nz - 1) { const id = i + nx * (j + ny * k); if (F[id] < h) F[id] = h; }
     T.screws = performance.now() - t0; await sleep();
-    // drop specks left by slots and holes; count real pieces
-    const cc = G.components(Gm, nx, ny, nz, 1), big = cc.comps.length ? cc.comps[0].size * 0.01 : 0;
-    const comps = cc.comps.filter(cm => cm.size >= big), keepL = new Set(comps.map(cm => cm.label));
-    for (let i = 0; i < N; i++) if (Gm[i] && !keepL.has(cc.labels[i])) Gm[i] = 0;
-    const mesh = meshFromNets(G.surfaceNets(G.blur(Gm, nx, ny, nz), nx, ny, nz, 0.5), toWorld, mat(COLORS.guide));
-    let vol = 0; for (let i = 0; i < N; i++) vol += Gm[i];
+    // drop specks left by slots and holes (under 1 % of the main body or 1 mm³); count real pieces
+    const Gm = new Uint8Array(N); for (let i = 0; i < N; i++) if (F[i] < 0) Gm[i] = 1;
+    const cc = G.components(Gm, nx, ny, nz, 1), big = cc.comps.length ? cc.comps[0].size : 0, minSize = Math.max(big * 0.01, 1 / (h * h * h));
+    const comps = cc.comps.filter(cm => cm.size >= minSize), keepL = new Set(comps.map(cm => cm.label));
+    for (let i = 0; i < N; i++) if (Gm[i] && !keepL.has(cc.labels[i])) { Gm[i] = 0; F[i] = h; }
+    let vol = 0, contact = 0, undercutCols = 0;
+    for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      const id = i + nx * (j + ny * k); if (!Gm[id]) continue;
+      vol++; const d = dd[id];
+      if (d > c && d <= bridgeHi) {
+        if (d <= cw && d <= c + h) contact++;
+        if (colTopBone[i + nx * j] > lo[2] + k * h) undercutCols++;
+      }
+    }
+    T.field = performance.now() - t0; await sleep();
+    const net = G.marchTets(F, nx, ny, nz, 0);
+    // winding follows the grid -> world map, which is a reflection when (u, v, n) is left-handed
+    if (u.dot(new THREE.Vector3().crossVectors(v, n)) < 0) { const ix = net.indices; for (let i = 0; i < ix.length; i += 3) { const t = ix[i + 1]; ix[i + 1] = ix[i + 2]; ix[i + 2] = t; } }
+    const mesh = meshFromNets(net, toWorld, mat(COLORS.guide));
     T.mesh = performance.now() - t0;
     const seat = window.Seat && !ctx.fast ? Seat.analyze({ Gm, B, D, nx, ny, nz, h, lo, clear: c }) : null;
     const wrapProfile = []; for (let i = 0; i < nx; i += Math.max(1, Math.round(1 / h))) wrapProfile.push([+(lo[0] + i * h).toFixed(2), +wrapAt[i].toFixed(2)]);
     return { mesh, result: { wrapProfile, pieces: comps.length, contact: contact * h * h, undercut: undercutCols * h * h, volume: vol * h * h * h, screwInfo, pls, seat, ms: performance.now() - t0, T },
-      grid: { Gm, B, nx, ny, nz, h, lo, P: P.clone(), u: u.clone(), v: v.clone(), n: n.clone() } };
+      grid: { Gm, B, F, nx, ny, nz, h, lo, P: P.clone(), u: u.clone(), v: v.clone(), n: n.clone() } };
   }
   // two separate guides: nothing between the outermost cuts except a capture flange beyond each slot
   function splitGap(g, pls) {
@@ -945,11 +1017,11 @@
     const ver = live.ver;
     busy(true, 'Guide üretiliyor…'); await sleep();
     const pls = planesWorld(), scs = screwsWorld();
-    const out = await buildGuide(Object.assign({ g: S.g, P: S.anchor.p, pls, scs, bone: boneAt }, frameAxes()));
+    const out = await buildGuide(Object.assign({ g: S.g, P: S.anchor.p, pls, scs, bone: boneAt, field: boneField }, frameAxes()));
     if (ver < live.shown) { disposeObj(out.mesh); return; }
     live.shown = ver; S.liveScrews = null;
     setPart('guide', 'Guide', out.mesh, COLORS.guide);
-    S.result = out.result; S.grid = out.grid;
+    S.result = out.result; S.grid = out.grid; simplifyMesh(out.mesh);
     const screwInfo = out.result.screwInfo;
     rebuildElementParts(pls, screwInfo); showResected();
     applyExplode(); updatePanels(); if (ver === live.ver) busy(false); render();
@@ -1916,7 +1988,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   }
   function serverUrl() { return ($('aiUrl').value || '').trim().replace(/\/+$/, ''); }
   function select(sel) { if (sel) S.guideSel = false; S.sel = sel; emit('select', sel); renderElements(); rebuildElementParts(S.result ? S.result.pls : planesWorld(), S.result ? S.result.screwInfo : []); applyExplode(); render(); }
-  window.Studio = { renderComps, setGuideRot, setGuideRoll, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, resEnds, splitGap, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume };
+  window.Studio = { renderComps, setGuideRot, setGuideRoll, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, resEnds, splitGap, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, boneField, meshFromNets, simplifyMesh, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume };
   bus.addEventListener('planeDragged', () => { renderElements(); schedule(true, true); });
   // messages assembled at run time are written in the language that was active: write them again when it changes
   if (window.addEventListener) window.addEventListener('langchange', () => { try { renderAppr(); syncLesion(); } catch (e) { /* no case open yet */ } });
