@@ -869,13 +869,13 @@
         if (t >= -1 && t <= top && O[id] && D[id] * h - h / 2 > c) Gm[id] = 1;
       }
       // screw path through bone
-      let inBone = 0, crossesPlane = false, exitAt = null;
+      let inBone = 0, crossesPlane = false, exitAt = null, slotGap = Infinity;
       for (let t = 0; t <= s.sc.len; t += 0.25) {
         const q = s.entry.clone().add(s.dir.clone().multiplyScalar(t));
         if (boneAt(q)) inBone += 0.25; else if (exitAt === null && t > 1) exitAt = t;
-        for (const pw of pls) if (Math.abs(q.clone().sub(pw.p).dot(pw.N)) <= pw.w / 2 + Math.max(0.5, s.sc.d / 2)) crossesPlane = true;   // the screw has a radius: its surface, not its axis, must clear the saw slot
+        for (const pw of pls) { const dist = Math.abs(q.clone().sub(pw.p).dot(pw.N)); if (dist <= pw.w / 2 + 0.5) crossesPlane = true; slotGap = Math.min(slotGap, dist - pw.w / 2 - s.sc.d / 2); }   // slotGap: screw surface (axis minus radius) to the slot edge
       }
-      screwInfo.push({ s, ok: true, inBone: Math.min(inBone, s.sc.len), crossesPlane, exitAt });
+      screwInfo.push({ s, ok: true, inBone: Math.min(inBone, s.sc.len), crossesPlane, slotGap, exitAt });
     }
     if (gap) for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
       const id = i + nx * (j + ny * k); if (!Gm[id]) continue;
@@ -1060,6 +1060,7 @@
       if (!si.ok) out.push(['crit', 'Kritik', `Vida ${i + 1} kemiğe ulaşmıyor.`, 's' + i]);
       else {
         if (si.crossesPlane) out.push(['crit', 'Kritik', `Vida ${i + 1} kesi hattından geçiyor.`, 's' + i]);
+        else if (si.slotGap < 0.5) out.push(['warn', 'Uyarı', `Vida ${i + 1} gövdesi kesi yuvasına ${fmt(Math.max(0, si.slotGap))} mm yaklaşıyor (vida yarıçapı dahil); testere yoluna değebilir.`, 's' + i]);
         if (si.exitAt !== null && si.exitAt < si.s.sc.len) out.push(['warn', 'Uyarı', `Vida ${i + 1} ${fmt(si.exitAt)} mm'de kemikten çıkıyor (bikortikal mi?).`, 's' + i]);
       }
     });

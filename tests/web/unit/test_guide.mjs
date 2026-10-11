@@ -93,13 +93,13 @@ test('buildGuide: screwInfo flags a screw that crosses a cut and one that leaves
   assert.equal(c.ok, false, 'no entry -> not ok');
 });
 
-test('buildGuide: screw-vs-cut check uses the screw radius (screw d=2 whose axis is 1.4 mm from a 1.2 mm slot centre touches the slot margin)', async () => {
+test('buildGuide: screw-vs-cut: slotGap measures the screw surface (axis minus radius) to the slot edge; the 0.5 mm axis check is unchanged', async () => {
   const sc = { d: 2, D: 5, sleeveH: 5, len: 10 };
-  const o = await build({ pls: [{ p: V(0, 0, 0), N: V(1, 0, 0), w: 1.2 }], scs: [{ sc, dir: V(0, 0, -1), entry: V(1.4, 0, 0) }, { sc: { d: 3, D: 6, sleeveH: 5, len: 10 }, dir: V(0, 0, -1), entry: V(1.9, 0, 0) }, { sc, dir: V(0, 0, -1), entry: V(2.4, 0, 0) }] });
-  const [a, b, c] = o.result.screwInfo;
-  assert.equal(a.crossesPlane, true, 'axis 1.4 mm from the centre: slot half-width 0.6 + screw radius 1.0 = 1.6 > 1.4');
-  assert.equal(b.crossesPlane, true, 'd=3 (radius 1.5): 0.6 + 1.5 = 2.1 > 1.9');
-  assert.equal(c.crossesPlane, false, 'axis 2.4 mm away clears it');
+  const o = await build({ pls: [{ p: V(0, 0, 0), N: V(1, 0, 0), w: 1.2 }], scs: [{ sc, dir: V(0, 0, -1), entry: V(1.4, 0, 0) }, { sc: { d: 3, D: 6, sleeveH: 5, len: 10 }, dir: V(0, 0, -1), entry: V(1.9, 0, 0) }, { sc, dir: V(0, 0, -1), entry: V(5, 0, 0) }, { sc, dir: V(0, 0, -1), entry: V(0.9, 0, 0) }] });
+  const [a, b, c, d] = o.result.screwInfo;
+  near(a.slotGap, 1.4 - 0.6 - 1.0, 0.02, 'axis 1.4 from centre, slot half 0.6, radius 1.0 -> -0.2 mm (touches the slot)'); assert.equal(a.crossesPlane, false, 'axis still clears the 0.5 mm axis margin');
+  near(b.slotGap, 1.9 - 0.6 - 1.5, 0.02, 'd=3'); near(c.slotGap, 5 - 0.6 - 1.0, 0.02, 'far screw');
+  assert.equal(d.crossesPlane, true, 'axis 0.9 mm from the centre is within 0.6 + 0.5');
 });
 
 test('buildGuide: split mode makes two pieces with nothing between the outer cuts (beyond the flange)', async () => {
