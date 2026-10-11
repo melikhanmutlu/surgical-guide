@@ -359,7 +359,7 @@
     out.push(['info', 'Bilgi', `Kapsam ${fmt(vol.nz * dz, 0)} mm${m.kernel ? `, kernel ${m.kernel}` : ''}.`]);
     return out;
   }
-  function renderQC() { $('qc').innerHTML = S.qc.map(([c, t, m]) => `<li class="${c}"><b>${t}</b><span>${m}</span></li>`).join(''); }
+  function renderQC() { $('qc').innerHTML = S.qc.map(([c, t, m]) => `<li class="${esc(c)}"><b>${esc(t)}</b><span>${esc(m)}</span></li>`).join(''); }
 
   // ---------- segmentation ----------
   async function segment(autoSelect) {
@@ -377,7 +377,7 @@
   function renderComps() {
     if (window.Masks) { Masks.renderList(); return; }
     const vox = S.red.sp[0] * S.red.sp[1] * S.red.sp[2] / 1000;
-    $('comps').innerHTML = S.comps.map((c, i) => `<label class="comp"><input type="checkbox" data-l="${c.label}" ${S.selected.has(c.label) ? 'checked' : ''}> ${S.compNames ? S.compNames[c.label] || 'Yapı ' + (i + 1) : 'Yapı ' + (i + 1)} <span>${fmt(c.size * vox)} cm³</span></label>`).join('') || '<p class="hint">Eşiğin üstünde yapı bulunamadı.</p>';
+    $('comps').innerHTML = S.comps.map((c, i) => `<label class="comp"><input type="checkbox" data-l="${c.label}" ${S.selected.has(c.label) ? 'checked' : ''}> ${S.compNames ? esc(S.compNames[c.label] || 'Yapı ' + (i + 1)) : 'Yapı ' + (i + 1)} <span>${fmt(c.size * vox)} cm³</span></label>`).join('') || '<p class="hint">Eşiğin üstünde yapı bulunamadı.</p>';
     $('comps').querySelectorAll('input').forEach(el => el.addEventListener('change', async () => {
       el.checked ? S.selected.add(+el.dataset.l) : S.selected.delete(+el.dataset.l);
       await rebuildBone(false);
@@ -821,7 +821,8 @@
     const win = Math.max(1, Math.round(1.5 / h)), wrapAt = new Float32Array(nx);
     for (let i = 0; i < nx; i++) { let m = 0; for (let a = Math.max(0, i - win); a <= Math.min(nx - 1, i + win); a++) m = Math.min(m, topU[a]); wrapAt[i] = m - g.wrap; }
     for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
-      const id = i + nx * (j + ny * k), d = D[id] * h;
+      // D is the distance to the nearest bone voxel centre; the bone surface lies half a voxel nearer, so d is measured to the surface
+      const id = i + nx * (j + ny * k), d = D[id] * h - h / 2;
       if (!O[id]) continue;
       const uu = lo[0] + i * h, vv = lo[1] + j * h, nn = lo[2] + k * h;
       // a stop side: the shell continues past the edge by stopL and deeper by stopD
@@ -861,7 +862,7 @@
         if (radial > R) continue;
         const id = i + nx * (j + ny * k);
         if (radial <= r) { Gm[id] = 0; continue; }
-        if (t >= -1 && t <= top && O[id] && D[id] * h > c) Gm[id] = 1;
+        if (t >= -1 && t <= top && O[id] && D[id] * h - h / 2 > c) Gm[id] = 1;
       }
       // screw path through bone
       let inBone = 0, crossesPlane = false, exitAt = null;
@@ -960,7 +961,7 @@
     pt.obj.traverse(c => { if (!c.material) return; const m = c.material; if (m.userData.baseOpacity === undefined) m.userData.baseOpacity = m.opacity; m.opacity = m.userData.baseOpacity * a; m.transparent = m.opacity < 1; m.depthWrite = m.opacity >= 1 && m.userData.baseOpacity >= 1; m.needsUpdate = true; });
   }
   function renderParts() {
-    const row = pt => `<li><label><input type="checkbox" data-p="${pt.id}" ${pt.visible ? 'checked' : ''}><i style="background:#${pt.color.toString(16).padStart(6, '0')}"></i><span>${pt.label}</span></label><input type="range" min="0.1" max="1" step="0.05" value="${pt.opacity ?? 1}" data-o="${pt.id}" aria-label="${pt.label} saydamlığı" title="Saydamlık"><button class="ghost sm" data-iso="${pt.id}" title="Yalnız bunu göster" aria-label="${pt.label}: yalnız bunu göster"><svg class="i"><use href="#i-eye"/></svg></button></li>`;
+    const row = pt => `<li><label><input type="checkbox" data-p="${pt.id}" ${pt.visible ? 'checked' : ''}><i style="background:#${pt.color.toString(16).padStart(6, '0')}"></i><span>${esc(pt.label)}</span></label><input type="range" min="0.1" max="1" step="0.05" value="${pt.opacity ?? 1}" data-o="${pt.id}" aria-label="${esc(pt.label)} saydamlığı" title="Saydamlık"><button class="ghost sm" data-iso="${pt.id}" title="Yalnız bunu göster" aria-label="${esc(pt.label)}: yalnız bunu göster"><svg class="i"><use href="#i-eye"/></svg></button></li>`;
     // grouped so a long list reads by role: anatomy, the cuts, the guide and its screws, the reconstruction
     const GROUPS = [['Anatomi', id => /^(bone|resected|mirror|lesion|lesionPaint|postop|ctx_|layer)/.test(id)], ['Plan', id => /^(plane|anchor)/.test(id)], ['Guide', id => /^(guide|screw)/.test(id)], ['Rekonstrüksiyon', id => /^(grafts|implants|plate)/.test(id)], ['Diğer', () => true]];
     const all = Object.values(parts), seen = new Set();
@@ -1065,7 +1066,7 @@
     S.checkList = out.slice();
     const rank = { crit: 0, warn: 1, ok: 2 }, infos = out.filter(o => o[0] === 'info'), main = out.filter(o => o[0] !== 'info').sort((a, b) => (rank[a[0]] ?? 3) - (rank[b[0]] ?? 3));
     if (!main.length) main.push(['ok', 'Uygun', 'Tüm kontroller geçti.']);
-    const li = ([c, t, m, ref]) => `<li class="${c}"${ref ? ` data-go="${ref}" title="İlgili öğeye git" tabindex="0" role="button"` : ''}><b>${t}</b><span>${m}</span></li>`;
+    const li = ([c, t, m, ref]) => `<li class="${c}"${ref ? ` data-go="${ref}" title="İlgili öğeye git" tabindex="0" role="button"` : ''}><b>${t}</b><span>${esc(m)}</span></li>`;
     const n = c => out.filter(o => o[0] === c).length;
     $('chkSum').innerHTML = n('crit') || n('warn') ? (n('crit') ? `<span class="tag crit">${n('crit')} kritik</span>` : '') + (n('warn') ? `<span class="tag warn">${n('warn')} uyarı</span>` : '') + (infos.length ? `<span class="tag">${infos.length} bilgi</span>` : '') : '';
     $('chkSum').hidden = !$('chkSum').innerHTML;

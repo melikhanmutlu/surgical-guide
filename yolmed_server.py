@@ -40,6 +40,8 @@ from scipy import ndimage as ndi
 import seg_server  # /health and /segment are served by seg_server.Handler, unchanged
 
 MAX_BODY = 256 * 1024 * 1024
+BODY_BASE_S = 20                        # seconds allowed to send a body, plus size / BODY_MIN_RATE
+BODY_MIN_RATE = 2e6                    # bytes per second a client must sustain
 MAX_PLAN_BODY = 4 * 1024 * 1024       # case and version requests carry only plan JSON
 MAX_CROP = 128e6                      # voxels in a guide crop (a 100 mm guide at 0.3 mm is ~100 M)
 MAX_GRID = 40e6                       # guide grid cells (~2 GB peak at this size)
@@ -519,8 +521,21 @@ class Handler(seg_server.Handler):
             raise HttpError(400, "bad Content-Length")
         if n > limit:
             raise HttpError(413, "request too large")
+        # an overall deadline (not just a per-read timeout) so a client trickling bytes cannot hold a job slot
+        deadline = time.monotonic() + BODY_BASE_S + n / BODY_MIN_RATE
+        chunks, got = [], 0
+        while got < n:
+            if time.monotonic() > deadline:
+                raise HttpError(408, "request body too slow")
+            chunk = self.rfile.read(min(1 << 20, n - got))
+            if not chunk:
+                raise HttpError(400, "request body ended early")
+            chunks.append(chunk); got += len(chunk)
+
+        def _no_const(c):
+            raise ValueError(f"{c} is not valid JSON")
         try:
-            obj = json.loads(self.rfile.read(n) or b"null")
+            obj = json.loads(b"".join(chunks) or b"null", parse_constant=_no_const)
         except ValueError as e:
             raise HttpError(400, f"invalid JSON: {e}")
         if not isinstance(obj, dict):

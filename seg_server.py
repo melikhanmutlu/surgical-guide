@@ -14,6 +14,9 @@ Protocol
 """
 import argparse
 import json
+import os
+import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -24,6 +27,8 @@ from surgiguide.volume import Volume
 from surgiguide import segment as seg
 
 MAX_VOXELS = 256 * 1024 * 1024 // 2   # int16 volume of at most 256 MB
+SEG_SLOTS = threading.BoundedSemaphore(int(os.environ.get("YOLMED_SEG_JOBS", "1")))
+SEG_WAIT_S = 120                      # how long a request queues for the slot before a 503
 NAMES_TR = {"mandible": "Mandibula", "fibula": "Fibula"}
 
 
@@ -86,16 +91,32 @@ class Handler(BaseHTTPRequestHandler):
             n = int(self.headers.get("Content-Length") or -1)
             if min(nx, ny, nz) < 1 or nx * ny * nz > MAX_VOXELS or n != 2 * nx * ny * nz:
                 raise ValueError("Content-Length must be 2*nx*ny*nz bytes, at most %d voxels" % MAX_VOXELS)
-            raw = self.rfile.read(n)
-            hu = np.frombuffer(raw, "<i2").reshape(nz, ny, nx).astype(np.float32)
         except (KeyError, ValueError, TypeError) as e:
             self.send_error(400, f"bad request: {e}"); return
-        vol = Volume(hu, sp, origin, axes.T)   # axes rows are the i, j, k unit vectors
-        if self.backend == "totalseg":
-            wanted = [s for s in q.get("structures", "mandible").split(",") if s in seg.TOTALSEG_TASKS]
-            labels, structs = run_totalseg(vol, wanted)
-        else:
-            labels, structs = run_threshold(vol)
+        # one segmentation at a time: a request at the size limit needs ~3 GB, so parallel ones could exhaust the host
+        if not SEG_SLOTS.acquire(timeout=SEG_WAIT_S):
+            self.send_error(503, "segmentation busy, try again"); return
+        try:
+            # overall read deadline, so a client trickling bytes cannot hold the slot
+            deadline = time.monotonic() + 20 + n / 2e6
+            chunks, got = [], 0
+            while got < n:
+                if time.monotonic() > deadline:
+                    self.send_error(408, "request body too slow"); return
+                chunk = self.rfile.read(min(1 << 20, n - got))
+                if not chunk:
+                    self.send_error(400, "request body ended early"); return
+                chunks.append(chunk); got += len(chunk)
+            hu = np.frombuffer(b"".join(chunks), "<i2").reshape(nz, ny, nx).astype(np.float32)
+            del chunks
+            vol = Volume(hu, sp, origin, axes.T)   # axes rows are the i, j, k unit vectors
+            if self.backend == "totalseg":
+                wanted = [s for s in q.get("structures", "mandible").split(",") if s in seg.TOTALSEG_TASKS]
+                labels, structs = run_totalseg(vol, wanted)
+            else:
+                labels, structs = run_threshold(vol)
+        finally:
+            SEG_SLOTS.release()
         body = np.ascontiguousarray(labels).tobytes()
         self.send_response(200); self._cors()
         self.send_header("Content-Type", "application/octet-stream")
