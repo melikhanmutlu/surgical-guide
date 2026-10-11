@@ -25,19 +25,55 @@ window.SW = (function () {
   }
 
   // ---------- arch model of the planning bone ----------
-  function arch(bodyHeight = 24, binDeg = 2) {
+  async function arch(bodyHeight = 24, binDeg = 2) {
     const r = S.red, m = S.mask, step = 2, P = [];
     let zmin = Infinity;
     for (let k = 0; k < r.nz; k += step) for (let j = 0; j < r.ny; j += step) for (let i = 0; i < r.nx; i += step) {
       if (!m[i + r.nx * (j + r.ny * k)]) continue;
       const w = G.worldOf(r, i, j, k); P.push(w); if (w[2] < zmin) zmin = w[2];
     }
-    const body = P.filter(w => w[2] < zmin + bodyHeight);
-    const c = body.reduce((a, w) => [a[0] + w[0], a[1] + w[1], a[2] + w[2]], [0, 0, 0]).map(x => x / body.length);
-    const theta = body.map(w => Math.atan2(w[0] - c[0], -(w[1] - c[1])) * 180 / Math.PI);
-    const bins = new Map();
-    body.forEach((w, i) => { const b = Math.floor(theta[i] / binDeg); if (!bins.has(b)) bins.set(b, { n: 0, s: [0, 0, 0], a: 0 }); const q = bins.get(b); q.n++; q.a += theta[i]; q.s[0] += w[0]; q.s[1] += w[1]; q.s[2] += w[2]; });
-    let cent = [...bins.values()].filter(q => q.n >= 15).map(q => ({ ang: q.a / q.n, p: q.s.map(x => x / q.n) })).sort((a, b) => a.ang - b.ang);
+    // polar centre: the midpoint of the two condyles (Ref) when it has them, so the chin is at 0 deg and the condyles at
+    // +-90 deg whatever the head tilt; otherwise the centroid of the lowest band. 0 deg points at the chin: the lowest-band
+    // point farthest from the centre. + = patient left (+x in LPS)
+    const ref = await ensureRef(), cR = ref && ref.cond && ref.cond.R, cL = ref && ref.cond && ref.cond.L;
+    const low = P.filter(w => w[2] < zmin + bodyHeight);
+    let c = low.reduce((a, w) => [a[0] + w[0], a[1] + w[1], a[2] + w[2]], [0, 0, 0]).map(x => x / low.length), thetaMax = 125, mode = 'centroid';
+    if (cR && cL) { c = [(cR[0] + cL[0]) / 2, (cR[1] + cL[1]) / 2, c[2]]; thetaMax = 88; mode = 'condyles'; }
+    // chin direction: from the condyle midpoint towards the lowest band's centroid, made perpendicular to the sagittal plane
+    let chinDir = [0, -1];
+    if (mode === 'condyles') {
+      const lc = low.reduce((a, w) => [a[0] + w[0], a[1] + w[1]], [0, 0]).map(x => x / low.length);
+      let d = [lc[0] - c[0], lc[1] - c[1]];
+      if (ref.n) { const n = [ref.n[0], ref.n[1]], nl = Math.hypot(n[0], n[1]) || 1, k = (d[0] * n[0] + d[1] * n[1]) / (nl * nl); d = [d[0] - k * n[0], d[1] - k * n[1]]; }
+      const l = Math.hypot(d[0], d[1]); if (l > 1) chinDir = [d[0] / l, d[1] / l];
+    }
+    const theta1 = w => { const dx = w[0] - c[0], dy = w[1] - c[1], cos = dx * chinDir[0] + dy * chinDir[1], sin = chinDir[0] * dy - chinDir[1] * dx; return Math.atan2(sin, cos) * 180 / Math.PI; };
+    const thetaAll = P.map(theta1);
+    // per angular bin the lowest `bodyHeight` mm of bone in that bin (a real lower border rises towards the angle); the lower
+    // border is the 5th percentile of z, so a stray voxel below the bone does not move the band
+    const binZ = new Map();
+    P.forEach((w, i) => { const b = Math.floor(thetaAll[i] / binDeg); if (!binZ.has(b)) binZ.set(b, []); binZ.get(b).push(w[2]); });
+    const binLo = new Map(); for (const [b, zs] of binZ) { zs.sort((x, y) => x - y); binLo.set(b, zs[Math.floor(zs.length * 0.05)]); }
+    // band per bin: from its lower border up by bodyHeight, never above chin + bodyHeight (so the arch ends where the lower
+    // border has risen by a body height: the angle)
+    const near0 = [...binLo.keys()].filter(b => Math.abs(b * binDeg) <= 15).map(b => binLo.get(b)).sort((x, y) => x - y), chin = near0.length ? near0[near0.length >> 1] : zmin, top = chin + bodyHeight;
+    const bins = new Map(); let nBody = 0;
+    P.forEach((w, i) => {
+      const b = Math.floor(thetaAll[i] / binDeg); if (w[2] >= Math.min(binLo.get(b) + bodyHeight, top)) return;
+      nBody++; if (!bins.has(b)) bins.set(b, { n: 0, s: [0, 0, 0], a: 0 }); const q = bins.get(b); q.n++; q.a += thetaAll[i]; q.s[0] += w[0]; q.s[1] += w[1]; q.s[2] += w[2];
+    });
+    const body = { length: nBody };
+    // the arch ends at the angle: bins whose lower border is more than `rise` mm above the chin (ramus, coronoid, condyle)
+    // are not arch, and the arch is the run of accepted bins contiguous with the midline
+    // (the subsampled lattice leaves a few empty bins at some angles: up to 3 in a row are stepped over)
+    // the arch ends at the angle: at the condyles' polar angle, or (no condyles) where the lower border has risen `rise` mm
+    const rise = 25, inRange = b => Math.abs((b + 0.5) * binDeg) <= thetaMax, okBin = b => inRange(b) && bins.has(b) && bins.get(b).n >= 15 && binLo.get(b) < chin + rise, high = b => !inRange(b) || (binLo.has(b) && binLo.get(b) >= chin + rise);
+    const keep = new Set(), b0 = Math.floor(0 / binDeg);
+    for (const dir of [1, -1]) {
+      let gap = 0;
+      for (let b = dir > 0 ? b0 : b0 - 1; gap <= 3 && !high(b); b += dir) { if (okBin(b)) { keep.add(b); gap = 0; } else gap++; }
+    }
+    let cent = [...keep].map(b => bins.get(b)).map(q => ({ ang: q.a / q.n, p: q.s.map(x => x / q.n) })).sort((a, b) => a.ang - b.ang);
     // light smoothing of the centre line
     const pts = cent.map((q, i) => { const a = cent[Math.max(0, i - 1)].p, b = cent[Math.min(cent.length - 1, i + 1)].p; return [0, 1, 2].map(k => (a[k] + q.p[k] + b[k]) / 3); });
     const ang = cent.map(q => q.ang), s = [0];
@@ -45,7 +81,7 @@ window.SW = (function () {
     // s = 0 at the midline (theta = 0)
     let s0 = 0; for (let i = 1; i < ang.length; i++) if (ang[i - 1] <= 0 && ang[i] >= 0) { const t = (0 - ang[i - 1]) / ((ang[i] - ang[i - 1]) || 1); s0 = s[i - 1] + t * (s[i] - s[i - 1]); break; }
     const ss = s.map(x => x - s0);
-    return { s: ss, pts, ang, sMin: ss[0], sMax: ss[ss.length - 1], center: c, zmin, nBody: body.length, nAll: P.length, bodyHeight };
+    return { s: ss, pts, ang, sMin: ss[0], sMax: ss[ss.length - 1], center: c, zmin, chin, mode, thetaMax, chinDir, nBody: body.length, nAll: P.length, bodyHeight };
   }
   function archPoint(A, s) {
     s = Math.max(A.sMin, Math.min(A.sMax, s));
@@ -92,7 +128,7 @@ window.SW = (function () {
   // drive the app: anchor on the buccal surface over the region centre, lesion bounds, cuts, resected piece, guide
   async function setRegion(region, side, len, margin = 3) {
     const out = { region, side, len, margin, t: {} }, t0 = performance.now();
-    const A = arch(); out.arch = { sMin: +A.sMin.toFixed(1), sMax: +A.sMax.toFixed(1), zmin: +A.zmin.toFixed(1), nBody: A.nBody, nAll: A.nAll, center: A.center.map(x => +x.toFixed(1)) };
+    const A = await arch(); out.arch = { mode: A.mode, sMin: +A.sMin.toFixed(1), sMax: +A.sMax.toFixed(1), zmin: +A.zmin.toFixed(1), chin: +A.chin.toFixed(1), nBody: A.nBody, nAll: A.nAll, center: A.center.map(x => +x.toFixed(1)) };
     const rc = await regionCentre(A, region, side, len);
     out.centre = { p: v3(rc.p), dir: v3(rc.dir), s: rc.s === null ? null : +rc.s.toFixed(1), sEnd: +rc.sEnd.toFixed(1), ramL: +rc.ramL.toFixed(1), cond: rc.cond, condFound: rc.condFound, note: rc.note };
     out.t.arch = performance.now() - t0;
