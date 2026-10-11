@@ -107,7 +107,7 @@ window.Audit = (function () {
       ${block('eng', h)}${block('sur', h)}
       <p class="hint" id="auMsg">${esc(note)}</p>
       <details class="sub-d"><summary>Onay geçmişi (${log.length})</summary>
-        <p class="hint">${chain.ok ? `Zincir doğrulandı${log.length ? ` · ${esc(String(lastH).slice(0, 8))}` : ''}` : `<b style="color:var(--crit)">Zincir ${chain.bad + 1}. kayıtta bozuk.</b>`} · plan ${h.slice(0, 8)}</p>
+        <p class="hint">${chain.ok ? `Zincir doğrulandı${log.length ? ` · <span>${esc(String(lastH).slice(0, 8))}</span>` : ''}` : `<b style="color:var(--crit)">Zincir ${chain.bad + 1}. kayıtta bozuk.</b>`} · plan <span>${h.slice(0, 8)}</span></p>
         <ol class="aulog">${log.slice().reverse().map(e => `<li>${esc(when(e.at))} · ${esc(ROLE[e.role] || '')} ${esc(e.name)} ${esc(ACT[e.action] || '')}${e.comment ? `: “${esc(e.comment)}”` : ''}<small>#${Number(e.n) || 0} ${esc(String(e.hash || '').slice(0, 12))} · plan ${esc(String(e.plan || '').slice(0, 8))}</small></li>`).join('') || '<li>Kayıt yok.</li>'}</ol>
       </details>`;
     box.querySelectorAll('[data-a]').forEach(b => b.addEventListener('click', () => act(b.dataset.r, b.dataset.a)));

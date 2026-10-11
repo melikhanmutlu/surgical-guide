@@ -7,6 +7,8 @@
   const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
   const deg = THREE.MathUtils.degToRad;
   const esc = t => String(t).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+  // English text for a message assembled at run time (i18n.js looks up whole strings, so the fixed pieces are translated before joining)
+  const xl = s => (window.I18N ? I18N.t(s) : s);
   const COLORS = { bone: 0xddd5bd, resected: 0xd67850, guide: 0x3c82dc, fguide: 0x2a9d8f, screw: 0x8c959c, plane: 0xe0533d, anchor: 0x22a06b, lesion: 0x8e6fd6 };
   // busy indicator; long server jobs get a running bar, elapsed time and a cancel button
   let busyTick = null, busyCancelFn = null;
@@ -14,7 +16,7 @@
     $('busy').hidden = !on; if (text) $('busyText').textContent = text;
     $('busyBar').hidden = !(on && opt.bar); $('busyBar').classList.remove('det'); $('busyBar').firstElementChild.style.width = ''; $('busyCancel').hidden = !(on && opt.cancel); busyCancelFn = on ? opt.cancel || null : null;
     clearInterval(busyTick);
-    if (on && opt.bar) { const t0 = Date.now(); busyTick = setInterval(() => { $('busyText').textContent = `${text} ${Math.round((Date.now() - t0) / 1000)} sn${opt.max ? ' / en çok ' + opt.max + ' sn' : ''}`; }, 1000); }
+    if (on && opt.bar) { const t0 = Date.now(); busyTick = setInterval(() => { $('busyText').textContent = `${xl(text)} ${xl(`${Math.round((Date.now() - t0) / 1000)} sn`)}${opt.max ? ' ' + xl(`/ en çok ${opt.max} sn`) : ''}`; }, 1000); }
   };
   // determinate bar for file loading: percentage and, once the rate is known, the time left
   const etaText = s => s < 60 ? `${Math.max(1, Math.round(s))} sn` : `${Math.floor(s / 60)} dk ${Math.round(s % 60)} sn`;
@@ -25,7 +27,7 @@
       const now = performance.now(); if (now - last < 120 && f < 1) return; last = now;
       f = Math.max(0, Math.min(1, f)); const el = (now - t0) / 1000, eta = f > 0.03 && el > 0.8 && f < 1 ? el * (1 - f) / f : null;
       $('busyBar').firstElementChild.style.width = (f * 100).toFixed(1) + '%';
-      $('busyText').textContent = `${text} %${Math.floor(f * 100)}${eta !== null ? ` · yaklaşık ${etaText(eta)} kaldı` : ''}`;
+      $('busyText').textContent = `${xl(text)} ${xl(`%${Math.floor(f * 100)}`)}${eta !== null ? ' ' + xl(`· yaklaşık ${etaText(eta)} kaldı`) : ''}`;
       await sleep();
     };
   }
@@ -183,7 +185,7 @@
       try {
         const x = await Unzip.expand(files, (i, n) => prog(zw * i / n, `Zip açılıyor (${i}/${n})…`));
         files = x.files;
-        if (x.skipped.length) alertMsg(`Zip içinde ${x.skipped.length} dosya açılamadı ve atlandı (şifreli, desteklenmeyen sıkıştırma ya da çok iç içe): ${x.skipped.slice(0, 3).join(', ')}${x.skipped.length > 3 ? '…' : ''}`);
+        if (x.skipped.length) alertMsg(`${xl(`Zip içinde ${x.skipped.length} dosya açılamadı ve atlandı (şifreli, desteklenmeyen sıkıştırma ya da çok iç içe):`)} ${x.skipped.slice(0, 3).join(', ')}${x.skipped.length > 3 ? '…' : ''}`);
       } catch (e) { return { error: 'Zip açılamadı: ' + e.message }; }
     }
     if (!files.length) return { error: 'Dosya bulunamadı.' };
@@ -202,7 +204,7 @@
       } catch (e) { skipped++; }
       await prog(zw + pw * (slices.length + skipped + multi) / files.length, `DICOM okunuyor (${slices.length + skipped} / ${files.length})…`);
     }
-    if (!slices.length) { const u = Object.keys(unsup); return { error: u.length ? `Bu aktarım sözdizimi desteklenmiyor: ${u.map(t => window.DicomCodecs ? DicomCodecs.name(t) : t).join(', ')}.` : multi ? 'Çok çerçeveli (enhanced) DICOM henüz desteklenmiyor; seriyi tek kesitli dosyalar olarak dışa aktarın.' : 'Görüntü içeren DICOM bulunamadı.' }; }
+    if (!slices.length) { const u = Object.keys(unsup); return { error: u.length ? `${xl('Bu aktarım sözdizimi desteklenmiyor:')} ${u.map(t => window.DicomCodecs ? DicomCodecs.name(t) : t).join(', ')}.` : multi ? 'Çok çerçeveli (enhanced) DICOM henüz desteklenmiyor; seriyi tek kesitli dosyalar olarak dışa aktarın.' : 'Görüntü içeren DICOM bulunamadı.' }; }
     const bySeries = {}; slices.forEach(s => (bySeries[s.series] = bySeries[s.series] || []).push(s));
     const groups = Object.values(bySeries).sort((a, b) => b.length - a.length);
     let ser = groups[0];
@@ -260,13 +262,13 @@
     for (let k = 0; k < ser.length; k++) {
       let ds;
       try { ds = await dparse(new Uint8Array(await ser[k].file.arrayBuffer())); }
-      catch (e) { return { error: `Kesit ${k + 1} okunamadı: ${e.message || e}` }; }
+      catch (e) { return { error: `${xl(`Kesit ${k + 1} okunamadı:`)} ${e.message || e}` }; }
       const el = ds.elements.x7fe00010, signed = ds.uint16('x00280103') === 1;
       const slope = parseFloat(ds.string('x00281053') || '1'), icpt = parseFloat(ds.string('x00281052') || '0');
       let px;
       if (window.DicomCodecs) {
         try { px = await DicomCodecs.decode(ds); }
-        catch (e) { return { error: `Kesit ${k + 1} açılamadı: ${e.message}` }; }
+        catch (e) { return { error: `${xl(`Kesit ${k + 1} açılamadı:`)} ${e.message}` }; }
         if (px.length < rows * cols) return { error: `Kesit ${k + 1} boyutu seriyle uyuşmuyor.` };
       } else {
         const buf = ds.byteArray.buffer.slice(ds.byteArray.byteOffset + el.dataOffset, ds.byteArray.byteOffset + el.dataOffset + rows * cols * 2);
@@ -276,7 +278,7 @@
       await prog(p0 + dw * (k + 1) / ser.length, `${what} (${k + 1} / ${ser.length})…`);
     }
     return { source, vol: { hu, nx: cols, ny: rows, nz: ser.length, sp: [ps[1], ps[0], dz], origin: ser[0].ipp,
-      axes: [[r.x, r.y, r.z], [c.x, c.y, c.z], [nrm.x, nrm.y, nrm.z]], meta }, label: `${zipName || ((ser[0].path || '').includes('/') ? ser[0].path.split('/')[0] : 'DICOM')}${groups.length > 1 && source.name ? ' · ' + source.name : ''} · ${ser.length} kesit${skipped ? `, ${skipped} dosya atlandı` : ''}` };
+      axes: [[r.x, r.y, r.z], [c.x, c.y, c.z], [nrm.x, nrm.y, nrm.z]], meta }, label: `${zipName || ((ser[0].path || '').includes('/') ? ser[0].path.split('/')[0] : 'DICOM')}${groups.length > 1 && source.name ? ' · ' + source.name : ''} · ${xl(`${ser.length} kesit`)}${skipped ? xl(`, ${skipped} dosya atlandı`) : ''}` };
   }
   const dstr = (ds, tag) => (ds.string(tag) || '').replace(/\0/g, '').trim();
   // one line per series for the series switcher: description, size, slice thickness, kernel, and a warning for scouts
@@ -338,7 +340,7 @@
   // ---------- image quality control (thresholds from published guide workflows; clinical team sets the final values) ----------
   function qualityCheck(vol) {
     const m = vol.meta || {}, out = [], dz = vol.sp[2], th = m.thickness || dz;
-    if (m.modality && m.modality !== 'CT') out.push(['crit', 'Kritik', `Modalite ${m.modality}; BT serisi gerekli.`]);
+    if (m.modality && m.modality !== 'CT') out.push(['crit', 'Kritik', `${xl('Modalite')} ${m.modality}; ${xl('BT serisi gerekli.')}`]);
     const step = Math.max(dz, th);
     out.push(step <= 1 ? ['ok', 'Uygun', `Kesit kalınlığı ${fmt(th, 2)} mm, aralık ${fmt(dz, 2)} mm (≤ 1 mm).`]
       : step <= 1.5 ? ['warn', 'Uyarı', `Kesit ${fmt(step, 2)} mm; guide için ≤ 1 mm önerilir.`]
@@ -351,7 +353,7 @@
       out.push(bad ? ['crit', 'Kritik', `${bad} yerde kesit aralığı düzensiz; eksik ya da tekrar eden kesit olabilir.`] : ['ok', 'Uygun', 'Kesit aralığı düzenli, eksik kesit yok.']);
     }
     if (m.bits && m.bits <= 8) out.push(['crit', 'Kritik', `Görüntü ${m.bits} bit; HU değerleri korunmamış (pencerelenmiş ya da ekran görüntüsü). Ham BT serisi gerekli.`]);
-    if (m.ts && /^1\.2\.840\.10008\.1\.2\.4\.(50|51|81|91)$/.test(m.ts) && window.DicomCodecs) out.push(['warn', 'Uyarı', `${DicomCodecs.name(m.ts)}: kayıplı sıkıştırma; kemik sınırı birkaç HU kayabilir.`]);
+    if (m.ts && /^1\.2\.840\.10008\.1\.2\.4\.(50|51|81|91)$/.test(m.ts) && window.DicomCodecs) out.push(['warn', 'Uyarı', `${DicomCodecs.name(m.ts)}: ${xl('kayıplı sıkıştırma; kemik sınırı birkaç HU kayabilir.')}`]);
     if (m.tilt > 1) out.push(['crit', 'Kritik', `Gantry eğimi ${fmt(m.tilt)}°; hacim eğik örneklenmiş, guide kemiğe oturmayabilir. Eğimsiz (0°) ya da eğimi düzeltilmiş seri kullanın.`]);
     let mn = Infinity, metal = 0, n = 0;
     for (let i = 0; i < vol.hu.length; i += 7) { const v = vol.hu[i]; if (v < mn) mn = v; if (v > 2500) metal++; n++; }
@@ -393,7 +395,7 @@
     try {
       const q = new URLSearchParams({ nx: r.nx, ny: r.ny, nz: r.nz, sp: r.sp.join(','), origin: r.origin.join(','), axes: r.axes.flat().join(','), structures: $('aiStruct').value });
       const res = await fetch(`${url}/segment?${q}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: r.hu, signal: ac.signal });
-      if (!res.ok) throw new Error(`sunucu ${res.status} döndü`);
+      if (!res.ok) throw new Error(xl(`sunucu ${res.status} döndü`));
       const lab = new Uint8Array(await res.arrayBuffer()), names = JSON.parse(res.headers.get('X-Structures') || '[]');
       if (lab.length !== r.hu.length) throw new Error('etiket hacmi boyutu uyuşmuyor');
       const labels = Int32Array.from(lab), comps = names.map(s => ({ label: s.label, size: 0, centroid: [0, 0, 0] }));
@@ -402,7 +404,7 @@
       S.selected = new Set(S.comps.slice(0, 1).map(c => c.label)); S.segMethod = `Yapay zeka sunucusu (${url})`;
       $('caseMsg').hidden = true; renderComps(); await rebuildBone(true);
     } catch (e) {
-      busy(false); alertMsg(ac.signal.aborted ? 'Segmentasyon iptal edildi.' : `Segmentasyon sunucusuna ulaşılamadı (${e.message}). Eşik yöntemiyle devam edebilirsiniz.`);
+      busy(false); alertMsg(ac.signal.aborted ? 'Segmentasyon iptal edildi.' : `${xl('Segmentasyon sunucusuna ulaşılamadı')} (${xl(e.message)}). ${xl('Eşik yöntemiyle devam edebilirsiniz.')}`);
     }
   }
   async function rebuildBone(frame) {
@@ -778,7 +780,7 @@
   function syncLesion() {
     lFields.forEach(([k, , , , , unit]) => { $('l_' + k).value = S.lesion[k]; $('lo_' + k).textContent = `${fmt(S.lesion[k])} ${unit}`; });
     $('resType').value = S.lesion.condyle || ''; $('resTypeHint').hidden = !S.lesion.condyle;
-    $('lesStatus').textContent = !S.anchor ? '' : S.lesion.ok ? `Sınır onaylandı${S.lesion.by ? ' · ' + S.lesion.by : ''}.` : 'Sınır onayı bekliyor (7. adım).';
+    $('lesStatus').textContent = !S.anchor ? '' : S.lesion.ok ? `${xl('Sınır onaylandı')}${S.lesion.by ? ' · ' + S.lesion.by : ''}.` : 'Sınır onayı bekliyor (7. adım).';
   }
   lFields.forEach(([k]) => $('l_' + k).addEventListener('input', e => { S.lesion[k] = +e.target.value; unapprove(S.lesion); syncLesion(); updateLesionPart(); renderAppr(); render(); emit('parts'); emit('changed'); }));
   syncLesion();
@@ -978,7 +980,7 @@
     }));
   }
   // cuts are edited in the resection step, screws in their own step; approval happens only in the review step
-  const apprText = o => o.ok ? `Onaylı${o.by ? ' · ' + esc(o.by) : ''}${o.at ? ' · ' + new Date(o.at).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }) : ''}. Değişiklik onayı kaldırır.` : 'Sistem önerisi; cerrah onayı İnceleme ve onay adımında verilir.';
+  const apprText = o => o.ok ? `${xl('Onaylı')}${o.by ? ' · ' + esc(o.by) : ''}${o.at ? ' · ' + new Date(o.at).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }) : ''}. ${xl('Değişiklik onayı kaldırır.')}` : 'Sistem önerisi; cerrah onayı İnceleme ve onay adımında verilir.';
   function renderElements() {
     const btn = (k, o, i, name) => `<button class="el ${S.sel === k + i ? 'on' : ''}" data-s="${k}${i}" aria-pressed="${S.sel === k + i}">${name} ${i + 1}<span class="dot ${o.ok ? 'ok' : ''}" title="${o.ok ? 'Onaylı' : 'Onay bekliyor'}"><span class="sr-only">${o.ok ? 'onaylı' : 'onay bekliyor'}</span></span></button>`;
     $('plList').innerHTML = S.planes.map((p, i) => btn('p', p, i, 'Kesi')).join('');
@@ -1032,7 +1034,7 @@
       });
     }
     if (!R.pieces) out.push(['crit', 'Kritik', 'Guide oluşmadı (boş); guide merkezini, duvar ve boşluk değerlerini kontrol edin.', 'guide']);
-    if (R.pieces > want) out.push(['crit', 'Kritik', `Guide ${R.pieces} parçaya bölünüyor (beklenen ${want}); ${want === 1 ? 'köprüyü genişletin ya da kesileri taşıyın' : 'her guide\'ın kendi vidası ve yeterli boyu olmalı'}.`, 'guide']);
+    if (R.pieces > want) out.push(['crit', 'Kritik', want === 1 ? `Guide ${R.pieces} parçaya bölünüyor (beklenen ${want}); köprüyü genişletin ya da kesileri taşıyın.` : `Guide ${R.pieces} parçaya bölünüyor (beklenen ${want}); her guide'ın kendi vidası ve yeterli boyu olmalı.`, 'guide']);
     if (want === 2 && R.pieces < 2) out.push(['crit', 'Kritik', 'İki guide seçili ama guide ayrılmadı; dış kesiler birbirine yaklaşıyor olabilir. Kesileri ya da guide boyunu kontrol edin.', 'guide']);
     if (want === 2) {
       const g = splitGap(S.g, R.pls), cnt = [0, 0];
@@ -1048,10 +1050,10 @@
     if (st && st.ok) {
       if (!st.free) out.push(['crit', 'Kritik', `Guide hiçbir yönde takılamıyor; en iyi yönde bile ${fmt(st.best.block, 0)} mm² kemik guide'ın üstünde kalıyor. Sarma derinliğini azaltın ya da guide'ı taşıyın.`, 'guide']);
       else if (st.best.tilt > 0) out.push(['warn', 'Uyarı', `Guide dik oturtulamıyor; yalnız yaklaşık ${st.best.tilt}° eğik takılabilir (${st.free}/${st.dirs.length} yön uygun). Ameliyatta takma yönü açıklanmalı.`, 'guide']);
-      const sw = st.worstSlide, along = Math.abs(sw.dir[0]) > Math.abs(sw.dir[1]) ? 'kemik ekseni boyunca' : 'yanal yönde';
-      if (sw.r < 0.05) out.push(['warn', 'Uyarı', `Vidalar takılmadan önce guide ${along} kayabilir: temasın yalnız %${fmt(sw.r * 100, 0)}'i direnç gösteriyor. Belirgin bir anatomik çıkıntıya taşımayı ya da sarmayı artırmayı düşünün.`, 'guide']);
-      const wr = st.worstRot, rn = { u: 'kemik ekseni', v: 'yanal eksen', n: 'oturma ekseni' }[wr.axis];
-      if (wr.r < 0.05) out.push(['warn', 'Uyarı', `Guide ${rn} etrafında dönebilir: temasın yalnız %${fmt(wr.r * 100, 0)}'i direnç gösteriyor.`, 'guide']);
+      const sw = st.worstSlide, along = Math.abs(sw.dir[0]) > Math.abs(sw.dir[1]);
+      if (sw.r < 0.05) out.push(['warn', 'Uyarı', along ? `Vidalar takılmadan önce guide kemik ekseni boyunca kayabilir: temasın yalnız %${fmt(sw.r * 100, 0)}'i direnç gösteriyor. Belirgin bir anatomik çıkıntıya taşımayı ya da sarmayı artırmayı düşünün.` : `Vidalar takılmadan önce guide yanal yönde kayabilir: temasın yalnız %${fmt(sw.r * 100, 0)}'i direnç gösteriyor. Belirgin bir anatomik çıkıntıya taşımayı ya da sarmayı artırmayı düşünün.`, 'guide']);
+      const wr = st.worstRot;
+      if (wr.r < 0.05) out.push(['warn', 'Uyarı', wr.axis === 'u' ? `Guide kemik ekseni etrafında dönebilir: temasın yalnız %${fmt(wr.r * 100, 0)}'i direnç gösteriyor.` : wr.axis === 'v' ? `Guide yanal eksen etrafında dönebilir: temasın yalnız %${fmt(wr.r * 100, 0)}'i direnç gösteriyor.` : `Guide oturma ekseni etrafında dönebilir: temasın yalnız %${fmt(wr.r * 100, 0)}'i direnç gösteriyor.`, 'guide']);
     } else if (R.undercut > 4) out.push(['crit', 'Kritik', `Guide kemiğin altına sarıyor (${fmt(R.undercut, 0)} mm² alttan kesik); oturtulup çıkarılamaz. Sarma derinliğini azaltın.`, 'guide']);
     if (R.contact < 150) out.push(['warn', 'Uyarı', `Temas alanı ${fmt(R.contact, 0)} mm²; oturma belirsiz olabilir (örnek eşik 150 mm²).`, 'guide']);
     R.screwInfo.forEach((si, i) => {
@@ -1136,11 +1138,11 @@
     $('expZip').disabled = !ready; syncOne();
     if (S.prod && S.prod.key !== prodKey()) $('prodMsg').textContent = 'Plan değişti; üretim STL\'ini yeniden alın.';
     const why = [];
-    if (!name) why.push('onaylayan cerrahın adı girilmedi');
-    if (S.crit || qcCrit) why.push(`${S.crit + (qcCrit ? 1 : 0)} kritik kontrol var`);
-    if (missing.length) why.push(`onay bekleyen: ${missing.join(', ')}`);
-    $('expMsg').textContent = ready ? 'Plan onaylı; paket hazır.' : `Paket için: ${[!name && 'cerrah adı', (S.crit || qcCrit) && `${S.crit + (qcCrit ? 1 : 0)} kritik kontrol`, missing.length && `${missing.length} onay`].filter(Boolean).join(', ') || 'guide gerekli'}. Rapor taslak alınabilir.`;
-    $('expMsg').title = $('expZip').title = ready ? '' : `Üretim paketi için: ${why.join('; ') || 'guide henüz üretilmedi'}.`;
+    if (!name) why.push(xl('onaylayan cerrahın adı girilmedi'));
+    if (S.crit || qcCrit) why.push(xl(`${S.crit + (qcCrit ? 1 : 0)} kritik kontrol var`));
+    if (missing.length) why.push(`${xl('onay bekleyen:')} ${missing.map(xl).join(', ')}`);
+    $('expMsg').textContent = ready ? xl('Plan onaylı; paket hazır.') : `${xl('Paket için:')} ${[!name && xl('cerrah adı'), (S.crit || qcCrit) && xl(`${S.crit + (qcCrit ? 1 : 0)} kritik kontrol`), missing.length && xl(`${missing.length} onay`)].filter(Boolean).join(', ') || xl('guide gerekli')}. ${xl('Rapor taslak alınabilir.')}`;
+    $('expMsg').title = $('expZip').title = ready ? '' : `${xl('Üretim paketi için:')} ${why.join('; ') || xl('guide henüz üretilmedi')}.`;
   }
   // ---------- navigation from checks, review rows and 3D markers to the item ----------
   const STEP_OF = { data: 'st1', anat: 'st2', lesion: 'st3', res: 'st3', fib: 'st4', guide: 'st5', scr: 'st6' };
@@ -1215,7 +1217,7 @@
       if (S.fitReport) {
         const f = S.fitReport, R = S.result, want = S.g.split && S.planes.length >= 2 ? 2 : 1; S.fitReport = null;
         const ok = R && R.pieces === want && !(R.seat && R.seat.ok && !R.seat.free);
-        if ($('guideStat')) $('guideStat').textContent = ok ? `Guide yeni konuma göre yeniden şekillendi (sarma ${fmt(S.g.wrap, 1)} mm${f.split ? ', iki parça' : ''}).` : 'Bu konumda guide kemiğe takılamıyor; açıyı ya da konumu değiştirin veya sarma derinliğini düşürün.';
+        if ($('guideStat')) $('guideStat').textContent = ok ? (f.split ? `Guide yeni konuma göre yeniden şekillendi (sarma ${fmt(S.g.wrap, 1)} mm, iki parça).` : `Guide yeni konuma göre yeniden şekillendi (sarma ${fmt(S.g.wrap, 1)} mm).`) : 'Bu konumda guide kemiğe takılamıyor; açıyı ya da konumu değiştirin veya sarma derinliğini düşürün.';
       }
       // a new angle or size: the guide is re-formed to seat on the bone where it now lies (wrap depth, one or two pieces)
       if (S.refit) {
@@ -1697,7 +1699,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     const api = window.claude && window.claude.use ? await window.claude.use('downloads') : null;
     if (api) {
       try { await api.save({ filename, data: blob }); $('expMsg').textContent = `${filename} kaydedildi.`; }
-      catch (e) { $('expMsg').textContent = e.code === 'declined' ? 'Kaydetme iptal edildi.' : `Dosya kaydedilemedi (${e.code || e.message}).`; }
+      catch (e) { $('expMsg').textContent = e.code === 'declined' ? 'Kaydetme iptal edildi.' : `${xl('Dosya kaydedilemedi')} (${e.code || e.message}).`; }
       return;
     }
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename; a.click();
@@ -1739,7 +1741,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     catch (e) { if (outer && outer.aborted) throw new Error('Üretim STL\'i iptal edildi.'); throw new Error(`Sunucuya ulaşılamadı. Pakette önizleme STL'i vardır.`); }
     finally { clearTimeout(to); }
     const js = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(`Sunucu hatası: ${js.error || res.status}`);
+    if (!res.ok) throw new Error(`${xl('Sunucu hatası:')} ${js.error || res.status}`);
     const bin = atob(js.stl_b64), u8 = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
     return { stl: u8, watertight: js.watertight, bodies: js.bodies, volume: js.volume_mm3, faces: js.faces, ms: js.ms };
   }
@@ -1752,7 +1754,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     try {
       const r = await serverGuide(Object.assign({ vol: S.vol, red: S.red, F: S.maskF, thr: segThr(), g: S.g, P: S.anchor.p, pls: planesWorld(), scs: screwsWorld(), wrapProfile: S.result && S.result.wrapProfile }, frameAxes()), ac.signal);
       S.prod = Object.assign(r, { key: prodKey() });
-      $('prodMsg').textContent = `Üretim STL'i hazır: ${r.watertight ? 'su geçirmez' : 'SU GEÇİRMEZ DEĞİL'}, ${r.bodies} parça${r.bodies > (S.g.split ? 2 : 1) ? ' (BEKLENENDEN FAZLA PARÇA, guide\'ı kontrol edin)' : ''}, ${fmt(r.volume / 1000, 2)} cm³, ${r.faces} üçgen. Pakete guide_uretim.stl olarak eklenir.`;
+      $('prodMsg').textContent = `${xl("Üretim STL'i hazır:")} ${r.watertight ? xl('su geçirmez') : xl('SU GEÇİRMEZ DEĞİL')}, ${xl(`${r.bodies} parça`)}${r.bodies > (S.g.split ? 2 : 1) ? ' ' + xl("(BEKLENENDEN FAZLA PARÇA, guide'ı kontrol edin)") : ''}, ${fmt(r.volume / 1000, 2)} cm³, ${xl(`${r.faces} üçgen`)}. ${xl('Pakete guide_uretim.stl olarak eklenir.')}`;
       if (S.fib && S.fib.guide && window.Fibula && !ac.signal.aborted) try { await Fibula.production(ac.signal); } catch (e) { $('prodMsg').textContent += ` Fibula guide'ı: ${e.message}`; }
     } catch (e) { S.prod = null; $('prodMsg').textContent = e.message; }
     busy(false);
@@ -1866,7 +1868,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     if (src && src.type === 'sample' && !(S.source && S.source.fp === src.fp)) { S.autoAnchor = false; S.restoring = true; await loadSample(src.name); }
     else if (src && src.type === 'dicom' && !(S.source && S.source.fp === src.fp)) {
       S.pendingPlan = plan;
-      alertMsg(`Bu vaka "${src.name}" serisine (${src.slices || '?'} kesit) ait. Planı açmak için aynı DICOM serisini yükleyin.`);
+      alertMsg(`${xl('Bu vaka')} "${src.name}" ${xl(`serisine (${src.slices || '?'} kesit) ait. Planı açmak için aynı DICOM serisini yükleyin.`)}`);
       return false;
     }
     await applyPlan(plan); return true;
