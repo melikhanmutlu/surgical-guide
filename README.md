@@ -13,7 +13,7 @@ Bu prototip aynı zinciri DICOM'dan STL'e kadar tek komutla, elle konumlandırma
 
 | Makaledeki adım | Makalede | Bu prototipte |
 |---|---|---|
-| CT/CTA'dan kemik segmentasyonu | 3D Slicer, yaşlı hastada yarı otomatik | `threshold` (HU eşik + morfoloji + bileşen seçimi) veya `totalseg` (TotalSegmentator, yapay zeka) |
+| CT/CTA'dan kemik segmentasyonu | 3D Slicer, yaşlı hastada yarı otomatik | `threshold` (HU eşik + morfoloji + bileşen seçimi; birleşik kemikler ince boyunlarından ayrılır: kafatası/üst çene/omurga mandibuladan, tibia/ayak/masa fibuladan; ayrılamazsa uyarı verilir, `--fibula-component N` eski boyut sıralı seçimi korur) veya `totalseg` (TotalSegmentator, yapay zeka) |
 | STL içe aktarma, birim ve yön düzeltme | Elle | Gerek yok: DICOM hasta koordinatları (LPS, mm) korunuyor, fibula ekseni PCA ile bulunuyor |
 | Segment sayısı | Kullanıcı seçiyor | Otomatik: arkı hedef sapmayla takip eden en az sayıda segment (min. 20 mm, hedef sapma ≤ 2.5 mm) ya da `--segments N` |
 | Greft konumlandırma | Kontrol nesneleriyle elle | Kırılma noktaları ark eğrisine en az sapmayla optimize ediliyor (Nelder-Mead) |

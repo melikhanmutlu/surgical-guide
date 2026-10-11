@@ -91,7 +91,7 @@ const G = (() => {
       if (tail >= minSize) comps.push({ label: next, size: tail, centroid: [cx / tail, cy / tail, cz / tail] });
     }
     comps.sort((a, b) => b.size - a.size);
-    return { labels, comps };
+    return { labels, comps, count: next };
   }
   // flood fill from the grid border through empty voxels: true = connected to the outside
   function exterior(mask, nx, ny, nz) {
@@ -110,30 +110,31 @@ const G = (() => {
   }
 
   // ---------- Euclidean distance transform (Felzenszwalb & Huttenlocher), distance to nearest feature voxel ----------
-  function dt1d(f, n, d, v, z) {
+  function dt1d(f, n, d, v, z, s) {
     let k = 0; v[0] = 0; z[0] = -INF; z[1] = INF;
     for (let q = 1; q < n; q++) {
-      let s = ((f[q] + q * q) - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
-      while (s <= z[k]) { k--; s = ((f[q] + q * q) - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]); }
-      k++; v[k] = q; z[k] = s; z[k + 1] = INF;
+      let t = ((f[q] + s * s * q * q) - (f[v[k]] + s * s * v[k] * v[k])) / (2 * s * s * (q - v[k]));
+      while (t <= z[k]) { k--; t = ((f[q] + s * s * q * q) - (f[v[k]] + s * s * v[k] * v[k])) / (2 * s * s * (q - v[k])); }
+      k++; v[k] = q; z[k] = t; z[k + 1] = INF;
     }
     k = 0;
-    for (let q = 0; q < n; q++) { while (z[k + 1] < q) k++; d[q] = (q - v[k]) * (q - v[k]) + f[v[k]]; }
+    for (let q = 0; q < n; q++) { while (z[k + 1] < q) k++; d[q] = s * s * (q - v[k]) * (q - v[k]) + f[v[k]]; }
   }
-  function edt(feature, nx, ny, nz) {
+  // sp = voxel size per axis (mm); omitted: voxel units
+  function edt(feature, nx, ny, nz, sp = [1, 1, 1]) {
     const D = new Float64Array(feature.length);
     for (let i = 0; i < D.length; i++) D[i] = feature[i] ? 0 : INF;
     const n = Math.max(nx, ny, nz), f = new Float64Array(n), d = new Float64Array(n), v = new Int32Array(n), z = new Float64Array(n + 1);
-    const pass = (len, count, idx) => {
+    const pass = (len, count, idx, s) => {
       for (let c = 0; c < count; c++) {
         for (let q = 0; q < len; q++) f[q] = D[idx(c, q)];
-        dt1d(f, len, d, v, z);
+        dt1d(f, len, d, v, z, s);
         for (let q = 0; q < len; q++) D[idx(c, q)] = d[q];
       }
     };
-    pass(nx, ny * nz, (c, q) => q + nx * c);
-    pass(ny, nx * nz, (c, q) => (c % nx) + nx * (q + ny * ((c / nx) | 0)));
-    pass(nz, nx * ny, (c, q) => c + nx * ny * q);
+    pass(nx, ny * nz, (c, q) => q + nx * c, sp[0]);
+    pass(ny, nx * nz, (c, q) => (c % nx) + nx * (q + ny * ((c / nx) | 0)), sp[1]);
+    pass(nz, nx * ny, (c, q) => c + nx * ny * q, sp[2]);
     const out = new Float32Array(D.length);
     for (let i = 0; i < D.length; i++) out[i] = Math.sqrt(D[i]);
     return out;
@@ -259,5 +260,87 @@ const G = (() => {
     for (let k = 0, m = 0; k < sz; k++) for (let j = 0; j < sy; j++) for (let i = 0; i < sx; i++, m++) if (sl[m]) lab[full(i, j, k)] = sl[m];
     return { lab, box: b };
   }
-  return { worldOf, indexOf, reduce, threshold, components, exterior, edt, blur, surfaceNets, splitSeeds };
+
+  // ---------- separating bones that touch (thresholded CT joins bones across thin necks: teeth, joints, ankle) ----------
+  // Watershed on the distance transform of the mask. Every local maximum of the distance to the outside is a bone core;
+  // two cores are one bone when the neck between them is as thick as `ratio` times the thinner core's thickness (a bone
+  // is thick everywhere, a joint or a tooth contact is a thin neck). The cores then grow back over the whole mask, so each
+  // piece keeps its full surface and the neck is cut where it is thinnest. Deterministic, linear time per run.
+  //   sep = separator(mask, nx, ny, nz, sp, { label })   voxel is in the mask when mask[v] === label (any non-zero when omitted)
+  //   sep.run({ ratio, h, base, out, minSize })           writes base + 1.. into out (default: a new whole-grid Int32Array) and
+  //                                                       returns comps [{label,size,centroid,peak,box:[i0,j0,k0,i1,j1,k1]}] by size;
+  //                                                       the EDT is computed once, runs with other ratios are cheap
+  //   sep.restore(value)                                  puts `value` back into every mask voxel of the last `out`
+  // peak = largest distance to the outside in the piece (mm, thickness / 2)
+  function separator(mask, nx, ny, nz, sp = [1, 1, 1], opt = {}) {
+    const lbl = opt.label, nxy = nx * ny;
+    let x0 = nx, y0 = ny, z0 = nz, x1 = -1, y1 = -1, z1 = -1;
+    for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) {
+      const r = nx * (j + ny * k);
+      for (let i = 0; i < nx; i++) if (lbl === undefined ? mask[r + i] : mask[r + i] === lbl) { if (i < x0) x0 = i; if (i > x1) x1 = i; if (j < y0) y0 = j; if (j > y1) y1 = j; if (k < z0) z0 = k; if (k > z1) z1 = k; }
+    }
+    if (x1 < 0) return { run: () => [], restore: () => {}, empty: true };
+    const cx = x1 - x0 + 3, cy = y1 - y0 + 3, cz = z1 - z0 + 3, cxy = cx * cy, N = cx * cy * cz;   // 1 voxel of background all round
+    const cm = new Uint8Array(N), feat = new Uint8Array(N); feat.fill(1);
+    let nm = 0;
+    for (let k = z0; k <= z1; k++) for (let j = y0; j <= y1; j++) for (let i = x0; i <= x1; i++) {
+      const w = mask[i + nx * (j + ny * k)];
+      if (lbl === undefined ? w : w === lbl) { const c = (i - x0 + 1) + cx * ((j - y0 + 1) + cy * (k - z0 + 1)); cm[c] = 1; feat[c] = 0; nm++; }
+    }
+    const D = edt(feat, cx, cy, cz, sp);
+    // counting sort of the mask voxels by distance, thickest first
+    const q = Math.min(sp[0], sp[1], sp[2]) / 16; let maxD = 0;
+    for (let v = 0; v < N; v++) if (cm[v] && D[v] > maxD) maxD = D[v];
+    const NL = Math.ceil(maxD / q) + 2, cnt = new Int32Array(NL + 1), lev = v => NL - 1 - Math.round(D[v] / q);
+    for (let v = 0; v < N; v++) if (cm[v]) cnt[lev(v) + 1]++;
+    for (let l = 0; l < NL; l++) cnt[l + 1] += cnt[l];
+    const order = new Int32Array(nm);
+    for (let v = 0; v < N; v++) if (cm[v]) order[cnt[lev(v)]++] = v;
+    const nb = [-1, 1, -cx, cx, -cxy, cxy], full = v => (v % cx + x0 - 1) + nx * ((((v / cx) | 0) % cy) + y0 - 1 + ny * (((v / cxy) | 0) + z0 - 1));
+    let lastOut = null;
+    function run(o = {}) {
+      const ratio = o.ratio == null ? 0.5 : o.ratio, h = o.h == null ? 0 : o.h, base = o.base || 0, minSize = o.minSize || 1;
+      const out = o.out || new Int32Array(mask.length); lastOut = out;
+      const lab = new Int32Array(N), parent = [0], peak = [0];       // component id 1.. (0 = none)
+      const find = a => { while (parent[a] !== a) { parent[a] = parent[parent[a]]; a = parent[a]; } return a; };
+      const roots = [];
+      for (let t = 0; t < nm; t++) {
+        const v = order[t], d = D[v];
+        let best = 0, bd = -1; roots.length = 0;
+        for (let a = 0; a < 6; a++) {
+          const u = v + nb[a]; if (!lab[u]) continue;
+          const r = find(lab[u]); if (roots.indexOf(r) < 0) roots.push(r);
+          if (D[u] > bd) { bd = D[u]; best = r; }
+        }
+        if (!roots.length) { parent.push(parent.length); peak.push(d); lab[v] = parent.length - 1; continue; }
+        // the core with the highest peak wins; a core whose neck here is thick enough joins it
+        let top = roots[0]; for (const r of roots) if (peak[r] > peak[top]) top = r;
+        for (const r of roots) if (r !== top && (peak[r] - d < h || d >= ratio * peak[r])) parent[r] = top;
+        lab[v] = find(best);
+      }
+      const map = new Int32Array(parent.length), info = [];
+      for (let t = 0; t < nm; t++) {
+        const v = order[t], r = find(lab[v]);
+        if (!map[r]) { map[r] = info.length + 1; info.push({ size: 0, cx: 0, cy: 0, cz: 0, peak: peak[r], box: [nx, ny, nz, -1, -1, -1] }); }
+        const c = info[map[r] - 1]; c.size++;
+        const i = v % cx + x0 - 1, j = ((v / cx) | 0) % cy + y0 - 1, k = ((v / cxy) | 0) + z0 - 1, bx = c.box;
+        c.cx += i; c.cy += j; c.cz += k;
+        if (i < bx[0]) bx[0] = i; if (j < bx[1]) bx[1] = j; if (k < bx[2]) bx[2] = k; if (i > bx[3]) bx[3] = i; if (j > bx[4]) bx[4] = j; if (k > bx[5]) bx[5] = k;
+        out[i + nx * (j + ny * k)] = base + map[r];
+      }
+      const comps = [];
+      info.forEach((c, id) => { if (c.size >= minSize) comps.push({ label: base + id + 1, size: c.size, centroid: [c.cx / c.size, c.cy / c.size, c.cz / c.size], peak: c.peak, box: c.box }); });
+      comps.sort((a, b) => b.size - a.size);
+      comps.ids = info.length;      // label numbers used: base + 1 .. base + ids
+      return comps;
+    }
+    const restore = value => { if (lastOut) for (let t = 0; t < nm; t++) lastOut[full(order[t])] = value; };
+    return { run, restore, N: nm };
+  }
+  // one-shot: whole-grid labels of the pieces of `mask` (nonzero voxels), like components()
+  function separate(mask, nx, ny, nz, sp, opt = {}) {
+    const sepr = separator(mask, nx, ny, nz, sp), labels = new Int32Array(mask.length);
+    return { labels, comps: sepr.run({ ...opt, out: labels }) };
+  }
+  return { worldOf, indexOf, reduce, threshold, components, separator, separate, exterior, edt, blur, surfaceNets, splitSeeds };
 })();

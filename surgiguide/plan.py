@@ -29,6 +29,10 @@ class Arch:
 
     def __init__(self, vol, mask, body_height=24.0, bin_deg=2.0):
         P = _points(vol, mask)
+        ext = np.ptp(P, axis=0)
+        if ext[0] > 160 or ext[2] > 130:        # skull / spine joined to the mandible: the arch would be fitted to the wrong bone
+            raise ValueError(f"mask is {ext[0]:.0f} x {ext[1]:.0f} x {ext[2]:.0f} mm; a mandible is at most ~160 x 130 x 130 mm. "
+                             "Segment the mandible alone (segment.mandible_bone) or use --segmenter totalseg")
         z0 = P[:, 2].min()
         body = P[P[:, 2] < z0 + body_height]
         c = body.mean(0)

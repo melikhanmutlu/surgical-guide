@@ -25,10 +25,23 @@ def log(msg, t0=[time.time()]):
     print(f"[{time.time() - t0[0]:6.1f}s] {msg}", flush=True)
 
 
+WARNINGS = []
+
+
 def seg(vol, structure, args, dicom_dir, component):
     if args.segmenter == "totalseg":
         return segment.totalseg_bone(vol, structure, dicom_dir=dicom_dir, fast=args.fast)
-    return segment.threshold_bone(vol, hu=args.hu, component=component)
+    if structure == "mandible":          # skull / upper jaw / spine joined to the mandible are cut off (surgiguide/bones.py)
+        mask, info = segment.mandible_bone(vol, hu=args.hu)
+    elif component is None:              # leg CT: the slender bone beside the tibia on the donor side, not the table or the whole leg
+        mask, info = segment.fibula_bone(vol, hu=args.hu, side=args.side)
+    else:                                # explicit --fibula-component N: the old size-rank choice
+        return segment.threshold_bone(vol, hu=args.hu, component=component)
+    log(f"{structure}: {info['status']} ({info['volume_cm3']:.1f} cm3)")
+    if info.get("warning"):
+        WARNINGS.append(info["warning"])
+        print("WARNING: " + info["warning"], flush=True)
+    return mask
 
 
 def main():
@@ -38,8 +51,9 @@ def main():
     ap.add_argument("--segmenter", choices=["threshold", "totalseg"], default="threshold")
     ap.add_argument("--fast", action="store_true", help="TotalSegmentator --fast")
     ap.add_argument("--hu", type=float, default=250.0, help="bone threshold (threshold segmenter)")
-    ap.add_argument("--fibula-component", type=int, default=2,
-                    help="threshold segmenter: size rank of the fibula component (tibia is usually 1)")
+    ap.add_argument("--fibula-component", type=int, default=None,
+                    help="threshold segmenter: size rank of the fibula component (old behaviour). Default: automatic, "
+                         "the slender bone beside the tibia on the --side leg (CT table, tibia and foot are never taken)")
     ap.add_argument("--resect-from", type=float, default=-15.0, help="arch position mm (+ = patient left)")
     ap.add_argument("--resect-to", type=float, default=40.0)
     ap.add_argument("--segments", type=int, default=None, help="number of fibula segments (default: auto)")
@@ -79,6 +93,8 @@ def main():
     for i, (m, _, _) in enumerate(mg):
         m.export(os.path.join(a.out, f"guide_mandible_{'ab'[i]}.stl"))
     summary["guides"] = [frep] + [r for _, _, r in mg]
+    if WARNINGS:
+        summary["warnings"] = list(WARNINGS)
     summary["guides_watertight"] = bool(fg.is_watertight and all(m.is_watertight for m, _, _ in mg))
 
     log("virtual surgery: resection + transplanted grafts")

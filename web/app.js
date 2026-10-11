@@ -321,7 +321,7 @@
     busy(true, 'Hacim küçültülüyor…'); await sleep();
     S.red = G.reduce(vol, 0.8);
     $('caseInfo').innerHTML = `<dt>Vaka</dt><dd>${esc(label)}</dd><dt>Boyut</dt><dd>${vol.nx}×${vol.ny}×${vol.nz}</dd><dt>Voksel</dt><dd>${vol.sp.map(s => fmt(s, 2)).join(' × ')} mm</dd><dt>Çalışma ızgarası</dt><dd>${S.red.sp.map(s => fmt(s, 2)).join(' × ')} mm</dd>`;
-    S.qc = qualityCheck(vol); renderQC();
+    S.qcBase = qualityCheck(vol); S.segWarn = []; syncQC();
     S.anchor = null; S.planes = []; S.screws = []; S.sel = null; S.result = null; S.guideOn = false; S.resRemoved = false; unapprove(S.lesion);
     if (S.autoAnchor !== false) { S.lesion.condyle = null; S.g.split = 0; syncGuideInputs(); syncLesion(); }
     ['guide', 'resected', 'anchor', 'lesion'].forEach(id => setPart(id, null, null));
@@ -359,6 +359,21 @@
     out.push(['info', 'Bilgi', `Kapsam ${fmt(vol.nz * dz, 0)} mm${m.kernel ? `, kernel ${m.kernel}` : ''}.`]);
     return out;
   }
+  // image quality checks + checks of the chosen planning bone (is it really only a mandible?)
+  function syncQC() { S.qc = (S.qcBase || []).concat(S.segWarn || []); renderQC(); }
+  function segChecks() {
+    const out = [], inf = S.segInfo, w = (t, ...a) => out.push(['warn', 'Uyarı', t(...a)]);
+    if (!S.mask || !S.red) return out;
+    if (inf && inf.status === 'failed')
+      w((v, e) => `Eşik maskesi kafatası, çene ve omurgayı tek parça veriyor (${v} cm³, yükseklik ${e} mm) ve mandibula otomatik ayrılamadı. Planlama kemiği olarak bu büyük parça alındı; kondil, rezeksiyon ve fibula planı güvenilmez. Yalnız mandibulayı "Seç" aracıyla ya da kemik listesinden seçin, ya da bitişik kemikleri işaretleyip ayırın.`, fmt(inf.before.vol, 0), fmt(inf.before.ext[2], 0));
+    else if (inf && inf.status === 'split' && (inf.ext[2] > 105 || inf.vol < 30 || inf.vol > 120))
+      w((v, e) => `Mandibula otomatik ayrıldı (${v} cm³, yükseklik ${e} mm) ama parça beklenen aralığın kenarında; üst çene ya da kafatası artıkları karışmış ya da mandibulanın bir kısmı eksik olabilir. Kemik modelini kontrol edin.`, fmt(inf.vol, 0), fmt(inf.ext[2], 0));
+    if (window.Bones) Bones.boneWarnings(S.red, S.mask).forEach(x => {
+      if (x.code === 'big' && !(inf && inf.status === 'failed')) w(v => `Planlama kemiği ${v} cm³; bir mandibula için fazla büyük (250 cm³ üstü). Kafatası, üst çene ya da omurga da seçili olabilir; planı bu kemikle kurmayın.`, fmt(x.vol, 0));
+      if (x.code === 'edge') w(() => 'Planlama kemiği tarama alanının üst ya da alt kenarına dayanıyor; kafatası ya da omurga seçili olabilir.');
+    });
+    return out;
+  }
   function renderQC() { $('qc').innerHTML = S.qc.map(([c, t, m]) => `<li class="${esc(c)}"><b>${esc(t)}</b><span>${esc(m)}</span></li>`).join(''); }
 
   // ---------- segmentation ----------
@@ -366,13 +381,27 @@
     busy(true, 'Kemik segmentasyonu (eşik + bileşen ayırma)…'); await sleep();
     const r = S.red, thr = +$('thr').value;
     const m = G.threshold(r, thr);
-    const { labels, comps } = G.components(m, r.nx, r.ny, r.nz, 200);
-    S.labels = labels; S.comps = comps.slice(0, 8); S.compNames = null; S.segMethod = `Eşik ${thr} HU (tarayıcı)`;
+    const { labels, comps, count } = G.components(m, r.nx, r.ny, r.nz, 200);
+    S.labels = labels; S.comps = comps.slice(0, 8); S.compNames = null; S.segMethod = `Eşik ${thr} HU (tarayıcı)`; S.segInfo = null;
+    let pick = comps.length ? comps[0].label : null;
+    // a head CT's threshold mask is one piece (skull + upper jaw + mandible + spine): cut it at its thin necks and take
+    // the piece that is built like a mandible; when none is, keep the largest and say so (see segChecks)
+    if (window.Bones && Bones.assess(r, labels, comps).cut) {
+      busy(true, 'Bitişik kemikler ayrılıyor (kafatası, çene, omurga)…'); await sleep();
+      const res = S.segInfo = Bones.pickMandible(r, labels, comps, count);
+      if (res.status === 'split') {
+        pick = res.picked; S.comps = res.comps.slice(0, 8);
+        if (!S.comps.some(c => c.label === pick)) S.comps[S.comps.length - 1] = res.comps.find(c => c.label === pick);
+        S.compNames = { [pick]: 'Mandibula (otomatik ayrıldı)' }; S.segMethod += ' + bitişik kemik ayırma';
+      }
+    }
     // painted layer marks (Masks) split the threshold mask into layers and choose the planning bone
     const split = window.Masks ? Masks.relabel() : false;
-    if (!split && (autoSelect || ![...S.selected].some(l => S.comps.find(c => c.label === l)))) S.selected = new Set(S.comps.length ? [S.comps[0].label] : []);
+    if (!split && (autoSelect || ![...S.selected].some(l => S.comps.find(c => c.label === l)))) S.selected = new Set(pick == null ? [] : [pick]);
     renderComps();
     await rebuildBone(true);
+    // a failed or doubtful cut is announced, not left for the Kontroller tab alone
+    if (S.segInfo && S.segInfo.status !== 'whole' && S.segWarn.length && !S.restoring) alertMsg(S.segWarn[0][2]);
   }
   function renderComps() {
     if (window.Masks) { Masks.renderList(); return; }
@@ -396,7 +425,7 @@
       if (lab.length !== r.hu.length) throw new Error('etiket hacmi boyutu uyuşmuyor');
       const labels = Int32Array.from(lab), comps = names.map(s => ({ label: s.label, size: 0, centroid: [0, 0, 0] }));
       for (let v = 0; v < labels.length; v++) { const c = comps.find(cc => cc.label === labels[v]); if (c) c.size++; }
-      S.labels = labels; S.comps = comps.filter(c => c.size > 0); S.compNames = Object.fromEntries(names.map(s => [s.label, s.name]));
+      S.segInfo = null; S.labels = labels; S.comps = comps.filter(c => c.size > 0); S.compNames = Object.fromEntries(names.map(s => [s.label, s.name]));
       S.selected = new Set(S.comps.slice(0, 1).map(c => c.label)); S.segMethod = `Yapay zeka sunucusu (${url})`;
       $('caseMsg').hidden = true; renderComps(); await rebuildBone(true);
     } catch (e) {
@@ -409,6 +438,7 @@
     for (let i = 0; i < m.length; i++) m[i] = S.selected.has(S.labels[i]) ? 1 : 0;
     if (window.SegEdit) SegEdit.applyTo(m);
     S.mask = m; S.maskF = G.blur(m, r.nx, r.ny, r.nz);
+    S.segWarn = segChecks(); syncQC();
     await rebuildResection();
     if (frame && parts.bone) fitTo(parts.bone.obj);
     if (S.kind && !S.anchor && S.autoAnchor !== false) presetCase();
