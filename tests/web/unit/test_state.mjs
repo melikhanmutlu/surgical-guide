@@ -25,5 +25,15 @@ test('O-2: restoring a plan (autoAnchor false) keeps the plan\'s own settings', 
   assert.equal(S.g.L, 77); S.g.L = 36;
 });
 
+const fire = (id, type, value) => { const el = P.doc.getElementById(id); if (value !== undefined) el.value = value; (el.listeners[type] || []).forEach(f => f({ type, target: el })); };
+test('low: a guide body slider (wall) and the side selector clear every approval', async () => {
+  const ok = () => { S.lesion.ok = true; S.planes = [{ off: 0, yaw: 0, pitch: 0, w: 1.2, ok: true }]; S.screws = [{ ok: true }]; };
+  const all = () => S.lesion.ok || S.planes.some(p => p.ok) || S.screws.some(c => c.ok);
+  ok(); fire('g_wall', 'input', 3); assert.equal(all(), false, 'wall slider');
+  ok(); fire('g_side', 'change', 1); assert.equal(all(), false, 'side');
+  ok(); fire('g_bridge', 'input', 5); assert.equal(all(), false, 'bridge slider');
+  S.planes = []; S.screws = [];
+});
+
 await run('plan state (Denetim 3 fixes)');
 await new Promise(r => process.stdout.write("", r)); process.exit(process.exitCode || 0);

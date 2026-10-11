@@ -1367,5 +1367,8 @@ window.I18N_EN = {
 "Üretim STL'i sunucuda yüzey tabanlı boolean ile üretildi: su geçirmez değil, # parça, # cm³ (guide_uretim.stl).": "The production STL was generated on the server with a surface-based boolean: not watertight, # pieces, # cm³ (guide_uretim.stl).",
 "Üretim STL'i alınmadı; guide.stl # mm voksel önizlemesidir.": "No production STL was generated; guide.stl is a # mm voxel preview.",
 "Lezyon # ile # mm arası, güvenlik payı # mm · #": "Lesion from # to # mm, safety margin # mm · #",
-"Araştırma prototipi çıktısıdır, klinik kullanım için doğrulanmamıştır. Guide # mm voksel çözünürlüğünde üretilmiştir.": "This is research prototype output and has not been validated for clinical use. The guide was generated at # mm voxel resolution."
+"Araştırma prototipi çıktısıdır, klinik kullanım için doğrulanmamıştır. Guide # mm voksel çözünürlüğünde üretilmiştir.": "This is research prototype output and has not been validated for clinical use. The guide was generated at # mm voxel resolution.",
+"Guide güncelleniyor…": "Updating the guide…",
+"Plan yeni değişti; guide güncellenip onaylar yenilenmeden paket alınamaz.": "The plan has just changed; the package cannot be exported until the guide is updated and the approvals are renewed.",
+"UYARI: PDF rapor oluşturulamadı; pakette yalnız HTML rapor var.": "WARNING: The PDF report could not be created; the package contains only the HTML report."
 };

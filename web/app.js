@@ -873,7 +873,7 @@
       for (let t = 0; t <= s.sc.len; t += 0.25) {
         const q = s.entry.clone().add(s.dir.clone().multiplyScalar(t));
         if (boneAt(q)) inBone += 0.25; else if (exitAt === null && t > 1) exitAt = t;
-        for (const pw of pls) if (Math.abs(q.clone().sub(pw.p).dot(pw.N)) <= pw.w / 2 + 0.5) crossesPlane = true;
+        for (const pw of pls) if (Math.abs(q.clone().sub(pw.p).dot(pw.N)) <= pw.w / 2 + Math.max(0.5, s.sc.d / 2)) crossesPlane = true;   // the screw has a radius: its surface, not its axis, must clear the saw slot
       }
       screwInfo.push({ s, ok: true, inBone: Math.min(inBone, s.sc.len), crossesPlane, exitAt });
     }
@@ -999,7 +999,7 @@
       `<p class="hint">${apprText(o)}</p><p class="hint more">3B görünümde kesiyi ya da vidayı tutup sürükleyebilir, tutamaçla da taşıyabilirsiniz (W taşı, E döndür).</p>` +
       `<div class="btns end"><button id="delEl" class="sm"><svg class="i"><use href="#i-trash"/></svg>${isP ? 'Kesiyi sil' : 'Vidayı sil'}</button></div>`;
     fields.forEach(([k, , , , st, unit]) => $('f_' + k).addEventListener('input', e => { o[k] = +e.target.value; unapprove(o); $('o_' + k).textContent = `${fmt(o[k], st < 1 ? 1 : 0)} ${unit}`; schedule(isP, true); }));
-    $('delEl').addEventListener('click', () => { (isP ? S.planes : S.screws).splice(i, 1); S.sel = null; schedule(isP); });
+    $('delEl').addEventListener('click', () => { (isP ? S.planes : S.screws).splice(i, 1); S.sel = null; unapproveAll(); schedule(isP); });
   }
   function renderMeasures() {
     const R = S.result; if (!R) { $('measures').innerHTML = ''; return; }
@@ -1190,7 +1190,7 @@
   // Live preview: cut discs and screws follow the value at once, a coarse guide (0.8 mm grid, no seating
   // analysis) is rebuilt as fast as the machine allows, and the full guide, resection and checks follow
   // once the value rests.
-  let timer = null;
+  let timer = null, rebuildPending = false;   // rebuildPending: a scheduled guide / resection rebuild has not finished yet
   let previewRaf = 0;
   function previewElements() {
     if (!previewRaf) previewRaf = requestAnimationFrame(() => { previewRaf = 0; previewNow(); });
@@ -1208,8 +1208,8 @@
     if (!liveEdit) renderElements();
     previewElements();
     // while dragging only the cut discs and screws move; the resected piece and the guide follow on release
-    clearTimeout(timer);
-    timer = setTimeout(async () => {
+    clearTimeout(timer); rebuildPending = true;
+    timer = setTimeout(async () => { try {
       if (live.resDirty) { live.planes = live.resDirty = false; busy(true, 'Rezeksiyon güncelleniyor…'); await sleep(); await rebuildResection(); }
       if (S.screwRefit) { S.screwRefit = false; if (S.guideOn && S.anchor) { placeScrews(); S.sel = null; renderElements(); } }
       await regenerate();
@@ -1228,7 +1228,8 @@
           const f = await fitWrap(); if (f) S.fitReport = f;
         } else if (S.guideOn && R && $('guideStat')) $('guideStat').textContent = 'Guide yeni konumda kemiğe oturuyor.';
       }
-    }, liveEdit ? 400 : 120);
+    } finally { if (timer === t) rebuildPending = false; } }, liveEdit ? 400 : 120);
+    const t = timer;
   }
   const ray = new THREE.Raycaster(), mouse = new THREE.Vector2();
   let downAt = null;
@@ -1573,13 +1574,13 @@
   gFields.forEach(([k]) => $('g_' + k).addEventListener('input', e => {
     if (k === 'rot') { setGuideRot(+e.target.value); return; }
     if (k === 'roll') { setGuideRoll(+e.target.value); return; }
-    S.g[k] = +e.target.value;
+    S.g[k] = +e.target.value; unapproveAll();   // every guide body setting changes what was approved
     if (k === 'rot') { unapproveAll(); updateLesionPart(); if (S.guideOn && S.screws.length) S.screwRefit = true; }
     if (k === 'rot' || k === 'L' || k === 'W') S.refit = true;
     if ((k === 'L' || k === 'W') && S.guideOn) clampScrews();
     syncGuideInputs(); schedule(k === 'rot', true);
   }));
-  $('g_side').addEventListener('change', e => { S.g.side = +e.target.value; schedule(false); });
+  $('g_side').addEventListener('change', e => { S.g.side = +e.target.value; unapproveAll(); schedule(false); });
   $('gRot3').addEventListener('input', e => setGuideRot(+e.target.value));
   $('gRoll3').addEventListener('input', e => setGuideRoll(+e.target.value));
   // one drill diameter for every guide screw (and for screws placed later); each screw can still be changed on its own
@@ -1602,7 +1603,7 @@
   syncGuideInputs();
 
   $('segMode').addEventListener('change', e => { const ai = e.target.value === 'ai'; $('aiBox').hidden = !ai; $('thrBox').hidden = ai; if (!ai && S.red) segment(false); });
-  $('aiRun').addEventListener('click', () => { if (S.red) segmentAI(); });
+  $('aiRun').addEventListener('click', async () => { if (!S.red) return; const before = S.labels; await segmentAI(); if (S.labels !== before) { unapproveAll(); renderAppr(); } });   // a new bone segmentation invalidates every approval
   $('suggest').addEventListener('click', suggest);
   $('perSide').addEventListener('change', () => { if (S.anchor && S.planes.length) { placeScrews(); S.sel = null; schedule(false); } });
   let surgTimer = null;
@@ -1761,6 +1762,13 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   }
   async function exportPackage() {
     if (!parts.guide) return;
+    // an edit was made moments ago and the guide / resection is still being rebuilt: the files would not match the approved plan
+    if (rebuildPending) {
+      busy(true, 'Guide güncelleniyor…');
+      for (let i = 0; i < 1200 && rebuildPending; i++) await new Promise(r => setTimeout(r, 50));
+      busy(false);
+      if (rebuildPending || $('expZip').disabled) { alertMsg('Plan yeni değişti; guide güncellenip onaylar yenilenmeden paket alınamaz.'); return; }
+    }
     // the plate is planned but has no computed path (a stale state): recompute once, and warn if the plate files are still missing
     if (window.Plate && Plate.missing()) { try { await Plate.update(); } catch (e) { /* warned below */ } }
     const plateMissing = !!(window.Plate && Plate.missing());
@@ -1772,8 +1780,10 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     (window.ExportHooks || []).forEach(f => { try { f(files); } catch (e) { /* optional files */ } });
     if (parts.resected) files.push({ name: 'rezeke_parca.stl', data: stlOf(parts.resected.obj) });
     files.push({ name: 'plan.json', data: $('json').textContent }, { name: 'rapor.html', data: reportHTML() });
-    if (window.Report) try { files.push({ name: 'cerrahi_rapor.pdf', data: new Uint8Array(await (await Report.build()).arrayBuffer()) }); } catch (e) { /* the HTML report is still in the package */ }
+    let pdfFailed = false;
+    if (window.Report) try { files.push({ name: 'cerrahi_rapor.pdf', data: new Uint8Array(await (await Report.build()).arrayBuffer()) }); } catch (e) { pdfFailed = true; console.warn('pdf report', e); }   // the HTML report is still in the package
     await offer('guide_paketi.zip', zip(files));
+    if (pdfFailed) alertMsg('UYARI: PDF rapor oluşturulamadı; pakette yalnız HTML rapor var.');
     if (plateMissing) alertMsg('UYARI: Plak planlı ama plak hattı hesaplanamadı; pakette plak dosyaları YOK. Plak bölümünü kontrol edip paketi yeniden alın.');
     emit('exported');
   }

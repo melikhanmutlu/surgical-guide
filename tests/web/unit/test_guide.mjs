@@ -93,6 +93,15 @@ test('buildGuide: screwInfo flags a screw that crosses a cut and one that leaves
   assert.equal(c.ok, false, 'no entry -> not ok');
 });
 
+test('buildGuide: screw-vs-cut check uses the screw radius (screw d=2 whose axis is 1.4 mm from a 1.2 mm slot centre touches the slot margin)', async () => {
+  const sc = { d: 2, D: 5, sleeveH: 5, len: 10 };
+  const o = await build({ pls: [{ p: V(0, 0, 0), N: V(1, 0, 0), w: 1.2 }], scs: [{ sc, dir: V(0, 0, -1), entry: V(1.4, 0, 0) }, { sc: { d: 3, D: 6, sleeveH: 5, len: 10 }, dir: V(0, 0, -1), entry: V(1.9, 0, 0) }, { sc, dir: V(0, 0, -1), entry: V(2.4, 0, 0) }] });
+  const [a, b, c] = o.result.screwInfo;
+  assert.equal(a.crossesPlane, true, 'axis 1.4 mm from the centre: slot half-width 0.6 + screw radius 1.0 = 1.6 > 1.4');
+  assert.equal(b.crossesPlane, true, 'd=3 (radius 1.5): 0.6 + 1.5 = 2.1 > 1.9');
+  assert.equal(c.crossesPlane, false, 'axis 2.4 mm away clears it');
+});
+
 test('buildGuide: split mode makes two pieces with nothing between the outer cuts (beyond the flange)', async () => {
   const pls = [{ p: V(-10, 0, 0), N: V(1, 0, 0), w: 1.2, off: -10 }, { p: V(10, 0, 0), N: V(1, 0, 0), w: 1.2, off: 10 }];
   const o = await build({ g: { split: 1, L: 50 }, pls });
