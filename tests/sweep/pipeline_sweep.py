@@ -62,6 +62,9 @@ def cell(arch, region, side, length):
     c = {"symphysis": sign * 4, "parasymphysis": sign * 0.30 * half, "body": sign * 0.62 * half, "angle": s_ang - sign * 6,
          "ramus": s_ang + 0.45 * (s_end - s_ang)}[region]
     a, b = sorted([c - length / 2, c + length / 2])
+    if region == "ramus":                      # a resection longer than the ramus above its centre reaches the condyle: slide it down to the arch end
+        if sign > 0 and b > s_end - 2: a, b = a - (b - (s_end - 2)), s_end - 2
+        if sign < 0 and a < s_end + 2: a, b = s_end + 2, b + ((s_end + 2) - a)
     return round(a, 1), round(b, 1), bool(a >= arch["sMin"] and b <= arch["sMax"])
 
 
