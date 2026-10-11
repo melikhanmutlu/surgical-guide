@@ -17,7 +17,7 @@ function legSample() {
 }
 const LEG = legSample();
 const fetchStub = async url => { if (/sample_leg/.test(url)) return { json: async () => LEG }; throw new Error('offline'); };
-const P = studio({ extra: { fetch: fetchStub }, post: ['fibula.js', 'fguide.js', 'osteo.js', 'mfg.js', 'fit.js', 'dates.js', 'guiderot.js'] });
+const P = studio({ extra: { fetch: fetchStub }, post: ['fibula.js', 'fguide.js', 'osteo.js', 'mfg.js', 'fit.js', 'dates.js', 'guiderot.js', 'implant.js'] });
 const St = await ready(P); const T = P.g.THREE, S = St.S, G = P.eval('G'), W = P.g, $ = id => P.doc.getElementById(id);
 const V = (x = 0, y = 0, z = 0) => new T.Vector3(x, y, z);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -138,6 +138,23 @@ test('fguide: adding a screw copies the selected one 8 mm further along (clamped
   const p = W.Fibula.plan(); $('fgAdd').listeners = {}; W.FibGuide.render();   // fake elements persist across renders: drop old listeners
   const n0 = W.Fibula.guideInfo().screws.length; (P.doc.getElementById('fgAdd').listeners.click || []).forEach(f => f({}));
   assert.equal(p.fsc.length, n0 + 1); near(p.fsc.at(-1).off, Math.min(25, (p.fsc[0].off || 0) + 8), 1e-12);
+});
+
+test('O-5: stored fibula plan with kerf <= 0 or out-of-range values is clamped to the control ranges and reported', async () => {
+  const keep = St.clone(W.Fibula.plan()), p = St.clone(keep);
+  p.kerf = 0; p.distal = 9999; p.vOff = NaN; p.yaw[0] = 1e9; p.knots = [NaN]; p.dblH = -4;
+  await W.Fibula.apply(p); await sleep(30);
+  const q = W.Fibula.plan();
+  near(q.kerf, 1.0, 1e-9, 'kerf 0 -> default'); assert.equal(q.distal, 140); assert.equal(q.vOff, 0); assert.equal(q.yaw[0], 180); assert.ok(q.knots.every(k => k > 0 && k < 1)); assert.equal(q.dblH, 8);
+  assert.match($('toast').textContent, /Testere payı/, 'user is told that the saw kerf was invalid');
+  p.kerf = 7; await W.Fibula.apply(p); assert.equal(W.Fibula.plan().kerf, 2);
+  await W.Fibula.apply(keep);
+});
+test('O-5: stored implant plan is clamped (position, diameter, length, tilt, segment) and non-finite values fall back', () => {
+  W.PlanExt.impl.set([{ seg: 99, t: 1e9, d: -5, len: NaN, tb: 400, tm: 'x' }, null, 5]);
+  const l = W.PlanExt.impl.get(); assert.equal(l.length, 1);
+  const o = l[0]; assert.equal(o.seg, 2); assert.equal(o.t, 60); assert.equal(o.d, 3); assert.equal(o.len, 10); assert.equal(o.tb, 89); assert.equal(o.tm, 0);
+  W.PlanExt.impl.set(null);
 });
 
 await run('modules (mfg, dates, fit, guiderot, fibula, osteo, fguide)');
