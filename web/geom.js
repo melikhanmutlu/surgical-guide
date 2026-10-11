@@ -217,6 +217,194 @@ const G = (() => {
     return { positions: pos.slice(0, np), indices: idx.slice(0, ni) };
   }
 
+  // ---------- marching tetrahedra: a closed, 2-manifold surface (what a printable STL needs) ----------
+  // field: Float32Array (nx*ny*nz), inside = field < level, linear interpolation along the cube edges, so a plane that
+  // is linear in the field (a slot wall, the guide box) comes out exactly where it belongs. Every cube is cut into the
+  // six Kuhn tetrahedra around its main diagonal, so two neighbouring cubes always agree on the diagonal of the face
+  // they share; vertices are shared per grid edge, and crossings are kept 1 % of an edge away from the grid nodes so no
+  // two vertices can coincide. The outer layer of nodes must lie outside (field >= level) for a closed surface.
+  // Returns { positions (grid coordinates), indices (CCW seen from outside, field increasing outwards) }.
+  const KUHN = (() => { const t = []; [[1, 2, 4], [1, 4, 2], [2, 1, 4], [2, 4, 1], [4, 1, 2], [4, 2, 1]].forEach(([a, b]) => t.push([0, a, a | b, 7])); return t; })();
+  function marchTets(field, nx, ny, nz, level = 0) {
+    const nxy = nx * ny, off = [0, 1, nx, nx + 1, nxy, nxy + 1, nxy + nx, nxy + nx + 1];
+    const vid = new Int32Array(nx * ny * nz * 8);   // vertex index + 1 per (lower node, edge direction mask)
+    let pos = new Float32Array(1 << 16), np = 0, idx = new Uint32Array(1 << 17), ni = 0;
+    const val = new Float32Array(8), ins = [0, 0, 0, 0], outs = [0, 0, 0, 0];
+    let ci = 0, cj = 0, ck = 0, v0 = 0;
+    const edge = (x, y) => {   // x < y (as cube-corner codes, y a superset of x)
+      const key = (v0 + off[x]) * 8 + (y ^ x);
+      let id = vid[key];
+      if (id) return id - 1;
+      let t = val[x] / (val[x] - val[y]); if (t < 0.01) t = 0.01; else if (t > 0.99) t = 0.99;
+      if (np + 3 > pos.length) { const q = new Float32Array(pos.length * 2); q.set(pos); pos = q; }
+      const ax = ci + (x & 1), ay = cj + ((x >> 1) & 1), az = ck + (x >> 2), bx = ci + (y & 1), by = cj + ((y >> 1) & 1), bz = ck + (y >> 2);
+      pos[np] = ax + t * (bx - ax); pos[np + 1] = ay + t * (by - ay); pos[np + 2] = az + t * (bz - az);
+      id = np / 3; np += 3; vid[key] = id + 1;
+      return id;
+    };
+    const cx = c => ci + (c & 1), cy = c => cj + ((c >> 1) & 1), cz = c => ck + (c >> 2);
+    const emit = (a, b, c, rx, ry, rz) => {   // triangle a,b,c wound so that its normal points along (rx, ry, rz)
+      const ax = pos[3 * a], ay = pos[3 * a + 1], az = pos[3 * a + 2];
+      const ux = pos[3 * b] - ax, uy = pos[3 * b + 1] - ay, uz = pos[3 * b + 2] - az, wx = pos[3 * c] - ax, wy = pos[3 * c + 1] - ay, wz = pos[3 * c + 2] - az;
+      const d = (uy * wz - uz * wy) * rx + (uz * wx - ux * wz) * ry + (ux * wy - uy * wx) * rz;
+      if (ni + 3 > idx.length) { const q = new Uint32Array(idx.length * 2); q.set(idx); idx = q; }
+      if (d >= 0) { idx[ni++] = a; idx[ni++] = b; idx[ni++] = c; } else { idx[ni++] = a; idx[ni++] = c; idx[ni++] = b; }
+    };
+    for (let k = 0; k < nz - 1; k++) for (let j = 0; j < ny - 1; j++) {
+      const r = nx * (j + ny * k);
+      for (let i = 0; i < nx - 1; i++) {
+        v0 = r + i; ci = i; cj = j; ck = k;
+        let neg = 0;
+        for (let c = 0; c < 8; c++) { const x = field[v0 + off[c]] - level; val[c] = x; if (x < 0) neg++; }
+        if (neg === 0 || neg === 8) continue;
+        for (let t = 0; t < 6; t++) {
+          const tt = KUHN[t]; let a = 0, b = 0;
+          for (let q = 0; q < 4; q++) { if (val[tt[q]] < 0) ins[a++] = tt[q]; else outs[b++] = tt[q]; }
+          if (a === 0 || b === 0) continue;
+          if (a === 1) {
+            const p = ins[0], e1 = edge(Math.min(p, outs[0]), Math.max(p, outs[0])), e2 = edge(Math.min(p, outs[1]), Math.max(p, outs[1])), e3 = edge(Math.min(p, outs[2]), Math.max(p, outs[2]));
+            emit(e1, e2, e3, (cx(outs[0]) + cx(outs[1]) + cx(outs[2])) / 3 - cx(p), (cy(outs[0]) + cy(outs[1]) + cy(outs[2])) / 3 - cy(p), (cz(outs[0]) + cz(outs[1]) + cz(outs[2])) / 3 - cz(p));
+          } else if (a === 3) {
+            const p = outs[0], e1 = edge(Math.min(p, ins[0]), Math.max(p, ins[0])), e2 = edge(Math.min(p, ins[1]), Math.max(p, ins[1])), e3 = edge(Math.min(p, ins[2]), Math.max(p, ins[2]));
+            emit(e1, e2, e3, cx(p) - (cx(ins[0]) + cx(ins[1]) + cx(ins[2])) / 3, cy(p) - (cy(ins[0]) + cy(ins[1]) + cy(ins[2])) / 3, cz(p) - (cz(ins[0]) + cz(ins[1]) + cz(ins[2])) / 3);
+          } else {
+            const a1 = ins[0], a2 = ins[1], b1 = outs[0], b2 = outs[1];
+            const e1 = edge(Math.min(a1, b1), Math.max(a1, b1)), e2 = edge(Math.min(a1, b2), Math.max(a1, b2)), e3 = edge(Math.min(a2, b2), Math.max(a2, b2)), e4 = edge(Math.min(a2, b1), Math.max(a2, b1));
+            const rx = (cx(b1) + cx(b2) - cx(a1) - cx(a2)) / 2, ry = (cy(b1) + cy(b2) - cy(a1) - cy(a2)) / 2, rz = (cz(b1) + cz(b2) - cz(a1) - cz(a2)) / 2;
+            // one winding decision for the whole quad (two triangles on the e1-e3 diagonal)
+            const ax = pos[3 * e1], ay = pos[3 * e1 + 1], az = pos[3 * e1 + 2];
+            const ux = pos[3 * e2] - ax, uy = pos[3 * e2 + 1] - ay, uz = pos[3 * e2 + 2] - az, wx = pos[3 * e3] - ax, wy = pos[3 * e3 + 1] - ay, wz = pos[3 * e3 + 2] - az;
+            const d = (uy * wz - uz * wy) * rx + (uz * wx - ux * wz) * ry + (ux * wy - uy * wx) * rz;
+            if (ni + 6 > idx.length) { const q = new Uint32Array(idx.length * 2); q.set(idx); idx = q; }
+            if (d >= 0) { idx[ni++] = e1; idx[ni++] = e2; idx[ni++] = e3; idx[ni++] = e1; idx[ni++] = e3; idx[ni++] = e4; }
+            else { idx[ni++] = e1; idx[ni++] = e3; idx[ni++] = e2; idx[ni++] = e1; idx[ni++] = e4; idx[ni++] = e3; }
+          }
+        }
+      }
+    }
+    return { positions: pos.slice(0, np), indices: idx.slice(0, ni) };
+  }
+
+  // ---------- quadric edge-collapse decimation of a closed mesh ----------
+  // Marching tetrahedra triangulates smooth areas far finer than the shape needs. Edges are collapsed (cheapest first, by
+  // the summed squared distance of the new point to the planes of the faces around it) while that error stays under tol²;
+  // an edge is only collapsed when the link condition holds (the two ends share exactly the two apex vertices) and no
+  // neighbouring face flips or turns into a sliver, so a closed 2-manifold stays one. tol is in the units of the positions.
+  function* decimateGen(net, tol, minQ = 0.1) {
+    const P = Float64Array.from(net.positions), nv = P.length / 3, F = Int32Array.from(net.indices), nf = F.length / 3;
+    const alive = new Uint8Array(nf).fill(1), vAlive = new Uint8Array(nv).fill(1), ver = new Int32Array(nv), Q = new Float64Array(nv * 10), vf = new Array(nv);
+    for (let v = 0; v < nv; v++) vf[v] = [];
+    const nrm = (a, b, c, out) => {   // unit normal (out) and area*2 of the triangle with vertices a, b, c
+      const ux = P[3 * b] - P[3 * a], uy = P[3 * b + 1] - P[3 * a + 1], uz = P[3 * b + 2] - P[3 * a + 2], wx = P[3 * c] - P[3 * a], wy = P[3 * c + 1] - P[3 * a + 1], wz = P[3 * c + 2] - P[3 * a + 2];
+      const x = uy * wz - uz * wy, y = uz * wx - ux * wz, z = ux * wy - uy * wx, l = Math.sqrt(x * x + y * y + z * z);
+      if (l > 0) { out[0] = x / l; out[1] = y / l; out[2] = z / l; } else { out[0] = out[1] = out[2] = 0; }
+      return l;
+    };
+    const n3 = [0, 0, 0], n3b = [0, 0, 0];
+    for (let f = 0; f < nf; f++) {
+      if ((f & 16383) === 16383) yield;
+      const a = F[3 * f], b = F[3 * f + 1], c = F[3 * f + 2]; vf[a].push(f); vf[b].push(f); vf[c].push(f);
+      if (nrm(a, b, c, n3) === 0) continue;
+      const A = n3[0], B = n3[1], C = n3[2], D = -(A * P[3 * a] + B * P[3 * a + 1] + C * P[3 * a + 2]);
+      const q = [A * A, A * B, A * C, A * D, B * B, B * C, B * D, C * C, C * D, D * D];
+      for (const v of [a, b, c]) for (let k = 0; k < 10; k++) Q[10 * v + k] += q[k];
+    }
+    // cost of collapsing a-b: best of the two ends, the midpoint and the quadric optimum
+    const tq = new Float64Array(10), best = [0, 0, 0];
+    const qerr = (x, y, z) => tq[0] * x * x + 2 * tq[1] * x * y + 2 * tq[2] * x * z + 2 * tq[3] * x + tq[4] * y * y + 2 * tq[5] * y * z + 2 * tq[6] * y + tq[7] * z * z + 2 * tq[8] * z + tq[9];
+    function cost(a, b) {
+      for (let k = 0; k < 10; k++) tq[k] = Q[10 * a + k] + Q[10 * b + k];
+      const ax = P[3 * a], ay = P[3 * a + 1], az = P[3 * a + 2], bx = P[3 * b], by = P[3 * b + 1], bz = P[3 * b + 2];
+      let e = qerr(ax, ay, az); best[0] = ax; best[1] = ay; best[2] = az;
+      const eb = qerr(bx, by, bz); if (eb < e) { e = eb; best[0] = bx; best[1] = by; best[2] = bz; }
+      const mx = (ax + bx) / 2, my = (ay + by) / 2, mz = (az + bz) / 2, em = qerr(mx, my, mz); if (em < e) { e = em; best[0] = mx; best[1] = my; best[2] = mz; }
+      const m00 = tq[0], m01 = tq[1], m02 = tq[2], m11 = tq[4], m12 = tq[5], m22 = tq[7];
+      const det = m00 * (m11 * m22 - m12 * m12) - m01 * (m01 * m22 - m12 * m02) + m02 * (m01 * m12 - m11 * m02);
+      if (Math.abs(det) > 1e-9) {
+        const r0 = -tq[3], r1 = -tq[6], r2 = -tq[8];
+        const x = (r0 * (m11 * m22 - m12 * m12) - m01 * (r1 * m22 - m12 * r2) + m02 * (r1 * m12 - m11 * r2)) / det;
+        const y = (m00 * (r1 * m22 - m12 * r2) - r0 * (m01 * m22 - m12 * m02) + m02 * (m01 * r2 - r1 * m02)) / det;
+        const z = (m00 * (m11 * r2 - r1 * m12) - m01 * (m01 * r2 - r1 * m02) + r0 * (m01 * m12 - m11 * m02)) / det;
+        // stay near the edge: an optimum far outside it is a sign of a near-singular system
+        if (Math.hypot(x - mx, y - my, z - mz) <= Math.hypot(bx - ax, by - ay, bz - az)) { const eo = qerr(x, y, z); if (eo < e) { e = eo; best[0] = x; best[1] = y; best[2] = z; } }
+      }
+      return e;
+    }
+    // binary min-heap of edge records (error, a, b, version of a, version of b); the heap itself holds record numbers
+    let hn = 0, rn = 0, cap = 1 << 16, hE = new Float64Array(cap), hA = new Int32Array(cap), hB = new Int32Array(cap), hVa = new Int32Array(cap), hVb = new Int32Array(cap), heap = new Int32Array(cap);
+    function push(e, a, b) {
+      if (rn === cap) { const g = (o, T) => { const q = new T(cap * 2); q.set(o); return q; }; hE = g(hE, Float64Array); hA = g(hA, Int32Array); hB = g(hB, Int32Array); hVa = g(hVa, Int32Array); hVb = g(hVb, Int32Array); heap = g(heap, Int32Array); cap *= 2; }
+      const r = rn++; hE[r] = e; hA[r] = a; hB[r] = b; hVa[r] = ver[a]; hVb[r] = ver[b];
+      let i = hn++; while (i > 0) { const p = (i - 1) >> 1; if (hE[heap[p]] <= e) break; heap[i] = heap[p]; i = p; } heap[i] = r;
+    }
+    function pop() {   // removes the minimum; its record number stays readable in `top`
+      const r = heap[--hn]; if (hn === 0) return; const e = hE[r]; let i = 0;
+      for (;;) { const l = 2 * i + 1; if (l >= hn) break; let m = l; if (l + 1 < hn && hE[heap[l + 1]] < hE[heap[l]]) m = l + 1; if (hE[heap[m]] >= e) break; heap[i] = heap[m]; i = m; }
+      heap[i] = r;
+    }
+    // edges: every vertex pair that shares a face, once (sorted unique keys)
+    const keys = new Float64Array(3 * nf);
+    for (let f = 0; f < nf; f++) for (let k = 0; k < 3; k++) { const a = F[3 * f + k], b = F[3 * f + (k + 1) % 3]; keys[3 * f + k] = Math.min(a, b) * nv + Math.max(a, b); }
+    keys.sort();
+    for (let i = 0; i < keys.length; i++) { if ((i & 16383) === 16383) yield; if (i && keys[i] === keys[i - 1]) continue; const a = Math.floor(keys[i] / nv), b = keys[i] - a * nv; push(cost(a, b), a, b); }
+    const tol2 = tol * tol, live = v => { const l = vf[v]; let w = 0; for (let i = 0; i < l.length; i++) if (alive[l[i]]) l[w++] = l[i]; l.length = w; return l; };
+    const shared = [], nA = new Set(), nB = new Set(), nbr = [];
+    // quality of triangle (a, b, c) with the vertex `moved` put at (x, y, z); returns [cos to old normal, quality]
+    const px = [0, 0, 0];
+    function check(f, v, x, y, z) {
+      const a = F[3 * f], b = F[3 * f + 1], c = F[3 * f + 2];
+      nrm(a, b, c, n3);
+      const ox = P[3 * v], oy = P[3 * v + 1], oz = P[3 * v + 2], oldQ = quality(a, b, c);
+      P[3 * v] = x; P[3 * v + 1] = y; P[3 * v + 2] = z;
+      const l = nrm(a, b, c, n3b), cosd = n3[0] * n3b[0] + n3[1] * n3b[1] + n3[2] * n3b[2], q = quality(a, b, c);
+      P[3 * v] = ox; P[3 * v + 1] = oy; P[3 * v + 2] = oz;
+      return l > 0 && cosd > 0.5 && q >= Math.min(minQ, oldQ * 0.9);
+    }
+    function quality(a, b, c) {   // 4*sqrt(3)*area / sum of squared edge lengths (1 = equilateral)
+      const e = (p, q) => { const x = P[3 * p] - P[3 * q], y = P[3 * p + 1] - P[3 * q + 1], z = P[3 * p + 2] - P[3 * q + 2]; return x * x + y * y + z * z; };
+      const s = e(a, b) + e(b, c) + e(c, a); return s > 0 ? 2 * Math.sqrt(3) * nrm(a, b, c, px) / s : 0;
+    }
+    let collapsed = 0;
+    let spin = 0;
+    while (hn > 0) {
+      if ((++spin & 4095) === 0) yield;
+      const top = heap[0], e = hE[top], a = hA[top], b = hB[top], va = hVa[top], vb = hVb[top]; pop();
+      if (e > tol2) break;
+      if (!vAlive[a] || !vAlive[b] || ver[a] !== va || ver[b] !== vb) continue;
+      const fa = live(a), fb = live(b);
+      shared.length = 0; for (const f of fa) if (F[3 * f] === b || F[3 * f + 1] === b || F[3 * f + 2] === b) shared.push(f);
+      if (shared.length !== 2) continue;
+      // link condition: the only vertices adjacent to both ends are the apexes of the two faces on the edge
+      nA.clear(); nB.clear();
+      for (const f of fa) for (let k = 0; k < 3; k++) { const w = F[3 * f + k]; if (w !== a && w !== b) nA.add(w); }
+      for (const f of fb) for (let k = 0; k < 3; k++) { const w = F[3 * f + k]; if (w !== a && w !== b) nB.add(w); }
+      let common = 0; for (const w of nA) if (nB.has(w)) common++;
+      if (common !== 2) continue;
+      cost(a, b); const x = best[0], y = best[1], z = best[2];
+      let ok = true;
+      for (const f of fa) { if (f === shared[0] || f === shared[1]) continue; if (!check(f, a, x, y, z)) { ok = false; break; } }
+      if (ok) for (const f of fb) { if (f === shared[0] || f === shared[1]) continue; if (!check(f, b, x, y, z)) { ok = false; break; } }
+      if (!ok) continue;
+      // collapse b into a at (x, y, z)
+      P[3 * a] = x; P[3 * a + 1] = y; P[3 * a + 2] = z;
+      alive[shared[0]] = 0; alive[shared[1]] = 0;
+      for (const f of fb) { if (!alive[f]) continue; for (let k = 0; k < 3; k++) if (F[3 * f + k] === b) F[3 * f + k] = a; vf[a].push(f); }
+      vAlive[b] = 0; vf[b] = []; for (let k = 0; k < 10; k++) Q[10 * a + k] += Q[10 * b + k];
+      ver[a]++; collapsed++;
+      nbr.length = 0; for (const f of live(a)) for (let k = 0; k < 3; k++) { const w = F[3 * f + k]; if (w !== a && nbr.indexOf(w) < 0) nbr.push(w); }
+      for (const w of nbr) push(cost(a, w), a, w);
+    }
+    // compact
+    const map = new Int32Array(nv).fill(-1); let m = 0, nfo = 0;
+    for (let f = 0; f < nf; f++) if (alive[f]) { nfo++; for (let k = 0; k < 3; k++) { const v = F[3 * f + k]; if (map[v] < 0) map[v] = m++; } }
+    const pos = new Float32Array(3 * m), idx = new Uint32Array(3 * nfo);
+    for (let v = 0; v < nv; v++) if (map[v] >= 0) { pos[3 * map[v]] = P[3 * v]; pos[3 * map[v] + 1] = P[3 * v + 1]; pos[3 * map[v] + 2] = P[3 * v + 2]; }
+    for (let f = 0, o = 0; f < nf; f++) if (alive[f]) { idx[o++] = map[F[3 * f]]; idx[o++] = map[F[3 * f + 1]]; idx[o++] = map[F[3 * f + 2]]; }
+    return { positions: pos, indices: idx, collapsed };
+  }
+  // the same, run to the end in one go; decimateGen is a generator that yields now and then so a caller can run it in slices
+  function decimate(net, tol, minQ) { const it = decimateGen(net, tol, minQ); for (;;) { const r = it.next(); if (r.done) return r.value; } }
+
 
   // seeded split of a bone mask (Mimics "Split Mask"): every voxel of the domain goes to the seed that reaches it with
   // the cheapest path; a step into dense bone costs 1, a step through low density (the thin contact between teeth, a
@@ -342,5 +530,5 @@ const G = (() => {
     const sepr = separator(mask, nx, ny, nz, sp), labels = new Int32Array(mask.length);
     return { labels, comps: sepr.run({ ...opt, out: labels }) };
   }
-  return { worldOf, indexOf, reduce, threshold, components, separator, separate, exterior, edt, blur, surfaceNets, splitSeeds };
+  return { worldOf, indexOf, reduce, threshold, components, separator, separate, exterior, edt, blur, surfaceNets, marchTets, decimate, decimateGen, splitSeeds };
 })();
