@@ -68,6 +68,17 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Expose-Headers", "X-Structures")
         self.send_header("Access-Control-Allow-Private-Network", "true")
 
+    def send_error(self, code, message=None, explain=None):
+        """Error answers carry the CORS headers too: the studio runs on another origin than the segmenter and could not read them."""
+        self._cors_on_end = True
+        super().send_error(code, message, explain)
+
+    def end_headers(self):
+        if getattr(self, "_cors_on_end", False):
+            self._cors_on_end = False
+            self._cors()
+        super().end_headers()
+
     def do_OPTIONS(self):
         self.send_response(204); self._cors(); self.end_headers()
 

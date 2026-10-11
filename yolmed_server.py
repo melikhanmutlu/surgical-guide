@@ -20,6 +20,7 @@ Research prototype. Not a medical device; every guide must be reviewed by a qual
 """
 import argparse
 import base64
+import contextlib
 import datetime
 import io
 import json
@@ -32,7 +33,7 @@ import sqlite3
 import threading
 import time
 from http.server import ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote
 
 import numpy as np
 from scipy import ndimage as ndi
@@ -45,6 +46,10 @@ BODY_MIN_RATE = 2e6                    # bytes per second a client must sustain
 MAX_PLAN_BODY = 4 * 1024 * 1024       # case and version requests carry only plan JSON
 MAX_CROP = 128e6                      # voxels in a guide crop (a 100 mm guide at 0.3 mm is ~100 M)
 MAX_GRID = 40e6                       # guide grid cells (~2 GB peak at this size)
+MAX_PLANES = 64                       # saw slots / screws in one guide (a guide has a handful; each one costs a boolean)
+MAX_SCREWS = 64
+DRAIN_MAX = 32 * 1024 * 1024          # an over-size upload is read (and discarded) up to this much after the 413, so the client can read it
+MAX_TEXT = 2000                       # kind, fingerprint, note, author
 GUIDE_SLOTS = threading.BoundedSemaphore(int(os.environ.get("YOLMED_GUIDE_JOBS", "1")))
 
 
@@ -79,10 +84,16 @@ class CaseStore:
         with self._conn() as c:
             c.executescript(self.SCHEMA)
 
+    @contextlib.contextmanager
     def _conn(self):
+        """A connection that commits (or rolls back) and is closed again: `with sqlite3.connect()` alone only ends the transaction."""
         c = sqlite3.connect(self.path, timeout=30)
         c.row_factory = sqlite3.Row
-        return c
+        try:
+            with c:
+                yield c
+        finally:
+            c.close()
 
     def list_cases(self):
         with self._conn() as c:
@@ -262,6 +273,8 @@ def build_guide(req):
     wrap, wall, clear = float(g["wrap"]), float(g["wall"]), float(g["clear"])
     bridge, side = float(g["bridge"]), (1.0 if float(g.get("side", 1)) >= 0 else -1.0)
     _check_ranges({"L": (L, 5, 200), "W": (W, 3, 100), "wrap": (wrap, 0, 40), "wall": (wall, 0.5, 10), "clear": (clear, 0, 3), "bridge": (bridge, 0, 30)})
+    if len(req.get("planes") or []) > MAX_PLANES or len(req.get("screws") or []) > MAX_SCREWS:
+        raise HttpError(400, f"at most {MAX_PLANES} planes and {MAX_SCREWS} screws per guide")
     for pl in req.get("planes") or []:
         _check_ranges({"plane w": (float(pl["w"]), 0.1, 10)})
     for s_ in req.get("screws") or []:
@@ -523,6 +536,7 @@ class Handler(seg_server.Handler):
         if n < 0:
             raise HttpError(400, "bad Content-Length")
         if n > limit:
+            self._unread = n          # answered with 413 first, then drained (see _dispatch)
             raise HttpError(413, "request too large")
         # an overall deadline (not just a per-read timeout) so a client trickling bytes cannot hold a job slot
         deadline = time.monotonic() + BODY_BASE_S + n / BODY_MIN_RATE
@@ -549,6 +563,32 @@ class Handler(seg_server.Handler):
             raise HttpError(400, "JSON object expected")
         return obj
 
+    def _drain(self):
+        """After a 413: read and discard the rest of the upload (at most DRAIN_MAX, a few seconds), so a client that is still
+        sending can finish and read the 413 instead of a connection reset; then close."""
+        self.close_connection = True
+        left = min(getattr(self, "_unread", 0), DRAIN_MAX)
+        end = time.monotonic() + 10
+        try:
+            while left > 0 and time.monotonic() < end:
+                self.connection.settimeout(1.0)
+                chunk = self.rfile.read1(min(1 << 20, left))
+                if not chunk:
+                    break
+                left -= len(chunk)
+        except OSError:
+            pass
+
+    @staticmethod
+    def _text(b, key, required=False):
+        """A short string field of a request, or None; anything else is a 400 (not a database error)."""
+        v = b.get(key)
+        if v is None and not required:
+            return None
+        if not isinstance(v, str) or len(v) > MAX_TEXT:
+            raise HttpError(400, f"{key} must be text of at most {MAX_TEXT} characters")
+        return v
+
     def _dispatch(self, method):
         path = urlparse(self.path).path
         try:
@@ -561,7 +601,7 @@ class Handler(seg_server.Handler):
                     name = b.get("name")
                     if not isinstance(name, str) or not name.strip():
                         raise HttpError(400, "name required")
-                    return self._json(200, {"id": st.create_case(name, b.get("kind"), b.get("fingerprint"))})
+                    return self._json(200, {"id": st.create_case(name, self._text(b, "kind"), self._text(b, "fingerprint"))})
                 raise HttpError(405, "method not allowed")
             m = CASE_RE.match(path)
             if m:
@@ -579,7 +619,7 @@ class Handler(seg_server.Handler):
                     b = self._body()
                     if b.get("plan") is None:
                         raise HttpError(400, "plan required")
-                    return self._json(200, {"n": st.add_version(cid, b["plan"], b.get("note"), b.get("author"))})
+                    return self._json(200, {"n": st.add_version(cid, b["plan"], self._text(b, "note"), self._text(b, "author"))})
                 if vn is not None and method == "GET":
                     if len(vn) > 9:
                         raise HttpError(404, "no such version")
@@ -597,7 +637,10 @@ class Handler(seg_server.Handler):
                     GUIDE_SLOTS.release()
             raise HttpError(404, f"not found: {path}")
         except HttpError as e:
-            return self._json(e.code, {"error": e.msg})
+            self._json(e.code, {"error": e.msg})
+            if e.code == 413:
+                self._drain()
+            return
         except (TypeError, AttributeError, RecursionError, OverflowError) as e:   # wrong JSON shapes in a request body
             return self._json(400, {"error": f"bad request: {type(e).__name__}"})
         except Exception as e:  # keep the server alive, report the failure as JSON
@@ -612,6 +655,7 @@ class Handler(seg_server.Handler):
             body = b"window.YOLMED_SERVER = location.origin;\n"
             ctype = "application/javascript"
         else:
+            path = unquote(path)         # %2E, %20 ... : file names with spaces or dots; the root check below stays the guard
             if "\x00" in path:
                 raise HttpError(404, "not found")
             f = os.path.realpath(os.path.join(root, (path.lstrip("/") or "index.html")))

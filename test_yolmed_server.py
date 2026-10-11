@@ -132,6 +132,17 @@ def main():
         st, r = J(call(base, "PUT", f"/cases/{a}/versions/1", {"plan": {}})); assert st == 405   # immutable
         print("cases OK")
 
+        # ---- wrong field types are 400 (not a database error), an over-size upload can still read its 413, error answers carry CORS
+        st, r = J(call(base, "POST", "/cases", {"name": "x", "kind": {"a": 1}, "fingerprint": [1]})); assert st == 400, (st, r)
+        st, r = J(call(base, "POST", f"/cases/{a}/versions", {"plan": {}, "note": {"x": 1}, "author": ["a"]})); assert st == 400, (st, r)
+        st, r = J(call(base, "PUT", f"/cases/{a}/draft", {"plan": {"blob": "x" * yolmed_server.MAX_PLAN_BODY}})); assert st == 413, (st, r)
+        st, h, _ = call(base, "POST", "/segment?nx=1&ny=1&nz=1", raw=b"", headers={"Content-Type": "application/octet-stream"})
+        assert st == 400 and h.get("Access-Control-Allow-Origin") == "*", (st, dict(h))
+        req_, _m = synthetic_case(0.6)
+        st, r = J(call(base, "POST", "/guide", {"crop": req_, "mask_b64": "", "frame": {}, "g": {}, "planes": [{}] * (yolmed_server.MAX_PLANES + 1)}))
+        assert st == 400, (st, r)
+        print("robustness OK")
+
         # ---- guide
         crop, mask = synthetic_case()
         cw = 0.3 + 3.0
