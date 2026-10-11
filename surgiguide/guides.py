@@ -40,7 +40,7 @@ def _largest(name, g, h):
     big = gone[gone > DROP_WARN_MM3]
     if len(big):
         rep["warning"] = (f"{name}: {len(big)} disconnected guide part(s) of {big.sum():.0f} mm3 in total ({big.max():.0f} mm3 at most) "
-                          "were dropped; the guide is missing material there (check the slots, rails and screw holes in the STL)")
+                          "were dropped (normally the strip over the wedge between two slots; if a rail, screw collar or shell part is missing in the STL, this is why)")
     return g, rep
 
 

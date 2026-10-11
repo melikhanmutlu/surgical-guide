@@ -1385,5 +1385,10 @@ window.I18N_EN = {
 "UYARI: PDF rapor oluşturulamadı; pakette yalnız HTML rapor var.": "WARNING: The PDF report could not be created; the package contains only the HTML report.",
 "Vida # gövdesi kesi yuvasına # mm yaklaşıyor (vida yarıçapı dahil); testere yoluna değebilir.": "The body of screw # comes within # mm of the cut slot (screw radius included); it may touch the saw path.",
 "Zincir doğrulandı ·": "Chain verified ·",
-"Zincir doğrulandı · plan": "Chain verified · plan"
+"Zincir doğrulandı · plan": "Chain verified · plan",
+"Yükleme iptal ediliyor…": "Cancelling the load…",
+"Yükleme iptal edildi.": "Load cancelled.",
+"Önceki yükleme sürüyor; bitince yeniden deneyin.": "The previous load is still running; try again when it is done.",
+"Örnek vaka yüklenince mevcut plan (kesiler, vidalar, guide) silinir. Devam edilsin mi?": "Loading the sample replaces the current plan (cuts, screws, guide). Continue?",
+"Seçim mandibulada yapılır: 3B görünüm mandibulaya alındı.": "Picks are made on the mandible: the 3D view was switched to the mandible."
 };

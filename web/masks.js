@@ -201,6 +201,7 @@ window.Masks = (function () {
   // ---------- panels ----------
   function setTool(t, force) {
     tool = force ? t : tool === t ? null : t;
+    if (tool && St.mandibleView) St.mandibleView();
     if (tool) {
       if (S.mode !== 'orbit') St.setMode('orbit');
       if (window.SegEdit) SegEdit.off();

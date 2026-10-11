@@ -22,16 +22,25 @@ const VERI = process.env.VERI || '/mnt/project-files/surgical-guide-prototype/au
     h.c1 = b;
     return { pass: b.cancel, actual: `meşgul=${b.busy}, "${b.text}", iptal düğmesi görünür=${b.cancel}`, evidence: ev };
   });
-  await h.run('C1.2', '1 · Yükleme iptali', 'Yükleme sürerken ikinci bir dosya seç (DICOM olmayan .txt) — kullanıcının tek "iptal" yolu', 'İkinci seçim ilkini düzgünce keser ya da reddeder; durum tutarlı', async () => {
+  await h.run('C1.2', '1 · Yükleme iptali', 'Yükleme sürerken ikinci bir dosya seç (DICOM olmayan .txt) — ikinci seçim ilkinin yerini alır', 'İlk yükleme sessizce bırakılır (eski seri vakayı ezmez), ikinci dosyanın hatası gösterilir, meşgul katman kapanır', async () => {
     const txt = path.join(h.SCRATCH, 'bad', 'notlar.txt'); fs.mkdirSync(path.dirname(txt), { recursive: true }); if (!fs.existsSync(txt)) fs.writeFileSync(txt, 'x'.repeat(1000));
     await page.setInputFiles('#dicomFiles', txt);
     await h.sleep(3000);
     const mid = await page.evaluate(() => ({ busy: !document.getElementById('busy').hidden, text: document.getElementById('busyText').textContent, msg: document.getElementById('caseMsg').hidden ? '' : document.getElementById('caseMsg').textContent }));
-    // let the first load finish (it keeps running)
-    for (let i = 0; i < 600; i++) { await h.sleep(1000); const on = await page.evaluate(() => !document.getElementById('busy').hidden).catch(() => true); if (!on) break; }
-    await h.idle(300000);
-    const s = await h.ev(() => ({ src: Studio.S.source && Studio.S.source.name, slices: Studio.S.source && Studio.S.source.slices, kind: Studio.S.kind }));
-    return { pass: null, actual: `ikinci seçimden 3 sn sonra: meşgul=${mid.busy}, "${mid.text}", mesaj "${mid.msg}"; sonunda kaynak "${s.src}" ${s.slices || ''} (${s.kind}) — ilk yükleme iptal edilmeden sürdü`, evidence: await h.shot('C1.2_ikinci_secim') };
+    await h.sleep(15000);                    // the replaced zip load must not come back and overwrite the case
+    const s = await h.ev(() => ({ src: Studio.S.source && Studio.S.source.type, slices: Studio.S.source && Studio.S.source.slices, kind: Studio.S.kind, busy: !document.getElementById('busy').hidden }));
+    return { pass: !mid.busy && /DICOM/.test(mid.msg) && s.src === 'sample' && !s.busy, actual: `ikinci seçimden 3 sn sonra: meşgul=${mid.busy}, mesaj "${mid.msg}"; 15 sn sonra kaynak ${s.src} (${s.kind}), meşgul=${s.busy}`, evidence: await h.shot('C1.2_ikinci_secim') };
+  });
+  await h.run('C1.4', '1 · Yükleme iptali', 'Zip yüklenirken "İptal" düğmesine bas', 'Yükleme durur, meşgul katman kapanır, "Yükleme iptal edildi" denir, vaka (örnek) değişmez', async () => {
+    await page.setInputFiles('#dicomFiles', path.join(VERI, 'mandibula_anon.zip'));
+    await h.sleep(5000);
+    const shown = await page.evaluate(() => !document.getElementById('busyCancel').hidden);
+    if (shown) await page.click('#busyCancel');
+    let gone = false;
+    for (let i = 0; i < 40 && !gone; i++) { await h.sleep(500); gone = await page.evaluate(() => document.getElementById('busy').hidden); }
+    await h.sleep(5000);
+    const s = await h.ev(() => ({ src: Studio.S.source && Studio.S.source.type, busy: !document.getElementById('busy').hidden, msg: document.getElementById('caseMsg').hidden ? '' : document.getElementById('caseMsg').textContent }));
+    return { pass: shown && gone && !s.busy && s.src === 'sample' && /iptal/.test(s.msg), actual: `düğme görünür=${shown}; katman kapandı=${gone}; 5 sn sonra kaynak ${s.src}, meşgul=${s.busy}, mesaj "${s.msg}"`, evidence: await h.shot('C1.4_iptal') };
   });
   await h.run('C1.3', '1 · Yükleme iptali', 'Yükleme sürerken sayfayı yenile', 'Sayfa temiz açılır, örnek vaka yüklenir, yarım vaka kalmaz', async () => {
     await page.setInputFiles('#dicomFiles', path.join(VERI, 'mandibula_anon.zip'));
@@ -55,7 +64,22 @@ const VERI = process.env.VERI || '/mnt/project-files/surgical-guide-prototype/au
     const s = await st(), step = await h.ev(() => [...document.querySelectorAll('details.step')].find(d => d.open).id);
     const ev = await h.shot('C7_fibula_gorunumu');
     await page.keyboard.press('Escape');
-    return { pass: view2 !== 'f' || s.planes.length > 0, actual: `fibula sonrası sahne=${view}; "Bölgeyi seç" sonrası sahne=${view2}; rozet "${badge}"; tık sonrası kesi ${s.planes.length}, açık adım ${step}`, evidence: ev };
+    return { pass: view2 === 'm' && s.planes.length > 0 && /mandibulaya alındı/.test(await page.$eval('#caseMsg', e => e.hidden ? '' : e.textContent)), actual: `fibula sonrası sahne=${view}; "Bölgeyi seç" sonrası sahne=${view2}; rozet "${badge}"; tık sonrası kesi ${s.planes.length}, açık adım ${step}`, evidence: ev };
+  });
+  await h.run('C7b', '2 · Anatomi (fibula yüklü)', 'Fibula görünümünde adım 2 fırçasını seç, 3B görünüme tıkla', 'Görünüm mandibulaya döner, adım 4 açılmaz, fırça mandibulaya uygulanır', async () => {
+    await page.click('#scF'); await h.sleep(500);
+    await h.openStep(2);
+    await page.evaluate(() => { const d = document.querySelector('#segEdit details'); if (d && !d.open) d.querySelector('summary').click(); });
+    await page.click('#segEdit button[data-t="brush"]'); await h.sleep(500);
+    const view = await h.ev(() => Fibula.view());
+    const pts = await h.hits('bone', 24);
+    const before = await h.ev(() => { let c = 0; const m = Studio.S.mask; for (let i = 0; i < m.length; i++) c += m[i] ? 1 : 0; return c; });
+    if (pts.length) { const p = pts[Math.floor(pts.length / 2)]; for (let i = 0; i < 3; i++) { await h.click3d(p.x + i * 6, p.y); await h.sleep(300); } }
+    await h.idle();
+    const after = await h.ev(() => { let c = 0; const m = Studio.S.mask; for (let i = 0; i < m.length; i++) c += m[i] ? 1 : 0; return c; });
+    const step = await h.ev(() => [...document.querySelectorAll('details.step')].find(d => d.open).id);
+    await page.keyboard.press('Escape');
+    return { pass: view === 'm' && pts.length > 0 && after !== before && step === 'st2', actual: `sahne=${view}; maske voksel ${before} → ${after}; açık adım ${step}`, evidence: await h.shot('C7b_firca') };
   });
   await page.click('#scM'); await h.sleep(500);
   await h.openStep(1); await page.click('#sampleM'); await h.idle();   // drop the fibula again

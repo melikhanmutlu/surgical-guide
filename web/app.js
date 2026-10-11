@@ -20,10 +20,19 @@
   };
   // determinate bar for file loading: percentage and, once the rate is known, the time left
   const etaText = s => s < 60 ? `${Math.max(1, Math.round(s))} sn` : `${Math.floor(s / 60)} dk ${Math.round(s % 60)} sn`;
-  function progress() {
+  // a DICOM / zip load can be cancelled (button in the busy bar) and a newer load replaces an older one: the older one stops at its next
+  // progress step (LOAD_CANCELLED) and never reaches setVolume, so a stale series cannot overwrite the case
+  const LOAD_CANCELLED = Object.assign(new Error('load cancelled'), { cancelled: true });
+  let loadCtl = null, committing = false;
+  function startLoad() { if (loadCtl) loadCtl.cancelled = true; return (loadCtl = { cancelled: false, byUser: false }); }
+  // another load while the previous one is already building the case (setVolume) would race it: refuse with a notice
+  function loadBlocked() { if (!committing) return false; alertMsg('Önceki yükleme sürüyor; bitince yeniden deneyin.'); return true; }
+  function progress(ctl) {
     const t0 = performance.now(); let last = -1e9;
-    clearInterval(busyTick); $('busy').hidden = false; $('busyBar').hidden = false; $('busyBar').classList.add('det'); $('busyCancel').hidden = true;
+    clearInterval(busyTick); $('busy').hidden = false; $('busyBar').hidden = false; $('busyBar').classList.add('det'); $('busyCancel').hidden = !ctl;
+    busyCancelFn = ctl ? () => { ctl.cancelled = ctl.byUser = true; $('busyCancel').hidden = true; $('busyText').textContent = 'Yükleme iptal ediliyor…'; } : null;
     return async (f, text) => {
+      if (ctl && ctl.cancelled) throw LOAD_CANCELLED;
       const now = performance.now(); if (now - last < 120 && f < 1) return; last = now;
       f = Math.max(0, Math.min(1, f)); const el = (now - t0) / 1000, eta = f > 0.03 && el > 0.8 && f < 1 ? el * (1 - f) / f : null;
       $('busyBar').firstElementChild.style.width = (f * 100).toFixed(1) + '%';
@@ -166,19 +175,31 @@
     S.source = { type: 'sample', name, fp: 'sample:' + name };
     await setVolume(vol, name === 'mandible' ? 'Örnek: mandibula (sentetik BT)' : 'Örnek: alt bacak (sentetik BT)', name);
   }
+  // true when this load was cancelled (by the button, or replaced by a newer load); the busy bar is hidden unless a newer load owns it
+  function loadStopped(ctl) {
+    if (!ctl.cancelled) return false;
+    if (loadCtl === ctl) { loadCtl = null; busy(false); }
+    if (ctl.byUser) alertMsg('Yükleme iptal edildi.');
+    return true;
+  }
   async function loadDicom(files) {
-    const r = await readDicom(files);
+    if (loadBlocked()) return;
+    const ctl = startLoad();
+    let r;
+    try { r = await readDicom(files, ctl); } catch (e) { if (e !== LOAD_CANCELLED) { if (loadCtl === ctl) loadCtl = null; throw e; } }
+    if (!r || loadStopped(ctl)) return;
+    if (loadCtl === ctl) loadCtl = null;
     if (r.error) { busy(false); alertMsg(r.error); return; }
     S.source = r.source; scan = r.scan;
     if (S.pendingPlan && S.pendingPlan.source && S.pendingPlan.source.fp === r.source.fp) S.autoAnchor = false;
     await setVolume(r.vol, r.label, 'dicom');
   }
   // DICOM files -> { vol, label, source } or { error }
-  async function readDicom(files) {
+  async function readDicom(files, ctl) {
     if (!window.dicomParser) return { error: 'DICOM okuyucu yüklenemedi.' };
     const zipName = files.length === 1 && /\.zip$/i.test(files[0].name) ? files[0].name.replace(/\.zip$/i, '') : null;
     // one bar across the stages: unzip (if any) 30 %, reading the files, then decoding the chosen series
-    const prog = progress(), hasZip = window.Unzip && (files.some(f => /\.zip$/i.test(f.name || '')) || (await Promise.all(files.slice(0, 50).map(f => Unzip.isZip(f).catch(() => false)))).some(Boolean));
+    const prog = progress(ctl), hasZip = window.Unzip && (files.some(f => /\.zip$/i.test(f.name || '')) || (await Promise.all(files.slice(0, 50).map(f => Unzip.isZip(f).catch(() => false)))).some(Boolean));
     const zw = hasZip ? 0.3 : 0, pw = (1 - zw) * 0.55, dw = 1 - zw - pw;
     await prog(0, 'Dosyalar okunuyor…');
     if (hasZip) {
@@ -186,7 +207,7 @@
         const x = await Unzip.expand(files, (i, n) => prog(zw * i / n, `Zip açılıyor (${i}/${n})…`));
         files = x.files;
         if (x.skipped.length) alertMsg(`${xl(`Zip içinde ${x.skipped.length} dosya açılamadı ve atlandı (şifreli, desteklenmeyen sıkıştırma ya da çok iç içe):`)} ${x.skipped.slice(0, 3).join(', ')}${x.skipped.length > 3 ? '…' : ''}`);
-      } catch (e) { return { error: 'Zip açılamadı: ' + e.message }; }
+      } catch (e) { if (e === LOAD_CANCELLED) throw e; return { error: 'Zip açılamadı: ' + e.message }; }
     }
     if (!files.length) return { error: 'Dosya bulunamadı.' };
     const slices = [], unsup = {}; let skipped = 0, multi = 0;
@@ -299,8 +320,11 @@
   async function switchSeries(i) {
     if (!scan || !scan.groups[i] || i === scan.cur) return;
     if (S.anchor && !confirm('Başka seri açılınca kesiler ve guide silinir. Devam edilsin mi?')) { renderSeries(); return; }
-    const prog = progress(); await prog(0, 'Seri açılıyor…');
-    const r = await decodeSeries(scan.groups[i], prog, 0, 1, scan);
+    if (loadBlocked()) { renderSeries(); return; }
+    const ctl = startLoad(), prog = progress(ctl); let r;
+    try { await prog(0, 'Seri açılıyor…'); r = await decodeSeries(scan.groups[i], prog, 0, 1, scan); } catch (e) { if (e !== LOAD_CANCELLED) { if (loadCtl === ctl) loadCtl = null; throw e; } }
+    if (!r || loadStopped(ctl)) { renderSeries(); return; }
+    if (loadCtl === ctl) loadCtl = null;
     if (r.error) { busy(false); alertMsg(r.error); renderSeries(); return; }
     S.source = r.source; await setVolume(r.vol, r.label, 'dicom');
   }
@@ -319,6 +343,10 @@
   }
 
   async function setVolume(vol, label, kind) {
+    committing = true;
+    try { return await setVolumeNow(vol, label, kind); } finally { committing = false; }
+  }
+  async function setVolumeNow(vol, label, kind) {
     $('caseMsg').hidden = true;
     S.vol = vol; S.kind = kind;
     busy(true, 'Hacim küçültülüyor…'); await sleep();
@@ -1541,7 +1569,16 @@
   bus.addEventListener('parts', syncGizmo);
   bus.addEventListener('planApplied', syncGizmo);
 
+  // picks (cut region, screw sites, brush strokes) are made on the mandible: with the fibula-only view on, the view goes back to the mandible
+  // and says so, instead of the click landing on the leg and opening the fibula step
+  function mandibleView() {
+    if (!(window.Fibula && Fibula.view && Fibula.view() === 'f')) return false;
+    Fibula.setView('m');
+    alertMsg('Seçim mandibulada yapılır: 3B görünüm mandibulaya alındı.');
+    return true;
+  }
   function setMode(m) {
+    if (m !== 'orbit') mandibleView();
     S.mode = m;
     $('modeBadge').hidden = m === 'orbit';
     $('modeBadge').textContent = m === 'anchor' ? 'Rezeksiyon bölgesinin ortasında kemik yüzeyine tıklayın (guide buraya oturur)' : m === 'screw' ? 'Vida yeri için guide üzerine tıklayın' : $('modeBadge').textContent;
@@ -1661,8 +1698,11 @@
   $('showAll').addEventListener('click', () => { Object.values(parts).forEach(pt => { pt.visible = true; pt.obj.visible = true; }); renderParts(); render(); });
   $('guideOnly').addEventListener('click', () => { Object.values(parts).forEach(pt => { pt.visible = /guide/.test(pt.id) || pt.id.startsWith('screw'); pt.obj.visible = pt.visible; }); renderParts(); if (parts.guide) fitTo(parts.guide.obj); });
   $('fit').addEventListener('click', () => { if (parts.bone) fitTo(parts.bone.obj); });
-  $('sampleM').addEventListener('click', () => loadSample('mandible'));
-  $('sampleL').addEventListener('click', () => loadSample('leg'));
+  // the sample replaces the whole case: a plan (cuts, screws, guide, fibula plan) is lost and "undo" does not bring it back, so ask first
+  const planned = () => !!(S.anchor || S.planes.length || S.screws.length || (window.Fibula && Fibula.active && Fibula.active()));
+  const sampleClick = name => { if (loadBlocked()) return; if (planned() && !confirm('Örnek vaka yüklenince mevcut plan (kesiler, vidalar, guide) silinir. Devam edilsin mi?')) return; loadSample(name); };
+  $('sampleM').addEventListener('click', () => sampleClick('mandible'));
+  $('sampleL').addEventListener('click', () => sampleClick('leg'));
   $('dicomDir').addEventListener('change', e => { if (e.target.files.length) loadDicom([...e.target.files]); });
   $('dicomFiles').addEventListener('change', e => { if (e.target.files.length) loadDicom([...e.target.files]); });
   stage.addEventListener('dragover', e => e.preventDefault());
@@ -1916,7 +1956,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   }
   function serverUrl() { return ($('aiUrl').value || '').trim().replace(/\/+$/, ''); }
   function select(sel) { if (sel) S.guideSel = false; S.sel = sel; emit('select', sel); renderElements(); rebuildElementParts(S.result ? S.result.pls : planesWorld(), S.result ? S.result.screwInfo : []); applyExplode(); render(); }
-  window.Studio = { renderComps, setGuideRot, setGuideRoll, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, resEnds, splitGap, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume };
+  window.Studio = { mandibleView, startLoad, loadStopped, LOAD_CANCELLED, renderComps, setGuideRot, setGuideRoll, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, resEnds, splitGap, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume };
   bus.addEventListener('planeDragged', () => { renderElements(); schedule(true, true); });
   // messages assembled at run time are written in the language that was active: write them again when it changes
   if (window.addEventListener) window.addEventListener('langchange', () => { try { renderAppr(); syncLesion(); } catch (e) { /* no case open yet */ } });

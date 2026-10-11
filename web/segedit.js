@@ -189,6 +189,7 @@ window.SegEdit = (function () {
   // ---------- panel ----------
   function setTool(t) {
     tool = tool === t ? null : t;
+    if (tool && St.mandibleView) St.mandibleView();
     if (tool && window.Measure && Measure.active()) $('toolMeasure').click();
     if (tool && window.Lesion) Lesion.off();
     if (tool && window.Masks) Masks.off();

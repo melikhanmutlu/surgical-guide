@@ -46,10 +46,14 @@ window.Fibula = (function () {
   async function load(kind, files) {
     St.busy(true, 'Fibula BT\'si okunuyor…'); await St.sleep();
     let vol, source, label;
+    const ctl = kind === 'sample' ? null : St.startLoad();       // a DICOM / zip read can be cancelled; a newer load replaces it
     try {
       if (kind === 'sample') { vol = await St.readSample('leg'); source = { type: 'sample', name: 'leg', fp: 'sample:leg' }; label = 'Örnek: alt bacak (sentetik BT)'; }
-      else { const r = await St.readDicom(files); if (r.error) { St.busy(false); msg(r.error); return false; } ({ vol, source, label } = r); }
-    } catch (e) { St.busy(false); msg('Fibula BT\'si açılamadı: ' + e.message); return false; }
+      else { const r = await St.readDicom(files, ctl); if (St.loadStopped(ctl)) return false; if (r.error) { St.busy(false); msg(r.error); return false; } ({ vol, source, label } = r); }
+    } catch (e) {
+      if (e === St.LOAD_CANCELLED) { St.loadStopped(ctl); return false; }
+      St.busy(false); msg('Fibula BT\'si açılamadı: ' + e.message); return false;
+    }
     St.busy(true, 'Fibula ayrıştırılıyor…'); await St.sleep();
     const red = G.reduce(vol, 0.8), { labels, comps, count } = G.components(G.threshold(red, THR), red.nx, red.ny, red.nz, 200);
     const top = comps.slice(0, 6), longOf = st => st.filter(c => c.len >= 80 && c.elong >= 3);
@@ -651,6 +655,8 @@ window.Fibula = (function () {
   const onUp = e => {
     const d = down; down = null;
     if (!d || e.button !== 0 || Math.hypot(e.clientX - d[0], e.clientY - d[1]) > 4 || !F || !F.c) return;
+    // a pick or brush of the mandible is under way (cut region, screw site, segmentation / lesion tools): the click is not for the leg
+    if (S.mode !== 'orbit' || (window.SegEdit && SegEdit.tool()) || (window.Lesion && Lesion.active()) || (window.Masks && Masks.tool())) return;
     const pa = paneAt(e);
     if (pa.pane === 'm') { if (S.split) setTimeout(() => setActive('m', !!(S.sel || S.guideSel)), 0); return; }
     rc.setFromCamera(new THREE.Vector2(pa.ndc[0], pa.ndc[1]), pa.cam);

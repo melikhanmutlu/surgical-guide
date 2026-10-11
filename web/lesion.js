@@ -108,6 +108,7 @@ window.Lesion = (function () {
   // ---------- panel ----------
   function setTool(t) {
     tool = tool === t ? null : t;
+    if (tool && St.mandibleView) St.mandibleView();
     if (tool) {
       if (St.S.mode !== 'orbit') St.setMode('orbit');
       if (window.SegEdit) SegEdit.off();
