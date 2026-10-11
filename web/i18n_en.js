@@ -1371,5 +1371,7 @@ window.I18N_EN = {
 "Guide güncelleniyor…": "Updating the guide…",
 "Plan yeni değişti; guide güncellenip onaylar yenilenmeden paket alınamaz.": "The plan has just changed; the package cannot be exported until the guide is updated and the approvals are renewed.",
 "UYARI: PDF rapor oluşturulamadı; pakette yalnız HTML rapor var.": "WARNING: The PDF report could not be created; the package contains only the HTML report.",
-"Vida # gövdesi kesi yuvasına # mm yaklaşıyor (vida yarıçapı dahil); testere yoluna değebilir.": "The body of screw # comes within # mm of the cut slot (screw radius included); it may touch the saw path."
+"Vida # gövdesi kesi yuvasına # mm yaklaşıyor (vida yarıçapı dahil); testere yoluna değebilir.": "The body of screw # comes within # mm of the cut slot (screw radius included); it may touch the saw path.",
+"Zincir doğrulandı ·": "Chain verified ·",
+"Zincir doğrulandı · plan": "Chain verified · plan"
 };
