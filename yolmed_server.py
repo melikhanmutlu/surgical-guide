@@ -530,7 +530,11 @@ class Handler(seg_server.Handler):
         while got < n:
             if time.monotonic() > deadline:
                 raise HttpError(408, "request body too slow")
-            chunk = self.rfile.read(min(1 << 20, n - got))
+            try:   # each read may stall only briefly, so a silent or trickling client frees the job slot quickly
+                self.connection.settimeout(max(0.5, min(5.0, deadline - time.monotonic())))
+                chunk = self.rfile.read1(min(1 << 20, n - got))
+            except OSError:
+                raise HttpError(408, "request body too slow")
             if not chunk:
                 raise HttpError(400, "request body ended early")
             chunks.append(chunk); got += len(chunk)

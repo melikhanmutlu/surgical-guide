@@ -103,7 +103,11 @@ class Handler(BaseHTTPRequestHandler):
             while got < n:
                 if time.monotonic() > deadline:
                     self.send_error(408, "request body too slow"); return
-                chunk = self.rfile.read(min(1 << 20, n - got))
+                try:   # each read may stall only briefly, so a silent or trickling client frees the slot quickly
+                    self.connection.settimeout(max(0.5, min(5.0, deadline - time.monotonic())))
+                    chunk = self.rfile.read1(min(1 << 20, n - got))
+                except OSError:
+                    self.send_error(408, "request body too slow"); return
                 if not chunk:
                     self.send_error(400, "request body ended early"); return
                 chunks.append(chunk); got += len(chunk)
