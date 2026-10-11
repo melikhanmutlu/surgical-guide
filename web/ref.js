@@ -236,9 +236,11 @@ window.Ref = (function () {
     if (M && M.asym !== undefined && M.asym > 4) out.push(['info', 'Bilgi', `Kondiller ${fmt(M.asym)} mm asimetrik; ayna görüntüsünü hedef alırken bunu hesaba katın.`, 'anat']);
     const E = M && ref && St.resEnds();
     if (E && !E.condyle) {
-      // a segment resection must not take a condyle; a condylar resection is chosen explicitly
+      // a segment resection must not take a condyle (the second cut would leave the bone and the defect has no stump
+      // there); a condylar resection is chosen explicitly, so this is critical, as the cut that misses bone is
+      const dir = E.B.p.clone().sub(E.A.p).normalize(), NA = E.A.N.clone(), NB = E.B.N.clone(); if (NA.dot(dir) < 0) NA.negate(); if (NB.dot(dir) < 0) NB.negate();
       for (const k of ['R', 'L']) { const p = ref.cond[k]; if (!p) continue; const q = V(...p);
-        if (q.clone().sub(E.A.p).dot(E.A.N) > 0 && q.clone().sub(E.B.p).dot(E.B.N) < 0 && q.distanceTo(S.anchor.p) < 70) out.push(['warn', 'Uyarı', `${k === 'R' ? 'Sağ' : 'Sol'} kondil rezeksiyon bölgesinde kalıyor; kondil dahil rezeksiyon tipini seçin.`, 'lesion']); }
+        if (q.clone().sub(E.A.p).dot(NA) > 0 && q.clone().sub(E.B.p).dot(NB) < 0 && q.distanceTo(S.anchor.p) < 130) out.push(['crit', 'Kritik', `${k === 'R' ? 'Sağ' : 'Sol'} kondil rezeksiyon bölgesinde kalıyor; kondil dahil rezeksiyon tipini seçin ya da kesiyi kondilin altına alın.`, 'lesion']); }
     }
     return out;
   });

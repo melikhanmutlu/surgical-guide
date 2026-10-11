@@ -128,6 +128,20 @@ class Plans(unittest.TestCase):
         self.assertEqual(p["n_segments"], 1)
         self.assertTrue(any("deviation" in w for w in p["warnings"]), p["warnings"])
 
+    def test_ramus_and_angle_resections_lie_on_the_arch(self):
+        A = self.A
+        for s_a, s_b in ((A.s_body[1] - 20, A.s_body[1] + 25), (A.s_body[0] - 30, A.s_body[0] - 5), (A.s_body[1] + 2, A.s[-1] - 2)):
+            p = P.make_plan(A, self.F, s_a, s_b)
+            self.assertTrue(all(g["length_mm"] >= 19.0 for g in p["segments"]) or p["segment_decision"]["reason"] == "short", p["segments"])
+            self.assertGreater(len(p["segments"]), 0)
+
+    def test_automatic_count_takes_the_smallest_deviation_when_the_tolerance_is_out_of_reach(self):
+        _, dev, n, d = P.choose_segments(self.A, -40, 40, 0.01, 20.0)
+        ok = [c for c in d["candidates"] if c["shortest_segment_mm"] >= 20.0]
+        self.assertEqual(d["reason"], "len")
+        self.assertLessEqual(dev, min(c["deviation_mm"] for c in ok) + 0.5)
+        self.assertLessEqual(n, 4)
+
     def test_oblique_cut_is_reported(self):
         segs = [dict(index=0, length_mm=30.0, angle_start_deg=10.0, angle_end_deg=41.0)]
         w = P.plan_warnings(segs, 1.0, 1, 2.5, 20.0, 0.0, 30.0)

@@ -104,7 +104,7 @@ def main():
     if p.get("segment_decision"):
         d = p["segment_decision"]
         why = {"short": "defect shorter than one segment", "dev": "fewest segments within the deviation tolerance",
-               "len": "most segments that keep every segment long enough"}[d["reason"]]
+               "len": "smallest deviation among the counts that keep every segment long enough"}[d["reason"]]
         log(f"segment count {d['n']} ({why}); candidates: "
             + ", ".join(f"{c['n']}: shortest {c['shortest_segment_mm']} mm / deviation {c['deviation_mm']} mm" for c in d["candidates"]))
 

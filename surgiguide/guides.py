@@ -90,7 +90,13 @@ def mandible_guide(vol, mask, arch, plan, which, h=0.3, clearance=0.3, wall=2.5,
     L = grid.local
     u, v, w = L[..., 0], L[..., 1], L[..., 2]
     span = (u >= -flange) & (u <= reach)
-    shell = span & (dout > clearance) & (dout <= clearance + wall) & (v >= -0.5)
+    # the shell lies on the buccal face only where nothing is above it along the seating direction (+v): a shell voxel
+    # with bone further out in its (u, w) column would wrap under the bone's widest level, the guide could not be lifted
+    # off, and on a real jaw such voxels form islands (lingual side of the crest, under the inferior border) that only
+    # get dropped. seen_out = bone anywhere at a larger v in the same column (axis 1 of the (w, v, u) arrays).
+    outer = np.flip(np.cumsum(np.flip(bone, axis=1), axis=1), axis=1) > 0
+    over = np.zeros_like(bone); over[:, :-1, :] = outer[:, 1:, :]
+    shell = span & (dout > clearance) & (dout <= clearance + wall) & (v >= -0.5) & ~over
     k, sw = plan["kerf"], _slot_width(plan["kerf"], h)
     # where the slot lies relative to the planned plane (u = 0, the stump face): on the resected side (u in [-sw, 0], the
     # graft meets the stump flush) or centred on the plane (u in [-sw/2, sw/2], half the kerf lost from the stump);
@@ -101,7 +107,7 @@ def mandible_guide(vol, mask, arch, plan, which, h=0.3, clearance=0.3, wall=2.5,
     wz = w[shell & (np.abs(u - u_slot) <= 4)]
     w_lo = wz.min() if wz.size else -10
     bridge = (np.abs(u - u_slot) <= 4) & (w <= w_lo + 4) & (dout > clearance + wall - 0.5) & \
-             (dout <= clearance + wall + 2.5) & (v >= -0.5)
+             (dout <= clearance + wall + 2.5) & (v >= -0.5) & ~over
     guide = (shell & ~slot) | bridge
     for wz0 in (-6.0, 6.0):
         guide &= ~_hole(L, np.array([reach - 6, 0, wz0]), np.array([0, 1.0, 0]), screw_d / 2)

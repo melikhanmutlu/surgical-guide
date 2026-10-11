@@ -63,8 +63,9 @@ kritik kontrol = engelli).
 ## Pipeline taraması
 
 `pipeline_sweep.py` bölgeleri hattın kendi ark koordinatına çevirir (`--resect-from/--resect-to`); ark uzunluğu veri
-başına bir kez `segment.mandible_bone + plan.Arch` ile ölçülür (`pipe/arch_<veri>.json`). Hatta ramus modeli yoktur:
-ramus / kondil hücreleri ark dışına düşer ve hattın verdiği hata kaydedilir. `--side` (verici bacak) rezeksiyon tarafına
+başına bir kez `segment.mandible_bone + plan.Arch` ile ölçülür (`pipe/arch_<veri>.json`: `sMin/sMax` kondilden kondile,
+`bodyMin/bodyMax` angulustan angulusa). Gövde bölgeleri gövde arkına, angulus gövde ucuna, ramus angulus→kondil yolunun
+%45'ine, kondil hücresi ark ucunun 2 mm altına (kondile açık) yerleşir; eski ark dosyalarında (`body*` yok) ark ucu kullanılır. `--side` (verici bacak) rezeksiyon tarafına
 eşitlenir. Gerçek BT koşusu ~2 dk ve ~5 GB bellek ister; varsayılan boylar 20, 45, 80.
 
 ## Dosyalar

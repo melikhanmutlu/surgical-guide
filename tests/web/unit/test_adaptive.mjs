@@ -125,6 +125,90 @@ test('kerf side: stump gap 0 per end with the kerf on the resected side (default
   S.g.kerfSide = 1; S.planes.forEach(p => { p.w = 1.2; });
 });
 
+// ---------- bone-aware screw placement (app.js placeScrews / bestScrew / evalScrew) ----------
+const screwsOk = R => R.screwInfo.length && R.screwInfo.every(s => s.ok);
+const slotGaps = R => R.screwInfo.filter(s => s.ok).map(s => +s.slotGap.toFixed(2));
+const per = () => +W.document.getElementById('perSide').value || 1;   // screws per side in the harness page
+
+test('screws on thin bone (8 mm high, 6 mm thick): every screw reaches bone with the drill at least 4 mm in bone, none dropped, no screw critical', async () => {
+  await volume(ellipseBar(4, 3));
+  const R = await plan([-12, 12]);
+  console.log(`    screws ${S.screws.map(s => `u${s.u} v${s.v} t${s.tiltU}/${s.tiltV}`).join(' ')} inBone ${R.screwInfo.map(s => s.ok ? s.inBone.toFixed(1) : 'x').join(' ')} L ${S.g.L}`);
+  assert.equal(S.screws.length, 2 * per()); assert.equal(S.screwDrops.length, 0);
+  assert.ok(screwsOk(R), 'every sleeve on bone: ' + JSON.stringify(R.screwInfo.map(s => s.ok)));
+  R.screwInfo.forEach(s => assert.ok(s.inBone >= 4, 'drill in bone ' + s.inBone));
+  assert.ok(!checks().some(c => c[0] === 'crit' && /Vida/.test(c[2])), 'no screw critical: ' + text());
+  assert.ok(S.screws.every(sc => Math.abs(sc.u) >= 12 + sc.D / 2 + 2 - 1e-9), 'sleeve at least 2 mm from the slot edge (slot on the resected side of the plane): ' + S.screws.map(s => s.u));
+});
+
+test('screws where the bone ends 8 mm past a cut: the screw past that cut sits on the short stump, 2 mm from the slot, and reaches bone', async () => {
+  await volume((x, y, z) => x > -48 && x < 20 && ellipseBar(10, 6)(x, y, z));
+  const R = await plan([-12, 12]);
+  const right = S.screws.filter(sc => sc.u > 0);
+  console.log(`    right screw ${right.map(s => `u${s.u} v${s.v} t${s.tiltU}/${s.tiltV}`).join(' ')} slot gaps ${slotGaps(R).join(' ')}`);
+  assert.equal(right.length, per()); right.forEach(sc => assert.ok(sc.u > 12 && sc.u <= 20, 'on the 8 mm stump: ' + sc.u));
+  assert.equal(S.screwDrops.length, 0); assert.ok(screwsOk(R), 'sleeves on bone');
+  assert.ok(slotGaps(R).every(g => g >= 2 - 0.3), 'at least 2 mm between every sleeve and slot (±h): ' + slotGaps(R));
+  assert.ok(!checks().some(c => c[0] === 'crit' && /Vida/.test(c[2])), 'no screw critical: ' + text());
+});
+
+test('no bone past one cut: that side gets no screw record, a critical check says why, the other side keeps its screw and the guide still holds the slots', async () => {
+  await volume((x, y, z) => x > -48 && x < 13 && ellipseBar(10, 6)(x, y, z));
+  const R = await plan([-12, 12]);
+  assert.equal(S.screws.length, per(), 'left side only ' + JSON.stringify(S.screws.map(s => s.u)));
+  assert.ok(S.screws.every(sc => sc.u < -12), 'the kept screws are past the left cut');
+  assert.equal(S.screwDrops.length, per()); assert.ok(S.screwDrops.every(d => d.cut === 1));
+  assert.ok(screwsOk(R), 'the placed screw reaches bone');
+  assert.ok(checks().some(c => c[0] === 'crit' && /Kesi 2 ötesinde vida için uygun yer bulunamadı/.test(c[2])), 'dropped screw reported: ' + text());
+  assert.ok(checks().some(c => c[0] === 'warn' && /Vidalar yalnız bir uçta/.test(c[2])), 'one-sided screws reported: ' + text());
+  assert.ok(!checks().some(c => /kemiğe ulaşmıyor/.test(c[2])), 'no "does not reach bone" record is emitted: ' + text());
+  assert.ok(S.g.L / 2 >= 12 + 0.6 + S.g.flange - 1e-9, 'the guide still covers both slots + flange: L ' + S.g.L);
+  assert.equal(JSON.stringify(St.cutMisses()), '[]', 'both cuts pass through bone');
+});
+
+test('a cut past the end of the bone: "Kesi 2 kemiği kesmiyor" is critical, the other cut is fine; hand-moved screws survive a re-placement', async () => {
+  await volume((x, y, z) => x > -48 && x < 20 && ellipseBar(10, 6)(x, y, z));
+  await plan([-12, 30]);
+  assert.equal(JSON.stringify(St.cutMisses()), '[1]');
+  assert.ok(checks().some(c => c[0] === 'crit' && /Kesi 2 kemiği kesmiyor/.test(c[2])), 'cut 2 reported: ' + text());
+  assert.ok(!checks().some(c => /Kesi 1 kemiği kesmiyor/.test(c[2])), 'cut 1 is through bone');
+  // the surgeon drags a screw: it is marked and kept where it is by the next automatic placement
+  const sc = S.screws.find(s => s.u < 0); sc.u = -30; sc.hand = 1;
+  St.placeScrews();
+  assert.ok(S.screws.some(s => s.hand && s.u === -30), 'hand-moved screw kept: ' + JSON.stringify(S.screws.map(s => [s.u, s.hand || 0])));
+  assert.equal(S.screws.filter(s => s.u < -12).length, per(), 'the hand-moved screw counts for its side; no extra automatic screw there');
+  S.screws = [];   // the hand-set screw must not leak into the next volume
+});
+
+test('long resection (76 mm between the cuts): the guide length follows the cuts and screws past 100 mm, every screw inside the body, split/length not capped', async () => {
+  await volume(ellipseBar(10, 6, 70), { x: 75, y: 24, z: 42 });
+  const R = await plan([-38, 38]);
+  const half = S.g.L / 2;
+  console.log(`    L ${S.g.L} screws ${S.screws.map(s => s.u).join(' ')}`);
+  assert.ok(S.g.L > 100 && S.g.L <= 160, 'length beyond the old 100 mm cap: ' + S.g.L);
+  assert.ok(S.screws.every(sc => Math.abs(sc.u) + sc.D / 2 <= half + 0.5), 'every screw inside the body');
+  assert.ok(!checks().some(c => /guide gövdesinin dışında/.test(c[2])), 'no "outside the body" check: ' + text());
+  assert.ok(screwsOk(R), 'sleeves on bone');
+});
+
+test('segmentChoice over defects of 20..90 mm on a 50 mm radius arc: every segment >= 20 mm, up to 4 segments, the fewest within 3 mm or else the smallest deviation', () => {
+  const sc = W.Fibula.segmentChoice, Rr = 50, rows = [];
+  for (let L = 20; L <= 90; L += 5) {
+    const table = [];
+    for (let n = 1; n <= W.Fibula.MAX_N; n++) { const l = L / n; table.push({ n, lens: Array(n).fill(l), dev: Rr * (1 - Math.cos(l / (2 * Rr))) }); }
+    const r = sc(table, L), ok = table.filter(t => t.lens.every(x => x >= 20));
+    assert.ok(r.lens.every(x => x >= 20 - 1e-9), `L ${L}: segment under 20 mm (n ${r.n})`);
+    const within = ok.filter(t => t.dev <= 3);
+    if (within.length) assert.equal(r.n, within[0].n, `L ${L}: fewest within 3 mm`);
+    else assert.ok(r.dev <= Math.min(...ok.map(t => t.dev)) + 0.5, `L ${L}: smallest deviation (${r.dev.toFixed(2)} vs ${Math.min(...ok.map(t => t.dev)).toFixed(2)})`);
+    rows.push(`${L}:${r.n}/${r.dev.toFixed(1)}`);
+  }
+  console.log('    L:n/dev ' + rows.join(' '));
+  assert.equal(W.Fibula.MAX_N, 4);
+  assert.equal(sc([{ n: 1, lens: [85], dev: 18 }, { n: 2, lens: [42, 43], dev: 4.6 }, { n: 3, lens: [28, 28, 29], dev: 2.1 }, { n: 4, lens: [21, 21, 21, 22], dev: 1.2 }], 85).n, 3, '85 mm: three segments reach 3 mm');
+  assert.equal(sc([{ n: 1, lens: [60], dev: 12 }, { n: 2, lens: [30, 30], dev: 6 }, { n: 3, lens: [20, 20, 20], dev: 3.5 }], 60).n, 3, '60 mm on a tight curve: the smallest deviation, not the fewest');
+});
+
 test('segmentChoice: a defect shorter than one segment is one segment ("short"); otherwise the fewest segments within the deviation, never one under 20 mm when another count avoids it', () => {
   const sc = W.Fibula.segmentChoice, row = (n, lens, dev) => ({ n, lens, dev });
   let r = sc([row(1, [15], 0.5), row(2, [7.5, 7.5], 0.1)], 15); assert.equal(r.n, 1); assert.equal(r.reason, 'short');

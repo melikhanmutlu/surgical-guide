@@ -74,6 +74,31 @@ class TestArch(unittest.TestCase):
             self.assertGreater(np.dot(b, A.point(s) - A.center), 0)
             self.assertLess(abs(np.dot(b, A.tangent(s))), 1e-6)
 
+    def test_arch_continues_up_both_rami_to_the_condyles(self):
+        _, _, A = arch()
+        lo, hi = A.s_body
+        self.assertLess(lo, -40); self.assertGreater(hi, 40)
+        self.assertGreater(A.ramus_mm[0], 25, "right ramus on the arch: " + str(A.ramus_mm))
+        self.assertGreater(A.ramus_mm[1], 25, "left ramus on the arch")
+        self.assertAlmostEqual(A.s[0], lo - A.ramus_mm[0], delta=0.6); self.assertAlmostEqual(A.s[-1], hi + A.ramus_mm[1], delta=0.6)
+        for sign, end in ((-1, lo), (1, hi)):
+            top = A.point(end + sign * A.ramus_mm[0 if sign < 0 else 1] - 1)
+            self.assertGreater(top[2], A.point(end)[2] + 20, "the ramus end is well above the angle")
+            self.assertGreater(sign * top[0], 30, "on the patient's side")
+            t = A.tangent(end + sign * 15)
+            self.assertGreater(sign * t[2], 0.7, "the tangent climbs the ramus with s running away from the chin: " + str(t))
+            self.assertTrue(A.on_ramus(end + sign * 5)); self.assertFalse(A.on_ramus(end - sign * 5))
+        self.assertFalse(A.on_ramus(0.0))
+
+    def test_buccal_on_the_ramus_is_lateral_unit_and_perpendicular_to_the_tangent(self):
+        _, _, A = arch()
+        for sign, end in ((-1, A.s_body[0]), (1, A.s_body[1])):
+            s = end + sign * 15
+            b, t = A.buccal(s), A.tangent(s)
+            self.assertAlmostEqual(np.linalg.norm(b), 1.0, places=6)
+            self.assertLess(abs(np.dot(b, t)), 0.05)
+            self.assertGreater(sign * b[0], 0.9, "points away from the midline: " + str(b))
+
     def test_closest_s_inverts_point(self):
         _, _, A = arch()
         for s in (-25.0, 0.0, 17.5):
@@ -134,6 +159,22 @@ class TestPlan(unittest.TestCase):
             self.assertGreaterEqual(b["fib_start"] - a["fib_end"], p["kerf"] + 1.0, "cuts of neighbours are kept apart")
         self.assertAlmostEqual(segs[0]["fib_start"] - self.F.s_min, 70.0, places=6, msg="distal margin")
         self.assertTrue(np.allclose(p["points"][0], self.A.point(-25)))
+
+    def test_ramus_resection_is_plannable_and_its_guides_are_built(self):
+        A = self.A
+        s0 = A.s_body[1] + 4
+        p = P.make_plan(A, self.F, s0, s0 + 30)
+        self.assertGreaterEqual(p["n_segments"], 1)
+        self.assertGreater(p["points"][-1][2], p["points"][0][2] + 20, "the defect climbs the ramus")
+        self.assertFalse(any("outside" in w for w in p["warnings"]))
+        for which in (0, 1):
+            vol, m, _ = arch()
+            mesh, plane, rep = Gd.mandible_guide(vol, m, A, p, which, h=0.5)
+            self.assertGreater(len(mesh.faces), 100, rep)
+            self.assertIn("seat", rep)
+        with self.assertRaises(ValueError) as cm:
+            P.make_plan(A, self.F, A.s[-1] - 10, A.s[-1] + 30)
+        self.assertIn("condyle to condyle", str(cm.exception))
 
     def test_wedge_spacing_keeps_cuts_from_crossing_inside_bone(self):
         p = P.make_plan(self.A, self.F, -25, 25, n_segments=3, kerf=1.0)
@@ -245,10 +286,12 @@ class TestSegmentChoiceAndKerf(unittest.TestCase):
         lens = [float(np.linalg.norm(self.A.point(b) - self.A.point(a))) for a, b in zip(knots[:-1], knots[1:])]
         self.assertTrue(all(x >= 20.0 - 1e-6 for x in lens), lens)
         ok = [c for c in d["candidates"] if c["shortest_segment_mm"] >= 20.0]
-        self.assertEqual(n, max(c["n"] for c in ok))
+        # the smallest deviation among the counts that keep every segment >= 20 mm (fewer segments on a tie within 0.5 mm)
+        self.assertLessEqual(dev, min(c["deviation_mm"] for c in ok) + 0.5)
+        self.assertTrue(all(c["deviation_mm"] >= dev - 0.5 for c in ok if c["n"] < n), "a smaller count only loses by > 0.5 mm: " + str(ok))
         self.assertTrue(any(c["shortest_segment_mm"] < 20.0 for c in d["candidates"]), "the table shows the rejected count too: " + str(d))
         p = P.make_plan(self.A, self.F, -30, 30, tol_mm=0.01)
-        self.assertTrue(any("most segments that keep every segment" in x for x in p["warnings"]), p["warnings"])
+        self.assertTrue(any("smallest deviation among the counts" in x for x in p["warnings"]), p["warnings"])
         # a reachable tolerance (just above the deviation of the first count that keeps every segment >= 20 mm): the
         # fewest segments within it
         tol = ok[0]["deviation_mm"] + 0.05

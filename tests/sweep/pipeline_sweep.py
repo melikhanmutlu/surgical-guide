@@ -39,19 +39,28 @@ def arch_extent(repo, dataset, mand_dir, cache):
     vol = phantom.mandible_phantom() if dataset == "demo" else Volume.from_dicom_dir(mand_dir)
     mask, info = segment.mandible_bone(vol, hu=250.0)
     arch = planning.Arch(vol, mask)
-    out = dict(sMin=float(arch.s[0]), sMax=float(arch.s[-1]), seg=dict((k, (float(v) if isinstance(v, (int, float)) else str(v))) for k, v in info.items()), seconds=time.time() - t0)
+    body = getattr(arch, "s_body", (float(arch.s[0]), float(arch.s[-1])))
+    out = dict(sMin=float(arch.s[0]), sMax=float(arch.s[-1]), bodyMin=float(body[0]), bodyMax=float(body[1]),
+               seg=dict((k, (float(v) if isinstance(v, (int, float)) else str(v))) for k, v in info.items()), seconds=time.time() - t0)
     json.dump(out, open(cache, "w"), indent=1)
     del vol, mask, arch
     return out
 
 
 def cell(arch, region, side, length):
-    """(s_a, s_b) of the resection and whether it lies inside the detected arch."""
+    """(s_a, s_b) of the resection and whether it lies inside the detected arch. The body regions sit on the body arch
+    (bodyMin .. bodyMax, the angles; older arch files without a body extent: the whole arch); the ramus at 45 % of the
+    way from the angle to the condyle, the condyle cell ends 2 mm below the arch end (open towards the condyle)."""
     sign = 1 if side == "L" else -1
     s_end = arch["sMax"] if sign > 0 else arch["sMin"]
-    half = abs(s_end)
-    c = {"symphysis": sign * 4, "parasymphysis": sign * 0.30 * half, "body": sign * 0.62 * half, "angle": s_end - sign * 6,
-         "ramus": s_end + sign * 25, "condyle": s_end + sign * 50}[region]
+    s_ang = arch.get("bodyMax" if sign > 0 else "bodyMin", s_end)
+    half = abs(s_ang)
+    if region == "condyle":
+        b = s_end - sign * 2
+        a, b = sorted([b, b - sign * length])
+        return round(a, 1), round(b, 1), bool(a >= arch["sMin"] and b <= arch["sMax"])
+    c = {"symphysis": sign * 4, "parasymphysis": sign * 0.30 * half, "body": sign * 0.62 * half, "angle": s_ang - sign * 6,
+         "ramus": s_ang + 0.45 * (s_end - s_ang)}[region]
     a, b = sorted([c - length / 2, c + length / 2])
     return round(a, 1), round(b, 1), bool(a >= arch["sMin"] and b <= arch["sMax"])
 
