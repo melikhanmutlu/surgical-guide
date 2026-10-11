@@ -238,7 +238,7 @@
     const T = xf(v), w = toWorld(imgToIdx(v, T.ix(X), T.iy(Y))), q = V(...w), pw = St.planesWorld()[i], { u } = St.frameAxes();
     const un = u.dot(pw.N); if (Math.abs(un) < 0.2) return;
     const off = Math.round(q.clone().sub(S.anchor.p).dot(pw.N) / un * 2) / 2;
-    S.planes[i].off = Math.max(-30, Math.min(30, off)); St.unapprove(S.planes[i]);
+    S.planes[i].off = Math.max(-45, Math.min(45, off)); St.unapprove(S.planes[i]);
     St.emit('planeDragged', i); redraw();
   }
 

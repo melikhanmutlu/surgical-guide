@@ -48,12 +48,15 @@ window.Unzip = (function () {
     }
     return out;
   }
-  async function data(file, en) {
+  async function data(file, en, budget = Infinity) {
     const h = await view(file.slice(en.off, en.off + 30)); if (u32(h, 0) !== 0x04034b50) throw new Error('zip kaydı bozuk');
     const start = en.off + 30 + u16(h, 26) + u16(h, 28), raw = file.slice(start, start + en.csize);
     if (en.method === 0) return raw;
     if (en.method !== 8) throw new Error(`desteklenmeyen sıkıştırma (${en.method})`);
-    return new Response(raw.stream().pipeThrough(new DecompressionStream('deflate-raw'))).blob();
+    // the declared size can lie (zip bomb): stop inflating as soon as more than that comes out
+    let seen = 0; const cap = Math.min(en.size, budget);
+    const guard = new TransformStream({ transform(chunk, ctl) { seen += chunk.byteLength; if (seen > cap) ctl.error(new Error('zip açıldığında çok büyük (6 GB üstü)')); else ctl.enqueue(chunk); } });
+    return new Response(raw.stream().pipeThrough(new DecompressionStream('deflate-raw')).pipeThrough(guard)).blob();
   }
 
   // files (File or zip) -> files, with every zip replaced by its contents; each item has name and relPath
@@ -69,7 +72,7 @@ window.Unzip = (function () {
         i++; if (en.name.endsWith('/') || junk(en.name)) continue;
         if (en.flags & 1 || (en.method !== 0 && en.method !== 8)) { skipped.push(en.name); continue; }   // encrypted or unsupported
         if (total + en.size > LIMIT.bytes) throw new Error('zip açıldığında çok büyük (6 GB üstü)');
-        const blob = await data(f, en), base = en.name.split('/').pop();
+        const blob = await data(f, en, LIMIT.bytes - total), base = en.name.split('/').pop();
         // the declared size can lie (zip bomb): count what actually came out
         total += blob.size; if (total > LIMIT.bytes) throw new Error('zip açıldığında çok büyük (6 GB üstü)');
         const file = new File([blob], base), rel = root + '/' + en.name;

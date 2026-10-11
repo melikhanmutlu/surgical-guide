@@ -13,7 +13,7 @@ window.Dates = (function () {
   const fibDate = () => { const st = window.Fibula && Fibula.active() ? Fibula.state() : null; return st && st.F ? ctOf(st.F.vol) : ''; };
   const days = (a, b) => Math.round((Date.parse(b) - Date.parse(a)) / 86400000);
   const tr = d => (d ? new Date(d + 'T12:00:00').toLocaleDateString('tr-TR') : '–');
-  const today = () => new Date().toISOString().slice(0, 10);
+  const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };   // local date, not UTC
 
   (window.ExtraChecks = window.ExtraChecks || []).push(() => {
     const out = [], ct = ctDate(), fd = fibDate();
