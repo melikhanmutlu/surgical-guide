@@ -779,6 +779,7 @@
     // the sleeve must stand on the guide body: an entry deeper than the wrap limit at that position (bone dropping away
     // under a guide end) would leave the sleeve floating free of the shell
     if (bodyTop && !sc.part) { const { n } = frameAxes(), depth = s.entry.clone().sub(S.anchor.p).dot(n); if (depth < bodyTop(sc.u) - S.g.wrap + S.g.clear + (S.g.peri || 0) + S.g.wall + 2.5) return -Infinity; }
+    if (sc.part) { const f = screwFrame(sc), depth = s.entry.clone().sub(f.P).dot(f.n); if (depth < -(S.g.wrap + 3) || depth > 15) return -Infinity; }
     let inBone = 0, cross = false;
     for (let t = 0; t <= sc.len; t += 0.25) {
       const q = s.entry.clone().add(s.dir.clone().multiplyScalar(t));
@@ -878,12 +879,15 @@
     const f = pieceFrames(); if (!f) return null;
     const out = [];
     for (const [cut, part] of [[f.A, -1], [f.B, 1]]) {
+      const placed = [];
       for (const v0 of per === 2 ? [-4, 4] : [0]) {
         // the spot: `gap` past the stump face; where the drill would cross the cut or find little bone (the bone turning
-        // away under the piece frame), further out along the piece axis and a little sideways, the first good spot taken
+        // away under the piece frame), further out along the piece axis and sideways (a narrow ramus keeps its bone to
+        // one side), the first good spot taken; the piece's screws stay a sleeve diameter apart
         let first = null, firstScore = -Infinity;
-        search: for (const gp of [gap, 9, 11, 13, 15]) for (const dv of [0, 2, -2, 4, -4]) {
+        search: for (const gp of [gap, 9, 11, 13, 15]) for (const dv of [0, 2, -2, 4, -4, 6, -6, 8, -8, 10, -10]) {
           const uu = Math.round((gp + stumpGap(cut) + def.D / 2) * 2) / 2, vv = v0 + dv;
+          if (placed.some(q => Math.hypot(q.u - uu, q.v - vv) < def.D + 1)) continue;
           let best = Object.assign({ u: uu, v: vv, tiltU: 0, tiltV: 0, ok: false, part }, def), bs = screwScore(best, pls, null);
           if (!Number.isFinite(bs)) bs = -Infinity;
           for (let tu = -20; tu <= 20; tu += 5) for (let tv = -20; tv <= 20; tv += 5) {
@@ -893,7 +897,7 @@
           if (!first || bs > firstScore) { first = best; firstScore = bs; }
           if (bs > 50) break search;
         }
-        out.push(first);
+        out.push(first); placed.push(first);
       }
     }
     return out;
@@ -1636,8 +1640,9 @@
       const { u, v } = frameAxes(), half = S.g.L / 2;
       // (two guides on their own frames: each piece is sized around its cut, the common length does not apply)
       if (S.g.split !== 2) planesWorld().forEach((pw, i) => {
-        const un = Math.max(0.2, Math.abs(pw.N.dot(u))), ext = Math.abs(pw.off) + S.g.W / 2 * Math.abs(pw.N.dot(v)) / un;
-        if (Math.abs(pw.off) > half - 1) out.push(['crit', 'Kritik', `Kesi ${i + 1} guide gövdesinin dışında (${fmt(pw.off, 1)} mm, guide ±${fmt(half, 1)} mm); guide'ı uzatın ya da iki guide seçin.`, 'p' + i]);
+        if (S.bonelessCut === i) return;   // a cut past the condyle meets no bone: the guide need not reach it
+        const uc0 = S.g.uc || 0, un = Math.max(0.2, Math.abs(pw.N.dot(u))), ext = Math.abs(pw.off - uc0) + S.g.W / 2 * Math.abs(pw.N.dot(v)) / un;
+        if (Math.abs(pw.off - uc0) > half - 1) out.push(['crit', 'Kritik', `Kesi ${i + 1} guide gövdesinin dışında (${fmt(pw.off, 1)} mm, guide ±${fmt(half, 1)} mm); guide'ı uzatın ya da iki guide seçin.`, 'p' + i]);
         else if (ext > half) out.push(['warn', 'Uyarı', `Kesi ${i + 1} yuvası guide'ın bir kenarında dışarı taşıyor; guide'ı biraz uzatın.`, 'p' + i]);
       });
       S.screws.forEach((sc, i) => {
