@@ -1445,4 +1445,5 @@ window.I18N_EN = {
 "Osteotomi Mandibula # – segment #: planlanan aralık # mm (örnek eşik # mm). Kesi yuvasını daraltın ya da testere payını rezeke tarafa alın.": "Osteotomy Mandible # – segment #: planned gap # mm (sample threshold # mm). Narrow the cut slot or move the saw kerf to the resected side.",
 "Osteotomi Mandibula # – segment # (üst): planlanan aralık # mm (örnek eşik # mm). Kesi yuvasını daraltın ya da testere payını rezeke tarafa alın.": "Osteotomy Mandible # – segment # (upper): planned gap # mm (sample threshold # mm). Narrow the cut slot or move the saw kerf to the resected side.",
 "Osteotomi Segment # – segment #: planlanan aralık # mm (örnek eşik # mm). Kesi yuvasını daraltın ya da testere payını rezeke tarafa alın.": "Osteotomy Segment # – segment #: planned gap # mm (sample threshold # mm). Narrow the cut slot or move the saw kerf to the resected side.",
+"Elle değiştirilen uzunluk, genişlik ve sarmayı yeniden kemiğe göre seçer": "Chooses the hand-changed length, width and wrap from the bone again"
 };
