@@ -87,8 +87,12 @@ run_pipeline.py         uçtan uca komut
 - `web/`: tarayıcı stüdyosu (statik dosyalar; herhangi bir web sunucusundan açılır). Vaka kaydı, sürüm geçmişi,
   geri alma, aksiyel/koronal/sagittal kesitler, oturma analizi, sıkıştırılmış DICOM (codecs.js), fibula akışı (fibula.js).
 - `python3 yolmed_server.py --backend threshold --port 8800 --db ./yolmed_cases.sqlite`: segmentasyon,
-  vaka kaydı (`/cases`, yalnız plan JSON'u, görüntü saklanmaz) ve Manifold ile su geçirmez üretim STL'i (`/guide`).
-  Test: `python3 test_yolmed_server.py`.
+  vaka kaydı (`/cases`, yalnız plan JSON'u, görüntü saklanmaz) ve su geçirmez üretim STL'i (`/guide`). Üretim STL'i
+  tarayıcı önizlemesinin tasarımıdır (`web/app.js buildGuide`: takma yönüne göre zarf üzerinde gövde, konuma göre sarma,
+  kesi yuvaları, zarftan uzak vida kılıfları, delikler; iki parçalı guide'da parça başına bir istek) 0,2 mm ızgarada tek
+  marching cubes ile; aynı istek her zaman aynı STL'i verir.
+  Test: `python3 test_yolmed_server.py`; sunucu STL'i ile önizlemenin karşılaştırması (hacim, yüzey uzaklığı):
+  `python3 tests/test_server_preview.py` (örnek vaka ve sentetik kavisli çene; `--real <DICOM klasörü>` ile gerçek seri).
 - Stüdyo sunucuya ulaşırsa vakaları sunucuya, ulaşamazsa yayınlanan sayfanın kendi veritabanına ya da tarayıcıya kaydeder.
 
 ## Railway'e yayın
