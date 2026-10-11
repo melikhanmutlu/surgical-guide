@@ -94,13 +94,39 @@ test('buildGuide: screwInfo flags a screw that crosses a cut and one that leaves
   assert.equal(c.ok, false, 'no entry -> not ok');
 });
 
-test('buildGuide: screw-vs-cut: slotGap measures the screw surface (axis minus radius) to the slot edge; the 0.5 mm axis check is unchanged', async () => {
+test('buildGuide: screw-vs-cut: slotGap = slot edge to the sleeve surface (radius D/2, warning below 0.5 mm); the drill (radius d/2) inside the slot is critical (B16)', async () => {
   const sc = { d: 2, D: 5, sleeveH: 5, len: 10 };
-  const o = await build({ pls: [{ p: V(0, 0, 0), N: V(1, 0, 0), w: 1.2 }], scs: [{ sc, dir: V(0, 0, -1), entry: V(1.4, 0, 0) }, { sc: { d: 3, D: 6, sleeveH: 5, len: 10 }, dir: V(0, 0, -1), entry: V(1.9, 0, 0) }, { sc, dir: V(0, 0, -1), entry: V(5, 0, 0) }, { sc, dir: V(0, 0, -1), entry: V(0.9, 0, 0) }] });
+  const o = await build({ pls: [{ p: V(0, 0, 0), N: V(1, 0, 0), w: 1.2 }], scs: [{ sc, dir: V(0, 0, -1), entry: V(1.4, 0, 0) }, { sc: { d: 3, D: 6, sleeveH: 5, len: 10 }, dir: V(0, 0, -1), entry: V(1.9, 0, 0) }, { sc, dir: V(0, 0, -1), entry: V(5, 0, 0) }, { sc, dir: V(0, 0, -1), entry: V(3.4, 0, 0) }] });
   const [a, b, c, d] = o.result.screwInfo;
-  near(a.slotGap, 1.4 - 0.6 - 1.0, 0.02, 'axis 1.4 from centre, slot half 0.6, radius 1.0 -> -0.2 mm (touches the slot)'); assert.equal(a.crossesPlane, false, 'axis still clears the 0.5 mm axis margin');
-  near(b.slotGap, 1.9 - 0.6 - 1.5, 0.02, 'd=3'); near(c.slotGap, 5 - 0.6 - 1.0, 0.02, 'far screw');
-  assert.equal(d.crossesPlane, true, 'axis 0.9 mm from the centre is within 0.6 + 0.5');
+  near(a.slotGap, 1.4 - 0.6 - 2.5, 0.02, 'axis 1.4 from centre, slot half 0.6, sleeve radius 2.5 -> -1.7 mm'); assert.equal(a.crossesPlane, true, 'drill edge at 1.4 - 1.0 = 0.4 < 0.6: the drill cuts into the slot');
+  near(b.slotGap, 1.9 - 0.6 - 3.0, 0.02, 'D=6'); assert.equal(b.crossesPlane, true, 'd=3: drill edge 0.4 from the centre');
+  near(c.slotGap, 5 - 0.6 - 2.5, 0.02, 'far screw: 1.9 mm clearance, no warning'); assert.equal(c.crossesPlane, false);
+  near(d.slotGap, 3.4 - 0.6 - 2.5, 0.02, 'axis 3.4: drill clears (2.4 > 0.6) but the sleeve is only 0.3 mm from the slot -> warning range'); assert.equal(d.crossesPlane, false);
+  // the slot sits on pSlot when given (kerf on the resected side): the same screw is 0.6 mm further from a slot shifted away from it
+  const o2 = await build({ pls: [{ p: V(0, 0, 0), pSlot: V(-0.6, 0, 0), N: V(1, 0, 0), w: 1.2 }], scs: [{ sc, dir: V(0, 0, -1), entry: V(3.4, 0, 0) }] });
+  near(o2.result.screwInfo[0].slotGap, 4.0 - 0.6 - 2.5, 0.02, 'slot centre moved to -0.6');
+  assert.equal(occ(o2.grid, -0.6, 0, G0.clear + G0.wall / 2), 0, 'slot empty at pSlot'); assert.equal(occ(o2.grid, 0.4, 0, G0.clear + G0.wall / 2), 1, 'material on the plane side beyond the slot');
+});
+
+test('buildGuide: a screw whose bone entry lies below the wrap limit (bone dropping away) gets no floating sleeve and is reported (noBody)', async () => {
+  // the wrap limit follows the bone top per u: a screw entering the lateral face 10 mm below the top (wrap 6) and one beyond the guide end have no body under them
+  const sc = { d: 2, D: 5, sleeveH: 5, len: 10 };
+  const o = await build({ g: { L: 40, wrap: 6 }, scs: [{ sc, dir: V(0, 0, -1), entry: V(-10, 0, 0) }, { sc, dir: V(0, -1, 0), entry: V(10, 8, -10) }, { sc, dir: V(0, 0, -1), entry: V(30, 0, 0) }] });
+  const [a, b, c] = o.result.screwInfo;
+  assert.ok(a.ok, 'screw on the bar top has a sleeve');
+  assert.equal(b.ok, false); assert.equal(b.noBody, true, 'entry 4 mm below the wrap limit: no sleeve'); assert.ok(b.depth < -3 && b.depth > -5, 'depth below the limit reported: ' + b.depth);
+  assert.equal(c.ok, false); assert.equal(c.noBody, true, 'entry beyond L/2: no sleeve');
+  assert.equal(o.result.pieces, 1, 'no floating sleeve body');
+});
+
+test('buildGuide: wrap profile g.wrapU caps the depth per position; g.vc shifts the body across v', async () => {
+  const o = await build({ g: { wrap: 6, wrapU: [[-20, 6], [0, 6], [10, 3], [20, 3]] } }), gr = o.grid;
+  const deepest = x => { let d = 0; for (let k = 0; k < gr.nz; k++) for (let j = 0; j < gr.ny; j++) { const i = Math.round((x - gr.lo[0]) / gr.h); if (gr.Gm[i + gr.nx * (j + gr.ny * k)]) d = Math.min(d, gr.lo[2] + k * gr.h); } return d; };
+  assert.ok(deepest(-10) <= -5.5 && deepest(-10) >= -6 - 1e-6, 'full wrap at the -u end: ' + deepest(-10));
+  assert.ok(deepest(15) >= -3 - 1e-6 && deepest(15) <= -2.5, 'capped at 3 mm at the +u end: ' + deepest(15));
+  const o2 = await build({ g: { W: 12, vc: 4 } }), g2 = o2.grid, nn = G0.clear + G0.wall / 2;
+  assert.equal(occ(g2, 0, 4 + 5, nn), 1, 'body reaches v = 9 (vc 4 + W/2 6 - margin)'); assert.equal(occ(g2, 0, -3, nn), 0, 'nothing at v = -3 (below vc - W/2 = -2)');
+  assert.equal(o2.result.pieces, 1);
 });
 
 test('buildGuide: split mode makes two pieces with nothing between the outer cuts (beyond the flange)', async () => {

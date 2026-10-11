@@ -26,7 +26,34 @@ window.Fibula = (function () {
   const msg = t => { $('fibMsg').textContent = t || ''; $('fibMsg').hidden = !t; };
   // vOff: graft shift towards the occlusal plane; dbl: double barrel (a second strut stacked dblH mm above);
   // fg / fsc: fibula guide body and screw edits (null = automatic)
-  const defaultPlan = () => ({ source: null, cand: null, mirror: 0, n: 2, knots: [0.5], yaw: [0, 0, 0], pitch: [0, 0, 0], roll: [0, 0], kerf: 1.0, distal: 70, vOff: 0, dbl: 0, dblH: null, fg: null, fsc: null, ok: false });
+  // nAuto: the segment count is still chosen from the defect (pressing a count button takes it over by hand)
+  const defaultPlan = () => ({ source: null, cand: null, mirror: 0, n: 2, nAuto: 1, knots: [0.5], yaw: [0, 0, 0], pitch: [0, 0, 0], roll: [0, 0], kerf: 1.0, distal: 70, vOff: 0, dbl: 0, dblH: null, fg: null, fsc: null, ok: false });
+  // Segment count for a defect of length L from a table of candidates [{n, lens, dev}] (one row per count tried):
+  // a defect shorter than one segment is one segment (nothing can make it longer); otherwise the fewest segments that
+  // keep every segment >= minLen and follow the defect within devWarn; if no count reaches the deviation target, the
+  // largest count that still keeps every segment >= minLen (a short segment is never traded for a smaller deviation).
+  function segmentChoice(table, L, minLen = MIN_LEN, devWarn = DEV_WARN) {
+    const rows = table.slice().sort((a, b) => a.n - b.n), okLen = r => r.lens.every(x => x >= minLen - 1e-9);
+    if (L < minLen) { const r = rows.find(x => x.n === 1) || rows[0]; return { n: r.n, reason: 'short', dev: r.dev, lens: r.lens }; }
+    const good = rows.find(r => okLen(r) && r.dev <= devWarn);
+    if (good) return { n: good.n, reason: 'dev', dev: good.dev, lens: good.lens, rejected: rows.filter(r => r.n < good.n).map(r => ({ n: r.n, dev: r.dev, min: Math.min(...r.lens) })) };
+    const longest = rows.filter(okLen).sort((a, b) => b.n - a.n)[0];
+    if (longest) return { n: longest.n, reason: 'len', dev: longest.dev, lens: longest.lens, rejected: rows.filter(r => !okLen(r)).map(r => ({ n: r.n, dev: r.dev, min: Math.min(...r.lens) })) };
+    const r = rows.find(x => x.n === 1) || rows[0];
+    return { n: r.n, reason: 'short', dev: r.dev, lens: r.lens };
+  }
+  // try 1..3 segments on the defect D (knots optimised for each) and pick with segmentChoice; the plan's n / knots are set
+  function chooseSegments(D) {
+    const P0 = plan(), table = [];
+    for (let n = 1; n <= 3; n++) {
+      setN(n); last = compute(D); optimizeKnots(); const c = compute(D);
+      table.push({ n, lens: c.segs.filter(g => !g.barrel).map(g => g.L), dev: c.dev, knots: P0.knots.slice() });
+    }
+    const pick = segmentChoice(table, D.L);
+    setN(pick.n); P0.knots = table.find(r => r.n === pick.n).knots;
+    S.fib.choice = Object.assign(pick, { L: D.L, table: table.map(r => ({ n: r.n, dev: +r.dev.toFixed(2), min: +Math.min(...r.lens).toFixed(1) })) });
+    return pick;
+  }
 
   // ---------- small linear algebra ----------
   function eig3(A) {          // Jacobi; returns [{val, vec:[3]}] sorted by value, descending
@@ -486,7 +513,17 @@ window.Fibula = (function () {
     if (F.c && F.c.FR > FIB_R[1]) out.push(['warn', 'Uyarı', `Seçili fibula yarıçapı ${fmt(F.c.FR, 1)} mm (en çok ${FIB_R[1]} mm beklenir); tibia ya da ayak kemikleri fibulaya karışmış olabilir. Başka bir aday seçin ya da BT'yi kontrol edin.`, 'fib']);
     if (F.warn) F.warn.forEach(t => out.push(['warn', 'Uyarı', t, 'fib']));
     if (!c) return out.concat([['warn', 'Uyarı', S.segWarn && S.segWarn.length ? 'Fibula: mandibula kemiği şüpheli (Kontroller sekmesindeki kemik uyarısına bakın); iki kesi ve rezeke parça olmadan segment planı kurulamaz.' : 'Fibula: mandibulada iki kesi ve rezeke parça olmadan segment planı kurulamaz.']]);
-    c.segs.forEach(g => { if (g.L < MIN_LEN) out.push(['crit', 'Kritik', `Fibula segmenti ${g.i + 1} ${fmt(g.L)} mm; en az ${MIN_LEN} mm olmalı (kanlanma riski).`]); });
+    // a defect shorter than one segment: one segment, reported once as a warning (no count can make it longer)
+    const shortDefect = c.D.L < MIN_LEN && c.segs.filter(g => !g.barrel).length === 1;
+    if (shortDefect) out.push(['warn', 'Uyarı', `Defekt ${fmt(c.D.L)} mm, tek segment ${MIN_LEN} mm'nin altında kalıyor (kısa rezeksiyon); segment bölünmedi. Kanlanma için greft boyunu cerrahla değerlendirin.`]);
+    else c.segs.forEach(g => { if (g.L < MIN_LEN) out.push(['crit', 'Kritik', `Fibula segmenti ${g.i + 1} ${fmt(g.L)} mm; en az ${MIN_LEN} mm olmalı (kanlanma riski).`]); });
+    const ch = S.fib.choice;
+    if (ch && ch.table && ch.table.length && P0.nAuto && Math.abs(ch.L - c.D.L) < 0.5) {
+      const tbl = ch.table.map(r => `${r.n}: ${fmt(r.min)}/${fmt(r.dev)}`).join('; ');
+      out.push(['info', 'Bilgi', ch.reason === 'short' ? `Segment sayısı otomatik seçildi: ${ch.n} (defekt bir segmentten kısa). Denenen sayılar (en kısa segment mm / sapma mm): ${tbl}.`
+        : ch.reason === 'dev' ? `Segment sayısı otomatik seçildi: ${ch.n} (en az segmentle sapma ≤ ${DEV_WARN} mm). Denenen sayılar (en kısa segment mm / sapma mm): ${tbl}.`
+          : `Segment sayısı otomatik seçildi: ${ch.n} (sapma hedefi tutmuyor; ${MIN_LEN} mm altı segment vermeyen en çok segment). Denenen sayılar (en kısa segment mm / sapma mm): ${tbl}.`]);
+    }
     c.segs.forEach(g => [['başlangıç', g.a0], ['bitiş', g.a1]].forEach(([w, a]) => { if (a > ANGLE_WARN) out.push(['warn', 'Uyarı', `Fibula segmenti ${g.i + 1} ${w} kesisi ${fmt(a)}°; ${ANGLE_WARN}° üstü temas yüzeyini azaltır.`]); }));
     if (c.dev > DEV_WARN) out.push(['warn', 'Uyarı', `Greftler defekt hattından ${fmt(c.dev)} mm sapıyor (eşik ${DEV_WARN} mm). Segment ekleyin ya da "Kesileri öner"i kullanın.`]);
     if (P0.distal < DISTAL_MIN) out.push(['crit', 'Kritik', `Distal korunan fibula ${fmt(P0.distal, 0)} mm; ayak bileği stabilitesi için en az ${DISTAL_MIN} mm.`]);
@@ -499,7 +536,11 @@ window.Fibula = (function () {
       if (R.seat && R.seat.ok && !R.seat.free) out.push(['crit', 'Kritik', ad ? `Fibula guide'ı hiçbir yönde takılamıyor; sarma derinliği ${fmt(ad.from, 1)} mm'den ${fmt(ad.to, 1)} mm'ye indirildi, yine de takılamıyor.${shortSeg ? ' Segment 20 mm\'den kısa; kesileri kısa tutmak guide\'ın oturmasını bozuyor.' : ''}` : 'Fibula guide\'ı hiçbir yönde takılamıyor; sarma derinliği fazla.']);
       else if (ad && ad.ok) out.push(['info', 'Bilgi', `Fibula guide'ı takılabilsin diye sarma derinliği ${fmt(ad.from, 1)} mm'den ${fmt(ad.to, 1)} mm'ye indirildi.`]);
       if (R.contact < 100) out.push(['warn', 'Uyarı', `Fibula guide'ı temas alanı ${fmt(R.contact, 0)} mm²; oturma belirsiz olabilir.`]);
-      R.screwInfo.forEach((si, i) => { if (!si.ok) out.push(['crit', 'Kritik', `Fibula vidası ${i + 1} kemiğe ulaşmıyor.`]); else if (si.crossesPlane) out.push(['crit', 'Kritik', `Fibula vidası ${i + 1} kesi hattından geçiyor.`]); });
+      R.screwInfo.forEach((si, i) => {
+        if (!si.ok) out.push(['crit', 'Kritik', si.noBody ? `Fibula vidası ${i + 1} altında guide gövdesi yok; kovan boşlukta kalırdı.` : `Fibula vidası ${i + 1} kemiğe ulaşmıyor.`]);
+        else if (si.crossesPlane) out.push(['crit', 'Kritik', `Fibula vidası ${i + 1} matkap yolu kesi yuvasıyla kesişiyor.`]);
+        else if (si.slotGap < 0.5) out.push(['warn', 'Uyarı', `Fibula vidası ${i + 1} kovanı kesi yuvasına ${fmt(Math.max(0, si.slotGap))} mm yaklaşıyor (en az 0,5 mm); testere yoluna değebilir.`]);
+      });
     }
     return out;
   }
@@ -544,7 +585,10 @@ window.Fibula = (function () {
   // recompute the plan from the current mandible and fibula state; user edits also create a history entry
   function update() {
     if (!active()) { if (grafts) draw(null); return; }
-    const D = defect(); last = D ? compute(D) : null;
+    const D = defect();
+    // an automatic segment count follows the defect: a new resection length (cuts moved, condyle, first defect) is planned again
+    if (D && plan().nAuto && !(S.fib.choice && Math.abs(S.fib.choice.L - D.L) < 0.5)) chooseSegments(D);
+    last = D ? compute(D) : null;
     draw(last); renderStep(); St.updatePanels();
     if (last) scheduleGuide();
   }
@@ -581,18 +625,9 @@ window.Fibula = (function () {
     const P0 = defaultPlan(); P0.source = Object.assign({}, F.source); P0.cand = F.c.centroid.map(x => Math.round(x * 10) / 10);
     S.fib = { plan: P0, guide: null };
     if (pending && pending.source && pending.source.fp === F.source.fp) { const p = pending; pending = null; await apply(p); return; }
-    // fewest segments that follow the defect within DEV_WARN while every segment stays >= MIN_LEN
+    // segment count from the defect (segmentChoice); re-chosen while the plan stays automatic and the defect changes
     const D = defect();
-    if (D) {
-      let pick = null;
-      for (let n = 1; n <= 3; n++) {
-        setN(n); last = compute(D); optimizeKnots(); const c = compute(D);
-        const okLen = c.segs.every(g => g.L >= MIN_LEN), score = [okLen ? 0 : 1, c.dev > DEV_WARN ? 1 : 0, n];
-        if (!pick || score < pick.score) pick = { n, score, knots: P0.knots.slice() };
-        if (okLen && c.dev <= DEV_WARN) break;
-      }
-      setN(pick.n); P0.knots = pick.knots;
-    }
+    if (D) chooseSegments(D);
     if (St.parts.resected) { St.parts.resected.visible = false; St.parts.resected.obj.visible = false; }
     guideKey = ''; update(); syncUI(); setView('f'); St.emit('changed');
   }
@@ -605,7 +640,7 @@ window.Fibula = (function () {
     q.kerf = num(q.kerf, 0) > 0 ? cl(q.kerf, 0.5, 2, D0.kerf) : D0.kerf;
     q.distal = cl(q.distal, 40, 140, D0.distal); q.vOff = cl(q.vOff, -12, 12, 0);
     q.dblH = q.dblH == null ? null : cl(q.dblH, 8, 30, 8); q.dbl = q.dbl ? 1 : 0;
-    q.n = Math.round(cl(q.n, 1, 3, 2));
+    q.n = Math.round(cl(q.n, 1, 3, 2)); q.nAuto = q.nAuto ? 1 : 0;      // a stored count is a decision unless it says it was automatic
     const n = q.n, ang = (a, len) => Array.from({ length: len }, (_, i) => cl(Array.isArray(a) ? a[i] : 0, -180, 180, 0));
     q.yaw = ang(q.yaw, n + 1); q.pitch = ang(q.pitch, n + 1); q.roll = ang(q.roll, n);
     const kn = Array.isArray(q.knots) && q.knots.length === n - 1 ? q.knots.map(x => cl(x, 0.05, 0.95, 0.5)) : null;
@@ -625,6 +660,8 @@ window.Fibula = (function () {
     if (!F.c || F.c.i !== best) setCandidate(best);
     $('fibCand').value = best;
     S.fib = { plan: St.clone(p), guide: S.fib && S.fib.plan && F.c ? S.fib.guide : null };
+    // a stored plan keeps its segment count and cuts as saved; an automatic count is chosen again only when the defect changes
+    const D0 = defect(); S.fib.choice = D0 ? { L: D0.L, n: S.fib.plan.n, reason: 'stored', table: [] } : null;
     $('sceneSeg').hidden = false; $('fibBody').hidden = false;
     update(); syncUI();
   }
@@ -811,7 +848,7 @@ window.Fibula = (function () {
   $('fibDicom').addEventListener('change', e => { if (e.target.files.length) start('dicom', [...e.target.files]); e.target.value = ''; });
   $('fibFiles').addEventListener('change', e => { if (e.target.files.length) start('dicom', [...e.target.files]); e.target.value = ''; });
   $('fibCand').addEventListener('change', e => { setCandidate(+e.target.value); plan().cand = F.c.centroid.map(x => Math.round(x * 10) / 10); guideKey = ''; edited(false, true); setView(view); });
-  document.querySelectorAll('#fibN button').forEach(b => b.addEventListener('click', () => { if (!active()) return; setN(+b.dataset.n); update(); optimizeKnots(); edited(false, true); }));
+  document.querySelectorAll('#fibN button').forEach(b => b.addEventListener('click', () => { if (!active()) return; plan().nAuto = 0; setN(+b.dataset.n); update(); optimizeKnots(); edited(false, true); }));
   $('fibOpt').addEventListener('click', () => { if (!active()) return; optimizeKnots(); edited(false, true); });
   $('fibPick').addEventListener('click', () => startMode('pick'));
   $('fibSplit').addEventListener('click', () => startMode('split'));
@@ -843,5 +880,5 @@ window.Fibula = (function () {
   function guideEdited() { guideKey = ''; scheduleGuide(); renderStep(); St.emit('changed'); }
   const guideInfo = () => (active() && last ? { auto: guideAuto(last), body: guideBody(last), screws: guideScrews(last), segs: last.segs, FR: F.c.FR } : null);
   return { setActive, activePane: () => activePane, summary: () => (active() ? summary() : null), view: () => view, active, approved, checks, apply, exportFiles, reportHTML, production, setView, state: () => ({ F, last, view }),
-    graftBone, fibBone: q => (F && F.c ? fibBone(q) : false), guideInfo, guideEdited, plan: () => (active() ? plan() : null), building: () => building };
+    graftBone, fibBone: q => (F && F.c ? fibBone(q) : false), guideInfo, guideEdited, plan: () => (active() ? plan() : null), building: () => building, segmentChoice, choice: () => (S.fib && S.fib.choice) || null, MIN_LEN, DEV_WARN };
 })();

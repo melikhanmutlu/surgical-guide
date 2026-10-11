@@ -91,18 +91,79 @@ def mandible_guide(vol, mask, arch, plan, which, h=0.3, clearance=0.3, wall=2.5,
     u, v, w = L[..., 0], L[..., 1], L[..., 2]
     span = (u >= -flange) & (u <= reach)
     shell = span & (dout > clearance) & (dout <= clearance + wall) & (v >= -0.5)
-    k = plan["kerf"]
-    slot = (u <= 0) & (u >= -_slot_width(k, h)) & (dout <= clearance + wall + 0.05)  # kerf on resected side, >= the blade
-    wz = w[shell & (np.abs(u + k / 2) <= 4)]
+    k, sw = plan["kerf"], _slot_width(plan["kerf"], h)
+    # where the slot lies relative to the planned plane (u = 0, the stump face): on the resected side (u in [-sw, 0], the
+    # graft meets the stump flush) or centred on the plane (u in [-sw/2, sw/2], half the kerf lost from the stump);
+    # the same setting as web/app.js kerfSide (plan["kerf_side"], default "resected")
+    centred = plan.get("kerf_side", "resected") == "centre"
+    u_slot = 0.0 if centred else -sw / 2                             # slot centre along u (u > 0 = kept bone)
+    slot = (np.abs(u - u_slot) <= sw / 2 + 1e-9) & (dout <= clearance + wall + 0.05)
+    wz = w[shell & (np.abs(u - u_slot) <= 4)]
     w_lo = wz.min() if wz.size else -10
-    bridge = (np.abs(u + k / 2) <= 4) & (w <= w_lo + 4) & (dout > clearance + wall - 0.5) & \
+    bridge = (np.abs(u - u_slot) <= 4) & (w <= w_lo + 4) & (dout > clearance + wall - 0.5) & \
              (dout <= clearance + wall + 2.5) & (v >= -0.5)
     guide = (shell & ~slot) | bridge
     for wz0 in (-6.0, 6.0):
         guide &= ~_hole(L, np.array([reach - 6, 0, wz0]), np.array([0, 1.0, 0]), screw_d / 2)
-    plane = (P - (k / 2) * keep, keep)
+    plane = (P + u_slot * keep, keep)
     guide, rep = _largest(f"mandible_guide_{which}", guide, h)
+    rep["kerf_side"] = "centre" if centred else "resected"
+    rep["stump_gap_mm"] = round(float(k / 2 if centred else 0.0), 2)
+    # can the guide be lifted off along the buccal normal (local axis 1) or a direction within 40 deg of it?
+    rep["seat"] = seat_check(guide, bone, h, axis=1, clearance=clearance)
+    if rep["seat"]["ok"] and rep["seat"]["free_directions"] == 0:
+        rep["warning"] = (rep.get("warning", "") + (" " if rep.get("warning") else "")
+                          + f"mandible_guide_{which}: cannot be lifted off the bone along any direction within 40 deg of the buccal normal "
+                          f"(best direction still has {rep['seat']['best_block_mm2']:.0f} mm2 of bone over the guide); the shell reaches under "
+                          "the bone's widest level (undercut): reduce the grid depth / reach or move the cut")
+    elif rep["seat"]["ok"] and rep["seat"]["best_tilt_deg"] > 0:
+        rep["note"] = (f"mandible_guide_{which}: seats only tilted ({rep['seat']['best_tilt_deg']:.0f} deg from the buccal normal, "
+                       f"{rep['seat']['free_directions']}/{rep['seat']['directions']} directions free)")
     return grid.mesh(guide), plane, rep
+
+
+def seat_check(guide, bone, h, axis=1, clearance=0.3, max_tilt=40, tilt_step=10, az_step=45, tol=None):
+    """Can the guide be lifted off the bone? The same sweep as web/seat.js: for directions in a cone around the seating
+    normal (+ local axis `axis`), guide and bone voxels are projected onto the plane normal to the direction in cells of
+    2h; a cell is blocked when bone lies further along the direction than the guide's nearest voxel there (plus a
+    tolerance of clearance + h). Masks are LocalGrid arrays indexed (z, y, x). Returns the number of free directions
+    (< 2 mm2 blocked), the best direction and its blocked area (mm2)."""
+    tol = clearance + h if tol is None else tol
+    # (x, y, z) local mm on the even-index lattice (one voxel per 2h cell, as seat.js samples it): a finer sampling
+    # would put a shell voxel and the bone voxel diagonally next to it into one projection cell and call it blocked
+    gi = np.argwhere(guide[::2, ::2, ::2])[:, ::-1].astype(np.float64) * (2 * h)
+    bi = np.argwhere(bone[::2, ::2, ::2])[:, ::-1].astype(np.float64) * (2 * h)
+    if not len(gi) or not len(bi):
+        return dict(ok=False, directions=0, free_directions=0, best_tilt_deg=0.0, best_block_mm2=0.0)
+    n0 = np.zeros(3); n0[axis] = 1.0
+    t = np.array([0, 0, 1.0]) if abs(n0[2]) < 0.9 else np.array([1.0, 0, 0])
+    e1 = np.cross(t, n0); e1 /= np.linalg.norm(e1); e2 = np.cross(n0, e1)
+    cell = 2 * h
+    dirs = [(0, 0)] + [(tilt, az) for tilt in range(tilt_step, max_tilt + 1, tilt_step) for az in range(0, 360, az_step)]
+    out = []
+    for tilt, az in dirs:
+        tr, ar = np.radians(tilt), np.radians(az)
+        d = np.cos(tr) * n0 + np.sin(tr) * (np.cos(ar) * e1 + np.sin(ar) * e2)
+        a = np.cross(d, [0, 0, 1.0]) if abs(d[2]) < 0.9 else np.cross(d, [1.0, 0, 0])
+        a /= np.linalg.norm(a); b = np.cross(d, a)
+
+        def key(pts):
+            return np.round(pts @ a / cell).astype(np.int64) * 100003 + np.round(pts @ b / cell).astype(np.int64)
+        kg, tg = key(gi), gi @ d
+        order = np.argsort(kg, kind="stable")
+        kg_s, tg_s = kg[order], tg[order]
+        uniq, first = np.unique(kg_s, return_index=True)
+        top = np.minimum.reduceat(tg_s, first)                       # nearest guide voxel per cell along d
+        kb, tb = key(bi), bi @ d
+        idx = np.searchsorted(uniq, kb)
+        idx[idx >= len(uniq)] = 0
+        hit = uniq[idx] == kb
+        blocked = hit & (tb > top[idx] + tol)
+        out.append((tilt, az, float(blocked.sum() * cell * cell)))
+    free = [o for o in out if o[2] < 2.0]
+    best = free[0] if free else min(out, key=lambda o: o[2])
+    return dict(ok=True, directions=len(out), free_directions=len(free), best_tilt_deg=float(best[0]), best_azimuth_deg=float(best[1]),
+                best_block_mm2=round(best[2], 1), blocked_mm2_along_normal=round(out[0][2], 1))
 
 
 def fibula_segments(vol, mask, fib, plan, h=0.4):

@@ -221,5 +221,87 @@ class TestGuides(unittest.TestCase):
         self.assertLess(inner_face(0.4, 0.3), 0.15, "h = 0.4: clearance collapses to ~0")
 
 
+class TestSegmentChoiceAndKerf(unittest.TestCase):
+    """choose_segments (the table and the rule of web/fibula.js segmentChoice) and the kerf-side setting."""
+    @classmethod
+    def setUpClass(cls):
+        cls.vol, cls.m, cls.A = arch()
+        _, _, cls.F = (None, None, P.Fibula(*cylinder(length=320.0)[:2]))
+
+    def test_short_defect_is_one_segment_with_a_warning_not_a_critical(self):
+        knots, dev, n, d = P.choose_segments(self.A, -8, 8, 2.5, 20.0)
+        self.assertEqual(n, 1); self.assertEqual(d["reason"], "short"); self.assertEqual(len(knots), 2)
+        self.assertEqual(d["candidates"][0]["n"], 1); self.assertIn("shortest_segment_mm", d["candidates"][0])
+        p = P.make_plan(self.A, self.F, -8, 8)
+        self.assertEqual(p["n_segments"], 1); self.assertEqual(p["segment_decision"]["reason"], "short")
+        w = p["warnings"]
+        self.assertTrue(any("shorter than one 20 mm segment" in x for x in w), w)
+        self.assertFalse(any("below the 20 mm" in x for x in w), "no per-segment short warning on top: " + str(w))
+
+    def test_never_a_segment_under_min_len_when_another_count_avoids_it(self):
+        # an unreachable tolerance: the rule falls back to the most segments that keep every segment >= 20 mm
+        knots, dev, n, d = P.choose_segments(self.A, -30, 30, 0.01, 20.0)
+        self.assertEqual(d["reason"], "len")
+        lens = [float(np.linalg.norm(self.A.point(b) - self.A.point(a))) for a, b in zip(knots[:-1], knots[1:])]
+        self.assertTrue(all(x >= 20.0 - 1e-6 for x in lens), lens)
+        ok = [c for c in d["candidates"] if c["shortest_segment_mm"] >= 20.0]
+        self.assertEqual(n, max(c["n"] for c in ok))
+        self.assertTrue(any(c["shortest_segment_mm"] < 20.0 for c in d["candidates"]), "the table shows the rejected count too: " + str(d))
+        p = P.make_plan(self.A, self.F, -30, 30, tol_mm=0.01)
+        self.assertTrue(any("most segments that keep every segment" in x for x in p["warnings"]), p["warnings"])
+        # a reachable tolerance (just above the deviation of the first count that keeps every segment >= 20 mm): the
+        # fewest segments within it
+        tol = ok[0]["deviation_mm"] + 0.05
+        _, dev2, n2, d2 = P.choose_segments(self.A, -30, 30, tol, 20.0)
+        self.assertEqual(d2["reason"], "dev"); self.assertLessEqual(dev2, tol); self.assertEqual(n2, ok[0]["n"])
+
+    def test_kerf_side_sets_the_stump_gap_and_the_slot_position(self):
+        p = P.make_plan(self.A, self.F, -25, 25, n_segments=2, kerf=1.0)
+        self.assertEqual(p["kerf_side"], "resected"); self.assertEqual(p["stump_gap_mm"], [0.0, 0.0])
+        c = P.make_plan(self.A, self.F, -25, 25, n_segments=2, kerf=1.0, kerf_side="centre")
+        self.assertEqual(c["stump_gap_mm"], [0.5, 0.5])
+        self.assertEqual(P.plan_summary(c, self.F)["graft_to_stump_gap_mm"], [0.5, 0.5])
+        with self.assertRaises(ValueError):
+            P.make_plan(self.A, self.F, -25, 25, n_segments=2, kerf_side="left")
+        big = P.make_plan(self.A, self.F, -25, 25, n_segments=2, kerf=2.4, kerf_side="centre")
+        self.assertTrue(any("graft-to-stump gap 1.20 mm" in w for w in big["warnings"]), big["warnings"])
+        # the guide's slot: flush = the slot lies on the resected side of the planned plane (plane point moved back by
+        # half a slot), centred = the plane point is the stump face itself
+        for which in (0, 1):
+            m_res, pl_res, rep_res = Gd.mandible_guide(self.vol, self.m, self.A, p, which, h=0.5)
+            m_cen, pl_cen, rep_cen = Gd.mandible_guide(self.vol, self.m, self.A, c, which, h=0.5)
+            keep = pl_res[1]
+            P0 = np.asarray(p["points"][0] if which == 0 else p["points"][-1])
+            self.assertLess(float((pl_res[0] - P0) @ keep), -0.4, "flush: slot centre behind the stump face")
+            self.assertAlmostEqual(float((pl_cen[0] - P0) @ keep), 0.0, places=6)
+            self.assertEqual(rep_res["stump_gap_mm"], 0.0); self.assertEqual(rep_cen["stump_gap_mm"], 0.5)
+            self.assertIn("free_directions", rep_res["seat"])
+            # the slot is open where it is planned: no guide vertex deep inside it (whole shell thickness, near the plane)
+            sw = Gd._slot_width(1.0, 0.5)
+            for mesh, lo, hi in ((m_res, -sw, 0.0), (m_cen, -sw / 2, sw / 2)):
+                u = (mesh.vertices - P0) @ keep
+                near_pl = np.linalg.norm(mesh.vertices - P0 - np.outer(u, keep), axis=1) < 10
+                self.assertFalse(np.any((u > lo + 0.3) & (u < hi - 0.3) & near_pl), f"slot {lo}..{hi} is open")
+            # and shell material stands on the kept side right past the flush slot (u > 0) and past the centred slot (u > sw/2)
+            u_r = (m_res.vertices - P0) @ keep
+            self.assertTrue(np.any((u_r > 0.2) & (u_r < 1.0)), "guide wall right behind the stump face")
+
+    def test_seat_check_shell_past_the_equator_cannot_be_lifted(self):
+        # cylinder bone along x (radius 8), a 2.5 mm shell at 0.3 mm clearance; seating normal = local axis 1 (+y)
+        h = 0.5
+        z, y, x = np.meshgrid(np.arange(-12, 12.01, h), np.arange(-12, 12.01, h), np.arange(0, 20.01, h), indexing="ij")
+        r = np.hypot(y, z)
+        bone = r <= 8
+        upper = (r > 8.3) & (r <= 10.8) & (y >= 1)                        # ends 1 mm above the widest level
+        deep = (r > 8.3) & (r <= 10.8) & (y >= -5)                        # 5 mm past it: hooked under the bone
+        a = Gd.seat_check(upper, bone, h, axis=1, clearance=0.3)
+        b = Gd.seat_check(deep, bone, h, axis=1, clearance=0.3)
+        self.assertTrue(a["ok"] and b["ok"]); self.assertEqual(a["directions"], 33)
+        self.assertGreater(a["free_directions"], 10, a); self.assertLessEqual(a["best_tilt_deg"], 10.0)
+        self.assertEqual(b["free_directions"], 0, b); self.assertGreater(b["blocked_mm2_along_normal"], 20)
+        self.assertEqual(Gd.seat_check(np.zeros_like(bone), bone, h)["ok"], False)
+
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
