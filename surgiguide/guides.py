@@ -16,16 +16,32 @@ def _hole(local, p, d, r):
     return (np.linalg.norm(v - t[..., None] * d, axis=-1) <= r) & (t > -2.0)
 
 
+DROP_WARN_MM3 = 1.0            # a guide piece smaller than this is voxel dust; anything larger that is dropped is reported
+
+
+def _slot_width(k, h):
+    """Width of a saw slot on a grid of voxel size h: whole voxels, never narrower than the blade (kerf k). A slot of exactly
+    k mm covers 3 or 4 voxels of 0.3 mm = 0.9 or 1.2 mm after meshing; 0.9 mm would jam a 1.0 mm blade."""
+    return float(np.ceil(k / h - 1e-6) * h)
+
+
 def _largest(name, g, h):
-    """Keep the largest connected piece; report what (if anything) was dropped."""
+    """Keep the largest connected piece; report what (if anything) was dropped. A dropped piece of more than DROP_WARN_MM3
+    is a guide part that is lost (a rail section, a screw collar, a shell island): rep['warning'] says so."""
     lab, n = ndi.label(g)
     if n > 1:
         sizes = ndi.sum(g, lab, range(1, n + 1))
         g = lab == (np.argmax(sizes) + 1)
-        dropped = float((sizes.sum() - sizes.max()) * h ** 3)
+        gone = np.sort(sizes)[:-1] * h ** 3
+        dropped = float(gone.sum())
     else:
-        dropped = 0.0
-    return g, dict(name=name, pieces_before_cleanup=int(n), dropped_islands_mm3=round(dropped, 1))
+        dropped, gone = 0.0, np.zeros(0)
+    rep = dict(name=name, pieces_before_cleanup=int(n), dropped_islands_mm3=round(dropped, 1))
+    big = gone[gone > DROP_WARN_MM3]
+    if len(big):
+        rep["warning"] = (f"{name}: {len(big)} disconnected guide part(s) of {big.sum():.0f} mm3 in total ({big.max():.0f} mm3 at most) "
+                          "were dropped; the guide is missing material there (check the slots, rails and screw holes in the STL)")
+    return g, rep
 
 
 def fibula_guide(vol, mask, fib, plan, h=0.3, clearance=0.3, wall=2.5, rail=3.0,
@@ -48,7 +64,8 @@ def fibula_guide(vol, mask, fib, plan, h=0.3, clearance=0.3, wall=2.5, rail=3.0,
         for sp, n, sign in ((g["fib_start"], g["n_start_fib"], -1), (g["fib_end"], g["n_end_fib"], +1)):
             n = n / np.linalg.norm(n) * np.sign(n[0])
             p = np.array([sp, 0, 0]) + sign * (k / 2) * n                  # kerf falls outside the graft
-            slot = (np.abs((L - p) @ n) <= k / 2) & (dout <= clearance + wall + 0.05)
+            d = sign * ((L - [sp, 0, 0]) @ n)                              # distance from the graft face, > 0 outside the graft
+            slot = (d >= 0) & (d <= _slot_width(k, h)) & (dout <= clearance + wall + 0.05)
             guide &= ~slot
             planes.append((p, n))
         mid = (g["fib_start"] + g["fib_end"]) / 2
@@ -75,7 +92,7 @@ def mandible_guide(vol, mask, arch, plan, which, h=0.3, clearance=0.3, wall=2.5,
     span = (u >= -flange) & (u <= reach)
     shell = span & (dout > clearance) & (dout <= clearance + wall) & (v >= -0.5)
     k = plan["kerf"]
-    slot = (np.abs(u + k / 2) <= k / 2) & (dout <= clearance + wall + 0.05)  # kerf on resected side
+    slot = (u <= 0) & (u >= -_slot_width(k, h)) & (dout <= clearance + wall + 0.05)  # kerf on resected side, >= the blade
     wz = w[shell & (np.abs(u + k / 2) <= 4)]
     w_lo = wz.min() if wz.size else -10
     bridge = (np.abs(u + k / 2) <= 4) & (w <= w_lo + 4) & (dout > clearance + wall - 0.5) & \

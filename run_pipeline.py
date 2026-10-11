@@ -28,6 +28,12 @@ def log(msg, t0=[time.time()]):
 WARNINGS = []
 
 
+def warn(msg):
+    """A problem the surgeon must see: printed at once, listed again at the end and written to plan.json (never silent)."""
+    WARNINGS.append(msg)
+    print("WARNING: " + msg, flush=True)
+
+
 def seg(vol, structure, args, dicom_dir, component):
     if args.segmenter == "totalseg":
         return segment.totalseg_bone(vol, structure, dicom_dir=dicom_dir, fast=args.fast)
@@ -37,10 +43,12 @@ def seg(vol, structure, args, dicom_dir, component):
         mask, info = segment.fibula_bone(vol, hu=args.hu, side=args.side)
     else:                                # explicit --fibula-component N: the old size-rank choice
         return segment.threshold_bone(vol, hu=args.hu, component=component)
-    log(f"{structure}: {info['status']} ({info['volume_cm3']:.1f} cm3)")
+    extra = "".join(f", {k} {info[k]:.0f} mm" for k in ("length_mm", "radius_mm") if k in info)
+    log(f"{structure}: {info['status']} ({info['volume_cm3']:.1f} cm3{extra})")
+    if info.get("note"):
+        log(info["note"])
     if info.get("warning"):
-        WARNINGS.append(info["warning"])
-        print("WARNING: " + info["warning"], flush=True)
+        warn(info["warning"])
     return mask
 
 
@@ -48,6 +56,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--demo", action="store_true", help="generate synthetic DICOM phantoms and use them")
     ap.add_argument("--mandible-dicom"); ap.add_argument("--fibula-dicom")
+    ap.add_argument("--mandible-series", help="series description (substring) or UID to read from --mandible-dicom, e.g. 'Bone'; default: the series with most slices")
+    ap.add_argument("--fibula-series", help="same for --fibula-dicom")
     ap.add_argument("--segmenter", choices=["threshold", "totalseg"], default="threshold")
     ap.add_argument("--fast", action="store_true", help="TotalSegmentator --fast")
     ap.add_argument("--hu", type=float, default=250.0, help="bone threshold (threshold segmenter)")
@@ -71,7 +81,7 @@ def main():
         write_dicom_series(phantom.leg_phantom(), a.fibula_dicom, "LEG PHANTOM")
 
     log("reading DICOM")
-    vm, vf = Volume.from_dicom_dir(a.mandible_dicom), Volume.from_dicom_dir(a.fibula_dicom)
+    vm, vf = Volume.from_dicom_dir(a.mandible_dicom, a.mandible_series), Volume.from_dicom_dir(a.fibula_dicom, a.fibula_series)
     log(f"segmenting ({a.segmenter})")
     mm = seg(vm, "mandible", a, a.mandible_dicom, 1)
     fm = seg(vf, "fibula", a, a.fibula_dicom, a.fibula_component)
@@ -85,6 +95,8 @@ def main():
     p = planning.make_plan(arch, fib, a.resect_from, a.resect_to, n_segments=a.segments, kerf=a.kerf)
     summary = planning.plan_summary(p, fib)
     print(json.dumps(summary, indent=2))
+    for w in p.get("warnings", []):
+        warn("plan: " + w)
 
     log("generating guides")
     fg, fplanes, frep = guides.fibula_guide(vf, fm, fib, p, clearance=a.clearance, wall=a.wall)
@@ -93,6 +105,9 @@ def main():
     for i, (m, _, _) in enumerate(mg):
         m.export(os.path.join(a.out, f"guide_mandible_{'ab'[i]}.stl"))
     summary["guides"] = [frep] + [r for _, _, r in mg]
+    for r in summary["guides"]:
+        if r.get("warning"):
+            warn(r["warning"])
     if WARNINGS:
         summary["warnings"] = list(WARNINGS)
     summary["guides_watertight"] = bool(fg.is_watertight and all(m.is_watertight for m, _, _ in mg))
@@ -141,6 +156,10 @@ def main():
     fib_crop = fib_mesh.slice_plane(lo - 15, [0, 0, 1]).slice_plane(hi + 15, [0, 0, -1])
     render.render(os.path.join(a.out, "3_fibula_guide.png"), [(fib_crop, bone, 1), (fg, guide, 1)],
                   "Fibula cutting guide (lateral view)", view=(15, 165))
+    if WARNINGS:
+        print(f"{len(WARNINGS)} WARNING(S):", flush=True)
+        for w in WARNINGS:
+            print("  - " + w, flush=True)
     log(f"done -> {a.out}")
 
 

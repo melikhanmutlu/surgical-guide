@@ -163,6 +163,10 @@ def make_plan(arch, fibula, s_a, s_b, n_segments=None, tol_mm=2.5, min_len=20.0,
         n0f, n1f = R.T @ normals[i], R.T @ normals[i + 1]               # plane normals, fibula local
         if prev_end_normal_f is not None:                               # keep cuts apart inside bone
             tilt = lambda n: np.linalg.norm(n[1:]) / abs(n[0])
+            # Spacing between two grafts along the fibula: the two kerfs (one slot outside each graft face) plus the tilt of the
+            # cut faces over the fibula radius, plus 1 mm. With upright cuts and kerf = 1 mm that is exactly 2 slots wide, i.e. no
+            # bone is left between the slots: the grafts are cut with two adjacent saw passes and no waste wedge remains. This is
+            # the same formula as web/fibula.js (a margin would change the fibula length needed in both); left as it is.
             s_cursor += kerf + 1.0 + fibula.radius * (tilt(prev_end_normal_f) + tilt(n0f))
         L = float(np.linalg.norm(P[i + 1] - P[i]))
         segs.append(dict(index=i, length_mm=L, fib_start=s_cursor, fib_end=s_cursor + L,
@@ -172,9 +176,30 @@ def make_plan(arch, fibula, s_a, s_b, n_segments=None, tol_mm=2.5, min_len=20.0,
         s_cursor += L
         prev_end_normal_f = n1f
     overflow = s_cursor - (fibula.s_max - proximal_margin)
+    warnings = plan_warnings(segs, dev, n_segments, tol_mm, min_len, overflow, s_b - s_a)
     return dict(knots=knots, points=P, normals=normals, segments=segs, max_deviation_mm=float(dev),
                 n_segments=n_segments, kerf=kerf, fibula_fits=bool(overflow <= 0),
-                fibula_overflow_mm=float(max(0, overflow)), defect_arc_mm=float(s_b - s_a))
+                fibula_overflow_mm=float(max(0, overflow)), defect_arc_mm=float(s_b - s_a), warnings=warnings)
+
+
+ANGLE_WARN = 35.0               # deg: a cut this oblique is hard to saw and to fit (web/fibula.js ANGLE_WARN)
+
+
+def plan_warnings(segs, dev, n_segments, tol_mm, min_len, overflow, arc):
+    """What the plan does outside its own tolerances (web/fibula.js reports the same as critical): never silent."""
+    w = []
+    if dev > tol_mm:
+        w.append(f"graft-to-arch deviation {dev:.2f} mm is above the {tol_mm:.1f} mm tolerance "
+                 f"({n_segments} segment(s) for a {arc:.0f} mm defect); more or shorter segments follow the arch better")
+    for g in segs:
+        if g["length_mm"] < min_len:
+            w.append(f"segment {g['index'] + 1} is {g['length_mm']:.1f} mm long, below the {min_len:.0f} mm a segment needs to keep its blood supply and fixation")
+        a = max(g["angle_start_deg"], g["angle_end_deg"])
+        if a > ANGLE_WARN:
+            w.append(f"segment {g['index'] + 1}: a cut is {a:.0f} deg off the fibula axis (more than {ANGLE_WARN:.0f} deg)")
+    if overflow > 0:
+        w.append(f"the fibula is {overflow:.1f} mm too short for this plan (distal / proximal safety margins included)")
+    return w
 
 
 def plan_summary(plan, fibula):
@@ -186,7 +211,7 @@ def plan_summary(plan, fibula):
                          end_cut_angle_deg=round(g["angle_end_deg"], 1)))
     return dict(n_segments=plan["n_segments"], defect_arc_length_mm=round(plan["defect_arc_mm"], 1),
                 max_graft_to_arch_deviation_mm=round(plan["max_deviation_mm"], 2),
-                kerf_mm=plan["kerf"], fibula_length_sufficient=plan["fibula_fits"],
+                kerf_mm=plan["kerf"], fibula_length_sufficient=plan["fibula_fits"], plan_warnings=list(plan.get("warnings", [])),
                 mandible_cut_points_mm=[[round(v, 1) for v in plan["points"][0]],
                                         [round(v, 1) for v in plan["points"][-1]]],
                 segments=rows)
