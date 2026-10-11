@@ -63,7 +63,9 @@ def _flood(edt, cmask, ratio):
 
 
 class Separator:
-    """Distance transform of one mask (z, y, x), computed once; run(ratio) cuts it at a neck / core thickness ratio."""
+    """Distance transform of one mask (z, y, x), computed once; run(ratio) cuts it at a neck / core thickness ratio.
+    work_mm: cut on a coarser grid of about this voxel size (0 = the mask's own grid, as the browser does; the pipeline hands it
+    the 0.8 mm working grid, so no coarsening is needed)."""
 
     def __init__(self, mask, spacing, work_mm=0.0):
         sx, sy, sz = spacing

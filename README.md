@@ -40,7 +40,10 @@ python3 run_pipeline.py \
 
 Çıktılar: `mandible.stl`, `fibula.stl`, `guide_mandible_a.stl`, `guide_mandible_b.stl`,
 `guide_fibula.stl`, `mandible_resected.stl`, `grafts_in_mandible.stl`, `grafts_in_fibula.stl`,
-`plan.json` (segment boyları, fibula üzerindeki yerleri, kesim açıları), `scene_*.glb` ve PNG önizlemeler.
+`plan.json` (segment boyları, fibula üzerindeki yerleri, kesim açıları, `warnings`), `scene_*.glb` ve PNG önizlemeler.
+Bir klasörde birden çok seri varsa `--mandible-series Bone` / `--fibula-series 1.25mm` (seri açıklaması ya da UID) seriyi seçer.
+Kemik seçimi tarayıcıyla aynı 0,8 mm çalışma ızgarasında yapılır (aynı mandibula / fibula); `--side` iki bacaklı serilerde bacağı seçer.
+Plan tolerans dışına çıkarsa (sapma, kısa segment, dik kesi, kısa fibula) ya da guide parçası düşerse uyarı hemen yazdırılır, sonda yeniden listelenir ve `plan.json`a girer.
 
 ## Kod yapısı
 

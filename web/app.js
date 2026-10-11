@@ -187,7 +187,7 @@
     const ctl = startLoad();
     let r;
     try { r = await readDicom(files, ctl); } catch (e) { if (e !== LOAD_CANCELLED) { if (loadCtl === ctl) loadCtl = null; throw e; } }
-    if (!r || loadStopped(ctl)) return;
+    if (loadStopped(ctl) || !r) return;
     if (loadCtl === ctl) loadCtl = null;
     if (r.error) { busy(false); alertMsg(r.error); return; }
     S.source = r.source; scan = r.scan;
@@ -323,7 +323,7 @@
     if (loadBlocked()) { renderSeries(); return; }
     const ctl = startLoad(), prog = progress(ctl); let r;
     try { await prog(0, 'Seri açılıyor…'); r = await decodeSeries(scan.groups[i], prog, 0, 1, scan); } catch (e) { if (e !== LOAD_CANCELLED) { if (loadCtl === ctl) loadCtl = null; throw e; } }
-    if (!r || loadStopped(ctl)) { renderSeries(); return; }
+    if (loadStopped(ctl) || !r) { renderSeries(); return; }
     if (loadCtl === ctl) loadCtl = null;
     if (r.error) { busy(false); alertMsg(r.error); renderSeries(); return; }
     S.source = r.source; await setVolume(r.vol, r.label, 'dicom');

@@ -59,18 +59,19 @@ const VERI = process.env.VERI || '/mnt/project-files/surgical-guide-prototype/au
     await h.openStep(3); await page.click('#pickAnchor'); await h.sleep(300);
     const badge = await page.$eval('#modeBadge', e => e.hidden ? '' : e.textContent);
     const view2 = await h.ev(() => Fibula.view());
-    const r = await page.$eval('#stage', e => { const b = e.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height * 0.6 }; });
-    await h.click3d(r.x, r.y); await h.sleep(1000); await h.idle();
+    const pts = await h.hits('bone', 24);                          // a bone point of the (now shown) mandible
+    if (pts.length) { const p = pts[Math.floor(pts.length / 2)]; await h.click3d(p.x, p.y); }
+    await h.sleep(1000); await h.idle();
     const s = await st(), step = await h.ev(() => [...document.querySelectorAll('details.step')].find(d => d.open).id);
     const ev = await h.shot('C7_fibula_gorunumu');
     await page.keyboard.press('Escape');
     return { pass: view2 === 'm' && s.planes.length > 0 && /mandibulaya alındı/.test(await page.$eval('#caseMsg', e => e.hidden ? '' : e.textContent)), actual: `fibula sonrası sahne=${view}; "Bölgeyi seç" sonrası sahne=${view2}; rozet "${badge}"; tık sonrası kesi ${s.planes.length}, açık adım ${step}`, evidence: ev };
   });
-  await h.run('C7b', '2 · Anatomi (fibula yüklü)', 'Fibula görünümünde adım 2 fırçasını seç, 3B görünüme tıkla', 'Görünüm mandibulaya döner, adım 4 açılmaz, fırça mandibulaya uygulanır', async () => {
+  await h.run('C7b', '2 · Anatomi (fibula yüklü)', 'Fibula görünümünde adım 2 silgisini seç, 3B görünüme tıkla', 'Görünüm mandibulaya döner, adım 4 açılmaz, silgi mandibulaya uygulanır', async () => {
     await page.click('#scF'); await h.sleep(500);
     await h.openStep(2);
     await page.evaluate(() => { const d = document.querySelector('#segEdit details'); if (d && !d.open) d.querySelector('summary').click(); });
-    await page.click('#segEdit button[data-t="brush"]'); await h.sleep(500);
+    await page.click('#segEdit button[data-t="erase"]'); await h.sleep(500);
     const view = await h.ev(() => Fibula.view());
     const pts = await h.hits('bone', 24);
     const before = await h.ev(() => { let c = 0; const m = Studio.S.mask; for (let i = 0; i < m.length; i++) c += m[i] ? 1 : 0; return c; });
