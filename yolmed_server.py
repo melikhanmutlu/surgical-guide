@@ -509,7 +509,7 @@ class Handler(seg_server.Handler):
     def _json(self, code, obj):
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(code); self._cors()
-        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Type", "application/json; charset=utf-8"); self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
 
     def _body(self, limit=MAX_PLAN_BODY):
@@ -590,7 +590,8 @@ class Handler(seg_server.Handler):
         except HttpError as e:
             return self._json(e.code, {"error": e.msg})
         except Exception as e:  # keep the server alive, report the failure as JSON
-            return self._json(500, {"error": f"{type(e).__name__}: {e}"})
+            import traceback; traceback.print_exc()   # the details stay in the server log, not in the response
+            return self._json(500, {"error": "internal error"})
 
     web_root = None   # optional: serve the studio (web/) from the same origin
 
@@ -600,6 +601,8 @@ class Handler(seg_server.Handler):
             body = b"window.YOLMED_SERVER = location.origin;\n"
             ctype = "application/javascript"
         else:
+            if "\x00" in path:
+                raise HttpError(404, "not found")
             f = os.path.realpath(os.path.join(root, (path.lstrip("/") or "index.html")))
             if os.path.isdir(f):
                 f = os.path.join(f, "index.html")

@@ -122,6 +122,10 @@ class Fibula:
 def make_plan(arch, fibula, s_a, s_b, n_segments=None, tol_mm=2.5, min_len=20.0,
               kerf=1.0, distal_margin=70.0, proximal_margin=60.0, roll_deg=0.0):
     """Return the plan dict. s_a < s_b are arch positions (mm from midline) of the two mandible cuts."""
+    if not (np.isfinite(s_a) and np.isfinite(s_b)) or s_b - s_a < 5.0:
+        raise ValueError(f"resection range must be finite and at least 5 mm long (got {s_a} .. {s_b})")
+    if s_a < arch.s[0] - 1e-6 or s_b > arch.s[-1] + 1e-6:
+        raise ValueError(f"resection {s_a:.1f} .. {s_b:.1f} mm lies outside the detected mandible arch ({arch.s[0]:.1f} .. {arch.s[-1]:.1f} mm)")
     if n_segments is None:                                           # automatic choice
         best = None
         for n in range(1, 5):
