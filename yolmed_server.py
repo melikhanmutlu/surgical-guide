@@ -267,7 +267,10 @@ def build_guide(req):
     for s_ in req.get("screws") or []:
         _check_ranges({"screw d": (float(s_["d"]), 0.5, 10), "screw D": (float(s_["D"]), float(s_["d"]), 15), "sleeveH": (float(s_["sleeveH"]), 0, 30)})
     if req.get("gap"):
-        _check_ranges({"flange": (float(req["gap"].get("flange", 3.0)), 0, 20)})
+        if not isinstance(req["gap"], dict) or not all(isinstance(req["gap"].get(k), dict) for k in ("A", "B")):
+            raise HttpError(400, "gap needs plane records A and B")
+        _check_ranges({"flange": (float(req["gap"].get("flange", 3.0)), 0, 20),
+                       "gap A w": (float(req["gap"]["A"].get("w", 1.0)), 0.1, 10), "gap B w": (float(req["gap"]["B"].get("w", 1.0)), 0.1, 10)})
     if min(nx, ny, nz) < 2 or len(sp) != 3 or not np.all(np.isfinite(sp)) or np.any(sp <= 0):
         raise HttpError(400, "invalid crop grid")
     cw = clear + wall
@@ -574,6 +577,8 @@ class Handler(seg_server.Handler):
                         raise HttpError(400, "plan required")
                     return self._json(200, {"n": st.add_version(cid, b["plan"], b.get("note"), b.get("author"))})
                 if vn is not None and method == "GET":
+                    if len(vn) > 9:
+                        raise HttpError(404, "no such version")
                     return self._json(200, st.get_version(cid, int(vn)))
                 raise HttpError(405, "method not allowed")
             if path == "/guide" and method == "POST":
@@ -589,6 +594,8 @@ class Handler(seg_server.Handler):
             raise HttpError(404, f"not found: {path}")
         except HttpError as e:
             return self._json(e.code, {"error": e.msg})
+        except (TypeError, AttributeError, RecursionError, OverflowError) as e:   # wrong JSON shapes in a request body
+            return self._json(400, {"error": f"bad request: {type(e).__name__}"})
         except Exception as e:  # keep the server alive, report the failure as JSON
             import traceback; traceback.print_exc()   # the details stay in the server log, not in the response
             return self._json(500, {"error": "internal error"})
@@ -616,7 +623,7 @@ class Handler(seg_server.Handler):
         self.send_response(200)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Cache-Control", "no-cache"); self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers(); self.wfile.write(body)
 
     def do_GET(self):
