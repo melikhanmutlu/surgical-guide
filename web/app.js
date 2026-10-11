@@ -7,6 +7,8 @@
   const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
   const deg = THREE.MathUtils.degToRad;
   const esc = t => String(t).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+  // English text for a message assembled at run time (i18n.js looks up whole strings, so the fixed pieces are translated before joining)
+  const xl = s => (window.I18N ? I18N.t(s) : s);
   const COLORS = { bone: 0xddd5bd, resected: 0xd67850, guide: 0x3c82dc, fguide: 0x2a9d8f, screw: 0x8c959c, plane: 0xe0533d, anchor: 0x22a06b, lesion: 0x8e6fd6 };
   // busy indicator; long server jobs get a running bar, elapsed time and a cancel button
   let busyTick = null, busyCancelFn = null;
@@ -14,7 +16,7 @@
     $('busy').hidden = !on; if (text) $('busyText').textContent = text;
     $('busyBar').hidden = !(on && opt.bar); $('busyBar').classList.remove('det'); $('busyBar').firstElementChild.style.width = ''; $('busyCancel').hidden = !(on && opt.cancel); busyCancelFn = on ? opt.cancel || null : null;
     clearInterval(busyTick);
-    if (on && opt.bar) { const t0 = Date.now(); busyTick = setInterval(() => { $('busyText').textContent = `${text} ${Math.round((Date.now() - t0) / 1000)} sn${opt.max ? ' / en çok ' + opt.max + ' sn' : ''}`; }, 1000); }
+    if (on && opt.bar) { const t0 = Date.now(); busyTick = setInterval(() => { $('busyText').textContent = `${xl(text)} ${xl(`${Math.round((Date.now() - t0) / 1000)} sn`)}${opt.max ? ' ' + xl(`/ en çok ${opt.max} sn`) : ''}`; }, 1000); }
   };
   // determinate bar for file loading: percentage and, once the rate is known, the time left
   const etaText = s => s < 60 ? `${Math.max(1, Math.round(s))} sn` : `${Math.floor(s / 60)} dk ${Math.round(s % 60)} sn`;
@@ -25,7 +27,7 @@
       const now = performance.now(); if (now - last < 120 && f < 1) return; last = now;
       f = Math.max(0, Math.min(1, f)); const el = (now - t0) / 1000, eta = f > 0.03 && el > 0.8 && f < 1 ? el * (1 - f) / f : null;
       $('busyBar').firstElementChild.style.width = (f * 100).toFixed(1) + '%';
-      $('busyText').textContent = `${text} %${Math.floor(f * 100)}${eta !== null ? ` · yaklaşık ${etaText(eta)} kaldı` : ''}`;
+      $('busyText').textContent = `${xl(text)} ${xl(`%${Math.floor(f * 100)}`)}${eta !== null ? ' ' + xl(`· yaklaşık ${etaText(eta)} kaldı`) : ''}`;
       await sleep();
     };
   }
@@ -128,10 +130,11 @@
   }
 
   // ---------- case state ----------
+  const G_DEFAULT = { rot: 0, roll: 0, L: 36, W: 22, wrap: 6, wall: 2.5, clear: 0.3, bridge: 4, side: 1, split: 0, flange: 3, peri: 0, fit: 0, stopT: 0, stopB: 0, stopL: 6, stopD: 5 };
   const S = {
     vol: null, red: null, labels: null, comps: [], selected: new Set(), mask: null,
     anchor: null,             // {p:Vector3, n:Vector3, axis:Vector3}
-    g: { rot: 0, roll: 0, L: 36, W: 22, wrap: 6, wall: 2.5, clear: 0.3, bridge: 4, side: 1, split: 0, flange: 3, peri: 0, fit: 0, stopT: 0, stopB: 0, stopL: 6, stopD: 5 },
+    g: Object.assign({}, G_DEFAULT),
     planes: [], screws: [], sel: null, explode: 0, mode: 'orbit', result: null,
     guideOn: false,           // the guide is built only after 'Guide oluştur', never on its own
     resRemoved: false,        // 'Rezeksiyon bölgesini sil': the resected piece is hidden
@@ -182,7 +185,7 @@
       try {
         const x = await Unzip.expand(files, (i, n) => prog(zw * i / n, `Zip açılıyor (${i}/${n})…`));
         files = x.files;
-        if (x.skipped.length) alertMsg(`Zip içinde ${x.skipped.length} dosya açılamadı ve atlandı (şifreli, desteklenmeyen sıkıştırma ya da çok iç içe): ${x.skipped.slice(0, 3).join(', ')}${x.skipped.length > 3 ? '…' : ''}`);
+        if (x.skipped.length) alertMsg(`${xl(`Zip içinde ${x.skipped.length} dosya açılamadı ve atlandı (şifreli, desteklenmeyen sıkıştırma ya da çok iç içe):`)} ${x.skipped.slice(0, 3).join(', ')}${x.skipped.length > 3 ? '…' : ''}`);
       } catch (e) { return { error: 'Zip açılamadı: ' + e.message }; }
     }
     if (!files.length) return { error: 'Dosya bulunamadı.' };
@@ -201,7 +204,7 @@
       } catch (e) { skipped++; }
       await prog(zw + pw * (slices.length + skipped + multi) / files.length, `DICOM okunuyor (${slices.length + skipped} / ${files.length})…`);
     }
-    if (!slices.length) { const u = Object.keys(unsup); return { error: u.length ? `Bu aktarım sözdizimi desteklenmiyor: ${u.map(t => window.DicomCodecs ? DicomCodecs.name(t) : t).join(', ')}.` : multi ? 'Çok çerçeveli (enhanced) DICOM henüz desteklenmiyor; seriyi tek kesitli dosyalar olarak dışa aktarın.' : 'Görüntü içeren DICOM bulunamadı.' }; }
+    if (!slices.length) { const u = Object.keys(unsup); return { error: u.length ? `${xl('Bu aktarım sözdizimi desteklenmiyor:')} ${u.map(t => window.DicomCodecs ? DicomCodecs.name(t) : t).join(', ')}.` : multi ? 'Çok çerçeveli (enhanced) DICOM henüz desteklenmiyor; seriyi tek kesitli dosyalar olarak dışa aktarın.' : 'Görüntü içeren DICOM bulunamadı.' }; }
     const bySeries = {}; slices.forEach(s => (bySeries[s.series] = bySeries[s.series] || []).push(s));
     const groups = Object.values(bySeries).sort((a, b) => b.length - a.length);
     let ser = groups[0];
@@ -259,13 +262,13 @@
     for (let k = 0; k < ser.length; k++) {
       let ds;
       try { ds = await dparse(new Uint8Array(await ser[k].file.arrayBuffer())); }
-      catch (e) { return { error: `Kesit ${k + 1} okunamadı: ${e.message || e}` }; }
+      catch (e) { return { error: `${xl(`Kesit ${k + 1} okunamadı:`)} ${e.message || e}` }; }
       const el = ds.elements.x7fe00010, signed = ds.uint16('x00280103') === 1;
       const slope = parseFloat(ds.string('x00281053') || '1'), icpt = parseFloat(ds.string('x00281052') || '0');
       let px;
       if (window.DicomCodecs) {
         try { px = await DicomCodecs.decode(ds); }
-        catch (e) { return { error: `Kesit ${k + 1} açılamadı: ${e.message}` }; }
+        catch (e) { return { error: `${xl(`Kesit ${k + 1} açılamadı:`)} ${e.message}` }; }
         if (px.length < rows * cols) return { error: `Kesit ${k + 1} boyutu seriyle uyuşmuyor.` };
       } else {
         const buf = ds.byteArray.buffer.slice(ds.byteArray.byteOffset + el.dataOffset, ds.byteArray.byteOffset + el.dataOffset + rows * cols * 2);
@@ -275,7 +278,7 @@
       await prog(p0 + dw * (k + 1) / ser.length, `${what} (${k + 1} / ${ser.length})…`);
     }
     return { source, vol: { hu, nx: cols, ny: rows, nz: ser.length, sp: [ps[1], ps[0], dz], origin: ser[0].ipp,
-      axes: [[r.x, r.y, r.z], [c.x, c.y, c.z], [nrm.x, nrm.y, nrm.z]], meta }, label: `${zipName || ((ser[0].path || '').includes('/') ? ser[0].path.split('/')[0] : 'DICOM')}${groups.length > 1 && source.name ? ' · ' + source.name : ''} · ${ser.length} kesit${skipped ? `, ${skipped} dosya atlandı` : ''}` };
+      axes: [[r.x, r.y, r.z], [c.x, c.y, c.z], [nrm.x, nrm.y, nrm.z]], meta }, label: `${zipName || ((ser[0].path || '').includes('/') ? ser[0].path.split('/')[0] : 'DICOM')}${groups.length > 1 && source.name ? ' · ' + source.name : ''} · ${xl(`${ser.length} kesit`)}${skipped ? xl(`, ${skipped} dosya atlandı`) : ''}` };
   }
   const dstr = (ds, tag) => (ds.string(tag) || '').replace(/\0/g, '').trim();
   // one line per series for the series switcher: description, size, slice thickness, kernel, and a warning for scouts
@@ -323,7 +326,8 @@
     $('caseInfo').innerHTML = `<dt>Vaka</dt><dd>${esc(label)}</dd><dt>Boyut</dt><dd>${vol.nx}×${vol.ny}×${vol.nz}</dd><dt>Voksel</dt><dd>${vol.sp.map(s => fmt(s, 2)).join(' × ')} mm</dd><dt>Çalışma ızgarası</dt><dd>${S.red.sp.map(s => fmt(s, 2)).join(' × ')} mm</dd>`;
     S.qcBase = qualityCheck(vol); S.segWarn = []; syncQC();
     S.anchor = null; S.planes = []; S.screws = []; S.sel = null; S.result = null; S.guideOn = false; S.resRemoved = false; unapprove(S.lesion);
-    if (S.autoAnchor !== false) { S.lesion.condyle = null; S.g.split = 0; syncGuideInputs(); syncLesion(); }
+    // a new volume is a new patient: the previous case's guide settings and lesion bounds must not carry over (a plan restore keeps its own)
+    if (S.autoAnchor !== false) { Object.assign(S.g, G_DEFAULT); Object.assign(S.lesion, { from: -6, to: 6, margin: 3, condyle: null }); syncGuideInputs(); syncLesion(); }
     ['guide', 'resected', 'anchor', 'lesion'].forEach(id => setPart(id, null, null));
     clearElementParts();
     await segment(true);
@@ -336,7 +340,7 @@
   // ---------- image quality control (thresholds from published guide workflows; clinical team sets the final values) ----------
   function qualityCheck(vol) {
     const m = vol.meta || {}, out = [], dz = vol.sp[2], th = m.thickness || dz;
-    if (m.modality && m.modality !== 'CT') out.push(['crit', 'Kritik', `Modalite ${m.modality}; BT serisi gerekli.`]);
+    if (m.modality && m.modality !== 'CT') out.push(['crit', 'Kritik', `${xl('Modalite')} ${m.modality}; ${xl('BT serisi gerekli.')}`]);
     const step = Math.max(dz, th);
     out.push(step <= 1 ? ['ok', 'Uygun', `Kesit kalınlığı ${fmt(th, 2)} mm, aralık ${fmt(dz, 2)} mm (≤ 1 mm).`]
       : step <= 1.5 ? ['warn', 'Uyarı', `Kesit ${fmt(step, 2)} mm; guide için ≤ 1 mm önerilir.`]
@@ -349,7 +353,7 @@
       out.push(bad ? ['crit', 'Kritik', `${bad} yerde kesit aralığı düzensiz; eksik ya da tekrar eden kesit olabilir.`] : ['ok', 'Uygun', 'Kesit aralığı düzenli, eksik kesit yok.']);
     }
     if (m.bits && m.bits <= 8) out.push(['crit', 'Kritik', `Görüntü ${m.bits} bit; HU değerleri korunmamış (pencerelenmiş ya da ekran görüntüsü). Ham BT serisi gerekli.`]);
-    if (m.ts && /^1\.2\.840\.10008\.1\.2\.4\.(50|51|81|91)$/.test(m.ts) && window.DicomCodecs) out.push(['warn', 'Uyarı', `${DicomCodecs.name(m.ts)}: kayıplı sıkıştırma; kemik sınırı birkaç HU kayabilir.`]);
+    if (m.ts && /^1\.2\.840\.10008\.1\.2\.4\.(50|51|81|91)$/.test(m.ts) && window.DicomCodecs) out.push(['warn', 'Uyarı', `${DicomCodecs.name(m.ts)}: ${xl('kayıplı sıkıştırma; kemik sınırı birkaç HU kayabilir.')}`]);
     if (m.tilt > 1) out.push(['crit', 'Kritik', `Gantry eğimi ${fmt(m.tilt)}°; hacim eğik örneklenmiş, guide kemiğe oturmayabilir. Eğimsiz (0°) ya da eğimi düzeltilmiş seri kullanın.`]);
     let mn = Infinity, metal = 0, n = 0;
     for (let i = 0; i < vol.hu.length; i += 7) { const v = vol.hu[i]; if (v < mn) mn = v; if (v > 2500) metal++; n++; }
@@ -420,7 +424,7 @@
     try {
       const q = new URLSearchParams({ nx: r.nx, ny: r.ny, nz: r.nz, sp: r.sp.join(','), origin: r.origin.join(','), axes: r.axes.flat().join(','), structures: $('aiStruct').value });
       const res = await fetch(`${url}/segment?${q}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: r.hu, signal: ac.signal });
-      if (!res.ok) throw new Error(`sunucu ${res.status} döndü`);
+      if (!res.ok) throw new Error(xl(`sunucu ${res.status} döndü`));
       const lab = new Uint8Array(await res.arrayBuffer()), names = JSON.parse(res.headers.get('X-Structures') || '[]');
       if (lab.length !== r.hu.length) throw new Error('etiket hacmi boyutu uyuşmuyor');
       const labels = Int32Array.from(lab), comps = names.map(s => ({ label: s.label, size: 0, centroid: [0, 0, 0] }));
@@ -429,7 +433,7 @@
       S.selected = new Set(S.comps.slice(0, 1).map(c => c.label)); S.segMethod = `Yapay zeka sunucusu (${url})`;
       $('caseMsg').hidden = true; renderComps(); await rebuildBone(true);
     } catch (e) {
-      busy(false); alertMsg(ac.signal.aborted ? 'Segmentasyon iptal edildi.' : `Segmentasyon sunucusuna ulaşılamadı (${e.message}). Eşik yöntemiyle devam edebilirsiniz.`);
+      busy(false); alertMsg(ac.signal.aborted ? 'Segmentasyon iptal edildi.' : `${xl('Segmentasyon sunucusuna ulaşılamadı')} (${xl(e.message)}). ${xl('Eşik yöntemiyle devam edebilirsiniz.')}`);
     }
   }
   async function rebuildBone(frame) {
@@ -806,7 +810,7 @@
   function syncLesion() {
     lFields.forEach(([k, , , , , unit]) => { $('l_' + k).value = S.lesion[k]; $('lo_' + k).textContent = `${fmt(S.lesion[k])} ${unit}`; });
     $('resType').value = S.lesion.condyle || ''; $('resTypeHint').hidden = !S.lesion.condyle;
-    $('lesStatus').textContent = !S.anchor ? '' : S.lesion.ok ? `Sınır onaylandı${S.lesion.by ? ' · ' + S.lesion.by : ''}.` : 'Sınır onayı bekliyor (7. adım).';
+    $('lesStatus').textContent = !S.anchor ? '' : S.lesion.ok ? `${xl('Sınır onaylandı')}${S.lesion.by ? ' · ' + S.lesion.by : ''}.` : 'Sınır onayı bekliyor (7. adım).';
   }
   lFields.forEach(([k]) => $('l_' + k).addEventListener('input', e => { S.lesion[k] = +e.target.value; unapprove(S.lesion); syncLesion(); updateLesionPart(); renderAppr(); render(); emit('parts'); emit('changed'); }));
   syncLesion();
@@ -895,13 +899,13 @@
         if (t >= -1 && t <= top && O[id] && D[id] * h - h / 2 > c) Gm[id] = 1;
       }
       // screw path through bone
-      let inBone = 0, crossesPlane = false, exitAt = null;
+      let inBone = 0, crossesPlane = false, exitAt = null, slotGap = Infinity;
       for (let t = 0; t <= s.sc.len; t += 0.25) {
         const q = s.entry.clone().add(s.dir.clone().multiplyScalar(t));
         if (boneAt(q)) inBone += 0.25; else if (exitAt === null && t > 1) exitAt = t;
-        for (const pw of pls) if (Math.abs(q.clone().sub(pw.p).dot(pw.N)) <= pw.w / 2 + 0.5) crossesPlane = true;
+        for (const pw of pls) { const dist = Math.abs(q.clone().sub(pw.p).dot(pw.N)); if (dist <= pw.w / 2 + 0.5) crossesPlane = true; slotGap = Math.min(slotGap, dist - pw.w / 2 - s.sc.d / 2); }   // slotGap: screw surface (axis minus radius) to the slot edge
       }
-      screwInfo.push({ s, ok: true, inBone: Math.min(inBone, s.sc.len), crossesPlane, exitAt });
+      screwInfo.push({ s, ok: true, inBone: Math.min(inBone, s.sc.len), crossesPlane, slotGap, exitAt });
     }
     if (gap) for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
       const id = i + nx * (j + ny * k); if (!Gm[id]) continue;
@@ -1006,7 +1010,7 @@
     }));
   }
   // cuts are edited in the resection step, screws in their own step; approval happens only in the review step
-  const apprText = o => o.ok ? `Onaylı${o.by ? ' · ' + esc(o.by) : ''}${o.at ? ' · ' + new Date(o.at).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }) : ''}. Değişiklik onayı kaldırır.` : 'Sistem önerisi; cerrah onayı İnceleme ve onay adımında verilir.';
+  const apprText = o => o.ok ? `${xl('Onaylı')}${o.by ? ' · ' + esc(o.by) : ''}${o.at ? ' · ' + new Date(o.at).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }) : ''}. ${xl('Değişiklik onayı kaldırır.')}` : 'Sistem önerisi; cerrah onayı İnceleme ve onay adımında verilir.';
   function renderElements() {
     const btn = (k, o, i, name) => `<button class="el ${S.sel === k + i ? 'on' : ''}" data-s="${k}${i}" aria-pressed="${S.sel === k + i}">${name} ${i + 1}<span class="dot ${o.ok ? 'ok' : ''}" title="${o.ok ? 'Onaylı' : 'Onay bekliyor'}"><span class="sr-only">${o.ok ? 'onaylı' : 'onay bekliyor'}</span></span></button>`;
     $('plList').innerHTML = S.planes.map((p, i) => btn('p', p, i, 'Kesi')).join('');
@@ -1025,7 +1029,7 @@
       `<p class="hint">${apprText(o)}</p><p class="hint more">3B görünümde kesiyi ya da vidayı tutup sürükleyebilir, tutamaçla da taşıyabilirsiniz (W taşı, E döndür).</p>` +
       `<div class="btns end"><button id="delEl" class="sm"><svg class="i"><use href="#i-trash"/></svg>${isP ? 'Kesiyi sil' : 'Vidayı sil'}</button></div>`;
     fields.forEach(([k, , , , st, unit]) => $('f_' + k).addEventListener('input', e => { o[k] = +e.target.value; unapprove(o); $('o_' + k).textContent = `${fmt(o[k], st < 1 ? 1 : 0)} ${unit}`; schedule(isP, true); }));
-    $('delEl').addEventListener('click', () => { (isP ? S.planes : S.screws).splice(i, 1); S.sel = null; schedule(isP); });
+    $('delEl').addEventListener('click', () => { (isP ? S.planes : S.screws).splice(i, 1); S.sel = null; unapproveAll(); schedule(isP); });
   }
   function renderMeasures() {
     const R = S.result; if (!R) { $('measures').innerHTML = ''; return; }
@@ -1060,7 +1064,7 @@
       });
     }
     if (!R.pieces) out.push(['crit', 'Kritik', 'Guide oluşmadı (boş); guide merkezini, duvar ve boşluk değerlerini kontrol edin.', 'guide']);
-    if (R.pieces > want) out.push(['crit', 'Kritik', `Guide ${R.pieces} parçaya bölünüyor (beklenen ${want}); ${want === 1 ? 'köprüyü genişletin ya da kesileri taşıyın' : 'her guide\'ın kendi vidası ve yeterli boyu olmalı'}.`, 'guide']);
+    if (R.pieces > want) out.push(['crit', 'Kritik', want === 1 ? `Guide ${R.pieces} parçaya bölünüyor (beklenen ${want}); köprüyü genişletin ya da kesileri taşıyın.` : `Guide ${R.pieces} parçaya bölünüyor (beklenen ${want}); her guide'ın kendi vidası ve yeterli boyu olmalı.`, 'guide']);
     if (want === 2 && R.pieces < 2) out.push(['crit', 'Kritik', 'İki guide seçili ama guide ayrılmadı; dış kesiler birbirine yaklaşıyor olabilir. Kesileri ya da guide boyunu kontrol edin.', 'guide']);
     if (want === 2) {
       const g = splitGap(S.g, R.pls), cnt = [0, 0];
@@ -1076,16 +1080,17 @@
     if (st && st.ok) {
       if (!st.free) out.push(['crit', 'Kritik', `Guide hiçbir yönde takılamıyor; en iyi yönde bile ${fmt(st.best.block, 0)} mm² kemik guide'ın üstünde kalıyor. Sarma derinliğini azaltın ya da guide'ı taşıyın.`, 'guide']);
       else if (st.best.tilt > 0) out.push(['warn', 'Uyarı', `Guide dik oturtulamıyor; yalnız yaklaşık ${st.best.tilt}° eğik takılabilir (${st.free}/${st.dirs.length} yön uygun). Ameliyatta takma yönü açıklanmalı.`, 'guide']);
-      const sw = st.worstSlide, along = Math.abs(sw.dir[0]) > Math.abs(sw.dir[1]) ? 'kemik ekseni boyunca' : 'yanal yönde';
-      if (sw.r < 0.05) out.push(['warn', 'Uyarı', `Vidalar takılmadan önce guide ${along} kayabilir: temasın yalnız %${fmt(sw.r * 100, 0)}'i direnç gösteriyor. Belirgin bir anatomik çıkıntıya taşımayı ya da sarmayı artırmayı düşünün.`, 'guide']);
-      const wr = st.worstRot, rn = { u: 'kemik ekseni', v: 'yanal eksen', n: 'oturma ekseni' }[wr.axis];
-      if (wr.r < 0.05) out.push(['warn', 'Uyarı', `Guide ${rn} etrafında dönebilir: temasın yalnız %${fmt(wr.r * 100, 0)}'i direnç gösteriyor.`, 'guide']);
+      const sw = st.worstSlide, along = Math.abs(sw.dir[0]) > Math.abs(sw.dir[1]);
+      if (sw.r < 0.05) out.push(['warn', 'Uyarı', along ? `Vidalar takılmadan önce guide kemik ekseni boyunca kayabilir: temasın yalnız %${fmt(sw.r * 100, 0)}'i direnç gösteriyor. Belirgin bir anatomik çıkıntıya taşımayı ya da sarmayı artırmayı düşünün.` : `Vidalar takılmadan önce guide yanal yönde kayabilir: temasın yalnız %${fmt(sw.r * 100, 0)}'i direnç gösteriyor. Belirgin bir anatomik çıkıntıya taşımayı ya da sarmayı artırmayı düşünün.`, 'guide']);
+      const wr = st.worstRot;
+      if (wr.r < 0.05) out.push(['warn', 'Uyarı', wr.axis === 'u' ? `Guide kemik ekseni etrafında dönebilir: temasın yalnız %${fmt(wr.r * 100, 0)}'i direnç gösteriyor.` : wr.axis === 'v' ? `Guide yanal eksen etrafında dönebilir: temasın yalnız %${fmt(wr.r * 100, 0)}'i direnç gösteriyor.` : `Guide oturma ekseni etrafında dönebilir: temasın yalnız %${fmt(wr.r * 100, 0)}'i direnç gösteriyor.`, 'guide']);
     } else if (R.undercut > 4) out.push(['crit', 'Kritik', `Guide kemiğin altına sarıyor (${fmt(R.undercut, 0)} mm² alttan kesik); oturtulup çıkarılamaz. Sarma derinliğini azaltın.`, 'guide']);
     if (R.contact < 150) out.push(['warn', 'Uyarı', `Temas alanı ${fmt(R.contact, 0)} mm²; oturma belirsiz olabilir (örnek eşik 150 mm²).`, 'guide']);
     R.screwInfo.forEach((si, i) => {
       if (!si.ok) out.push(['crit', 'Kritik', `Vida ${i + 1} kemiğe ulaşmıyor.`, 's' + i]);
       else {
         if (si.crossesPlane) out.push(['crit', 'Kritik', `Vida ${i + 1} kesi hattından geçiyor.`, 's' + i]);
+        else if (si.slotGap < 0.5) out.push(['warn', 'Uyarı', `Vida ${i + 1} gövdesi kesi yuvasına ${fmt(Math.max(0, si.slotGap))} mm yaklaşıyor (vida yarıçapı dahil); testere yoluna değebilir.`, 's' + i]);
         if (si.exitAt !== null && si.exitAt < si.s.sc.len) out.push(['warn', 'Uyarı', `Vida ${i + 1} ${fmt(si.exitAt)} mm'de kemikten çıkıyor (bikortikal mi?).`, 's' + i]);
       }
     });
@@ -1164,11 +1169,11 @@
     $('expZip').disabled = !ready; syncOne();
     if (S.prod && S.prod.key !== prodKey()) $('prodMsg').textContent = 'Plan değişti; üretim STL\'ini yeniden alın.';
     const why = [];
-    if (!name) why.push('onaylayan cerrahın adı girilmedi');
-    if (S.crit || qcCrit) why.push(`${S.crit + (qcCrit ? 1 : 0)} kritik kontrol var`);
-    if (missing.length) why.push(`onay bekleyen: ${missing.join(', ')}`);
-    $('expMsg').textContent = ready ? 'Plan onaylı; paket hazır.' : `Paket için: ${[!name && 'cerrah adı', (S.crit || qcCrit) && `${S.crit + (qcCrit ? 1 : 0)} kritik kontrol`, missing.length && `${missing.length} onay`].filter(Boolean).join(', ') || 'guide gerekli'}. Rapor taslak alınabilir.`;
-    $('expMsg').title = $('expZip').title = ready ? '' : `Üretim paketi için: ${why.join('; ') || 'guide henüz üretilmedi'}.`;
+    if (!name) why.push(xl('onaylayan cerrahın adı girilmedi'));
+    if (S.crit || qcCrit) why.push(xl(`${S.crit + (qcCrit ? 1 : 0)} kritik kontrol var`));
+    if (missing.length) why.push(`${xl('onay bekleyen:')} ${missing.map(xl).join(', ')}`);
+    $('expMsg').textContent = ready ? xl('Plan onaylı; paket hazır.') : `${xl('Paket için:')} ${[!name && xl('cerrah adı'), (S.crit || qcCrit) && xl(`${S.crit + (qcCrit ? 1 : 0)} kritik kontrol`), missing.length && xl(`${missing.length} onay`)].filter(Boolean).join(', ') || xl('guide gerekli')}. ${xl('Rapor taslak alınabilir.')}`;
+    $('expMsg').title = $('expZip').title = ready ? '' : `${xl('Üretim paketi için:')} ${why.join('; ') || xl('guide henüz üretilmedi')}.`;
   }
   // ---------- navigation from checks, review rows and 3D markers to the item ----------
   const STEP_OF = { data: 'st1', anat: 'st2', lesion: 'st3', res: 'st3', fib: 'st4', guide: 'st5', scr: 'st6' };
@@ -1216,7 +1221,7 @@
   // Live preview: cut discs and screws follow the value at once, a coarse guide (0.8 mm grid, no seating
   // analysis) is rebuilt as fast as the machine allows, and the full guide, resection and checks follow
   // once the value rests.
-  let timer = null;
+  let timer = null, rebuildPending = false;   // rebuildPending: a scheduled guide / resection rebuild has not finished yet
   let previewRaf = 0;
   function previewElements() {
     if (!previewRaf) previewRaf = requestAnimationFrame(() => { previewRaf = 0; previewNow(); });
@@ -1234,8 +1239,8 @@
     if (!liveEdit) renderElements();
     previewElements();
     // while dragging only the cut discs and screws move; the resected piece and the guide follow on release
-    clearTimeout(timer);
-    timer = setTimeout(async () => {
+    clearTimeout(timer); rebuildPending = true;
+    timer = setTimeout(async () => { try {
       if (live.resDirty) { live.planes = live.resDirty = false; busy(true, 'Rezeksiyon güncelleniyor…'); await sleep(); await rebuildResection(); }
       if (S.screwRefit) { S.screwRefit = false; if (S.guideOn && S.anchor) { placeScrews(); S.sel = null; renderElements(); } }
       await regenerate();
@@ -1243,7 +1248,7 @@
       if (S.fitReport) {
         const f = S.fitReport, R = S.result, want = S.g.split && S.planes.length >= 2 ? 2 : 1; S.fitReport = null;
         const ok = R && R.pieces === want && !(R.seat && R.seat.ok && !R.seat.free);
-        if ($('guideStat')) $('guideStat').textContent = ok ? `Guide yeni konuma göre yeniden şekillendi (sarma ${fmt(S.g.wrap, 1)} mm${f.split ? ', iki parça' : ''}).` : 'Bu konumda guide kemiğe takılamıyor; açıyı ya da konumu değiştirin veya sarma derinliğini düşürün.';
+        if ($('guideStat')) $('guideStat').textContent = ok ? (f.split ? `Guide yeni konuma göre yeniden şekillendi (sarma ${fmt(S.g.wrap, 1)} mm, iki parça).` : `Guide yeni konuma göre yeniden şekillendi (sarma ${fmt(S.g.wrap, 1)} mm).`) : 'Bu konumda guide kemiğe takılamıyor; açıyı ya da konumu değiştirin veya sarma derinliğini düşürün.';
       }
       // a new angle or size: the guide is re-formed to seat on the bone where it now lies (wrap depth, one or two pieces)
       if (S.refit) {
@@ -1254,7 +1259,8 @@
           const f = await fitWrap(); if (f) S.fitReport = f;
         } else if (S.guideOn && R && $('guideStat')) $('guideStat').textContent = 'Guide yeni konumda kemiğe oturuyor.';
       }
-    }, liveEdit ? 400 : 120);
+    } finally { if (timer === t) rebuildPending = false; } }, liveEdit ? 400 : 120);
+    const t = timer;
   }
   const ray = new THREE.Raycaster(), mouse = new THREE.Vector2();
   let downAt = null;
@@ -1599,13 +1605,13 @@
   gFields.forEach(([k]) => $('g_' + k).addEventListener('input', e => {
     if (k === 'rot') { setGuideRot(+e.target.value); return; }
     if (k === 'roll') { setGuideRoll(+e.target.value); return; }
-    S.g[k] = +e.target.value;
+    S.g[k] = +e.target.value; unapproveAll();   // every guide body setting changes what was approved
     if (k === 'rot') { unapproveAll(); updateLesionPart(); if (S.guideOn && S.screws.length) S.screwRefit = true; }
     if (k === 'rot' || k === 'L' || k === 'W') S.refit = true;
     if ((k === 'L' || k === 'W') && S.guideOn) clampScrews();
     syncGuideInputs(); schedule(k === 'rot', true);
   }));
-  $('g_side').addEventListener('change', e => { S.g.side = +e.target.value; schedule(false); });
+  $('g_side').addEventListener('change', e => { S.g.side = +e.target.value; unapproveAll(); schedule(false); });
   $('gRot3').addEventListener('input', e => setGuideRot(+e.target.value));
   $('gRoll3').addEventListener('input', e => setGuideRoll(+e.target.value));
   // one drill diameter for every guide screw (and for screws placed later); each screw can still be changed on its own
@@ -1628,7 +1634,7 @@
   syncGuideInputs();
 
   $('segMode').addEventListener('change', e => { const ai = e.target.value === 'ai'; $('aiBox').hidden = !ai; $('thrBox').hidden = ai; if (!ai && S.red) segment(false); });
-  $('aiRun').addEventListener('click', () => { if (S.red) segmentAI(); });
+  $('aiRun').addEventListener('click', async () => { if (!S.red) return; const before = S.labels; await segmentAI(); if (S.labels !== before) { unapproveAll(); renderAppr(); } });   // a new bone segmentation invalidates every approval
   $('suggest').addEventListener('click', suggest);
   $('perSide').addEventListener('change', () => { if (S.anchor && S.planes.length) { placeScrews(); S.sel = null; schedule(false); } });
   let surgTimer = null;
@@ -1725,7 +1731,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     const api = window.claude && window.claude.use ? await window.claude.use('downloads') : null;
     if (api) {
       try { await api.save({ filename, data: blob }); $('expMsg').textContent = `${filename} kaydedildi.`; }
-      catch (e) { $('expMsg').textContent = e.code === 'declined' ? 'Kaydetme iptal edildi.' : `Dosya kaydedilemedi (${e.code || e.message}).`; }
+      catch (e) { $('expMsg').textContent = e.code === 'declined' ? 'Kaydetme iptal edildi.' : `${xl('Dosya kaydedilemedi')} (${e.code || e.message}).`; }
       return;
     }
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename; a.click();
@@ -1767,7 +1773,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     catch (e) { if (outer && outer.aborted) throw new Error('Üretim STL\'i iptal edildi.'); throw new Error(`Sunucuya ulaşılamadı. Pakette önizleme STL'i vardır.`); }
     finally { clearTimeout(to); }
     const js = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(`Sunucu hatası: ${js.error || res.status}`);
+    if (!res.ok) throw new Error(`${xl('Sunucu hatası:')} ${js.error || res.status}`);
     const bin = atob(js.stl_b64), u8 = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
     return { stl: u8, watertight: js.watertight, bodies: js.bodies, volume: js.volume_mm3, faces: js.faces, ms: js.ms };
   }
@@ -1780,13 +1786,23 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     try {
       const r = await serverGuide(Object.assign({ vol: S.vol, red: S.red, F: S.maskF, thr: segThr(), g: S.g, P: S.anchor.p, pls: planesWorld(), scs: screwsWorld(), wrapProfile: S.result && S.result.wrapProfile }, frameAxes()), ac.signal);
       S.prod = Object.assign(r, { key: prodKey() });
-      $('prodMsg').textContent = `Üretim STL'i hazır: ${r.watertight ? 'su geçirmez' : 'SU GEÇİRMEZ DEĞİL'}, ${r.bodies} parça${r.bodies > (S.g.split ? 2 : 1) ? ' (BEKLENENDEN FAZLA PARÇA, guide\'ı kontrol edin)' : ''}, ${fmt(r.volume / 1000, 2)} cm³, ${r.faces} üçgen. Pakete guide_uretim.stl olarak eklenir.`;
+      $('prodMsg').textContent = `${xl("Üretim STL'i hazır:")} ${r.watertight ? xl('su geçirmez') : xl('SU GEÇİRMEZ DEĞİL')}, ${xl(`${r.bodies} parça`)}${r.bodies > (S.g.split ? 2 : 1) ? ' ' + xl("(BEKLENENDEN FAZLA PARÇA, guide'ı kontrol edin)") : ''}, ${fmt(r.volume / 1000, 2)} cm³, ${xl(`${r.faces} üçgen`)}. ${xl('Pakete guide_uretim.stl olarak eklenir.')}`;
       if (S.fib && S.fib.guide && window.Fibula && !ac.signal.aborted) try { await Fibula.production(ac.signal); } catch (e) { $('prodMsg').textContent += ` Fibula guide'ı: ${e.message}`; }
     } catch (e) { S.prod = null; $('prodMsg').textContent = e.message; }
     busy(false);
   }
   async function exportPackage() {
     if (!parts.guide) return;
+    // an edit was made moments ago and the guide / resection is still being rebuilt: the files would not match the approved plan
+    if (rebuildPending) {
+      busy(true, 'Guide güncelleniyor…');
+      for (let i = 0; i < 1200 && rebuildPending; i++) await new Promise(r => setTimeout(r, 50));
+      busy(false);
+      if (rebuildPending || $('expZip').disabled) { alertMsg('Plan yeni değişti; guide güncellenip onaylar yenilenmeden paket alınamaz.'); return; }
+    }
+    // the plate is planned but has no computed path (a stale state): recompute once, and warn if the plate files are still missing
+    if (window.Plate && Plate.missing()) { try { await Plate.update(); } catch (e) { /* warned below */ } }
+    const plateMissing = !!(window.Plate && Plate.missing());
     const prod = S.prod && S.prod.key === prodKey() ? S.prod : null;
     const files = [{ name: prod ? 'guide_onizleme.stl' : 'guide.stl', data: stlOf(parts.guide.obj) }, { name: 'kemik_kalan.stl', data: stlOf(parts.bone.obj) }];
     const fg = fullBoneGeo(); if (fg) files.push({ name: 'kemik_tam.stl', data: stlOf(new THREE.Mesh(fg)) });
@@ -1795,8 +1811,11 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     (window.ExportHooks || []).forEach(f => { try { f(files); } catch (e) { /* optional files */ } });
     if (parts.resected) files.push({ name: 'rezeke_parca.stl', data: stlOf(parts.resected.obj) });
     files.push({ name: 'plan.json', data: $('json').textContent }, { name: 'rapor.html', data: reportHTML() });
-    if (window.Report) try { files.push({ name: 'cerrahi_rapor.pdf', data: new Uint8Array(await (await Report.build()).arrayBuffer()) }); } catch (e) { /* the HTML report is still in the package */ }
+    let pdfFailed = false;
+    if (window.Report) try { files.push({ name: 'cerrahi_rapor.pdf', data: new Uint8Array(await (await Report.build()).arrayBuffer()) }); } catch (e) { pdfFailed = true; console.warn('pdf report', e); }   // the HTML report is still in the package
     await offer('guide_paketi.zip', zip(files));
+    if (pdfFailed) alertMsg('UYARI: PDF rapor oluşturulamadı; pakette yalnız HTML rapor var.');
+    if (plateMissing) alertMsg('UYARI: Plak planlı ama plak hattı hesaplanamadı; pakette plak dosyaları YOK. Plak bölümünü kontrol edip paketi yeniden alın.');
     emit('exported');
   }
   // single files from the Teslim step: bone models any time, the guide only once the plan is ready for production
@@ -1848,7 +1867,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
       if (ab && ab.p && ab.c && ab.n && ab.n.lengthSq() > 1e-6) S.anchor.base = { p: ab.p, n: ab.n.normalize(), c: ab.c };
       const num = (o, keys, d) => { const r = {}; keys.forEach(k => { const v = Number(o && o[k]); r[k] = Number.isFinite(v) ? v : d[k]; }); return r; };
       const who = o => ({ ok: !!(o && o.ok), ...(o && o.ok && typeof o.by === 'string' ? { by: o.by.slice(0, 120) } : {}), ...(o && o.ok && typeof o.at === 'string' ? { at: o.at.slice(0, 40) } : {}) });
-      const G0 = { rot: 0, roll: 0, L: 36, W: 22, wrap: 6, wall: 2.5, clear: 0.3, bridge: 4, side: 1, split: 0, flange: 3, peri: 0, fit: 0, stopT: 0, stopB: 0, stopL: 6, stopD: 5 };
+      const G0 = G_DEFAULT;
       Object.assign(S.g, num(plan.g, Object.keys(G0), G0));
       // keep every value inside the range its control allows (a hand-edited or damaged plan cannot hang the app)
       const clampTo = (o, k, a, b) => { o[k] = Math.max(a, Math.min(b, o[k])); };
@@ -1890,15 +1909,17 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     if (src && src.type === 'sample' && !(S.source && S.source.fp === src.fp)) { S.autoAnchor = false; S.restoring = true; await loadSample(src.name); }
     else if (src && src.type === 'dicom' && !(S.source && S.source.fp === src.fp)) {
       S.pendingPlan = plan;
-      alertMsg(`Bu vaka "${src.name}" serisine (${src.slices || '?'} kesit) ait. Planı açmak için aynı DICOM serisini yükleyin.`);
+      alertMsg(`${xl('Bu vaka')} "${src.name}" ${xl(`serisine (${src.slices || '?'} kesit) ait. Planı açmak için aynı DICOM serisini yükleyin.`)}`);
       return false;
     }
     await applyPlan(plan); return true;
   }
   function serverUrl() { return ($('aiUrl').value || '').trim().replace(/\/+$/, ''); }
   function select(sel) { if (sel) S.guideSel = false; S.sel = sel; emit('select', sel); renderElements(); rebuildElementParts(S.result ? S.result.pls : planesWorld(), S.result ? S.result.screwInfo : []); applyExplode(); render(); }
-  window.Studio = { renderComps, setGuideRot, setGuideRoll, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, resEnds, splitGap, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr };
+  window.Studio = { renderComps, setGuideRot, setGuideRoll, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, resEnds, splitGap, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume };
   bus.addEventListener('planeDragged', () => { renderElements(); schedule(true, true); });
+  // messages assembled at run time are written in the language that was active: write them again when it changes
+  if (window.addEventListener) window.addEventListener('langchange', () => { try { renderAppr(); syncLesion(); } catch (e) { /* no case open yet */ } });
   emit('ready');
 
   try { await loadSample('mandible'); } catch (e) { busy(false); alertMsg('Örnek vaka açılamadı: ' + e.message); }

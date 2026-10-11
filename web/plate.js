@@ -313,7 +313,10 @@ window.Plate = (function () {
     set(x) { P = clean(x); if (!(P.sys in SYSTEMS)) P.sys = DEF.sys; render(); update(); },
   };
   bus.addEventListener('parts', () => { if (P.on && !S.restoring) later(); });
+  // a plan restore (undo, redo, reopen) sets the plate while bone/graft parts are still being rebuilt and silences 'parts':
+  // recompute once the restore has finished, or the plate stays empty and the package loses its plate files
+  bus.addEventListener('planApplied', () => { if (P.on) later(); });
   bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring)) { P = Object.assign({}, DEF); last = null; draw(); render(); } });
   render();
-  return { summary, compute, update, placeScrews, get: () => last, params: () => P };
+  return { summary, compute, update, placeScrews, get: () => last, params: () => P, missing: () => !!(P.on && !last) };
 })();

@@ -139,7 +139,7 @@ window.Report = (function () {
       // close views of what the surgeon builds: the guide on the bone, the plate, the implants on the grafts
       if (has('guide')) shots.push({ img: await loadImg(snapshot([n.x, n.y, n.z], 1000, 640, 0, /^(guide|screw)$/, 1.5)), cap: 'Guide yakın görünüm (kemiğe bakış)' });
       if (has('plate')) shots.push({ img: await loadImg(snapshot([n.x, n.y, n.z], 1000, 640, 0, /^plate$/, 1.15)), cap: 'Plak ve vida delikleri' });
-      if (has('implants')) { const up = Fibula.state().last.D.vup; shots.push({ img: await loadImg(snapshot([up.x, up.y, up.z], 1000, 640, 0, /^implants$/, 2.2, /^(guide|screw|plate|lesion|resected)/)), cap: 'İmplantlar (oklüzal bakış)' }); }
+      if (has('implants') && window.Fibula && Fibula.active() && Fibula.state().last) { const up = Fibula.state().last.D.vup; shots.push({ img: await loadImg(snapshot([up.x, up.y, up.z], 1000, 640, 0, /^implants$/, 2.2, /^(guide|screw|plate|lesion|resected)/)), cap: 'İmplantlar (oklüzal bakış)' }); }
       if (window.Fibula && Fibula.active()) { St.scene.traverse(o => { if (o.isLight) o.layers.enableAll(); }); shots.push({ img: await loadImg(snapshot([0, -1, 0.3], 1000, 640, 1)), cap: 'Fibula ve fibula guide\'ı' }); }
     }
     // CT slices through the resection centre and through each cut, with the plan drawn on them

@@ -551,8 +551,25 @@ window.Fibula = (function () {
     if (St.parts.resected) { St.parts.resected.visible = false; St.parts.resected.obj.visible = false; }
     guideKey = ''; update(); syncUI(); setView('f'); St.emit('changed');
   }
+  // a stored plan is untrusted input: keep every value inside the range its control allows (like applyPlan does for the guide).
+  // kerf <= 0 would give a guide without saw slots, so it is also reported
+  function sanitize(p) {
+    const q = St.clone(p), warn = [], num = (v, d) => { const x = Number(v); return Number.isFinite(x) ? x : d; }, cl = (v, a, b, d) => Math.max(a, Math.min(b, num(v, d)));
+    const D0 = defaultPlan();
+    if (!(num(q.kerf, 0) > 0)) warn.push('Testere payı (kerf) sıfır ya da geçersiz; ' + D0.kerf + ' mm kullanıldı. Testere yuvaları için değeri kontrol edin.');
+    q.kerf = num(q.kerf, 0) > 0 ? cl(q.kerf, 0.5, 2, D0.kerf) : D0.kerf;
+    q.distal = cl(q.distal, 40, 140, D0.distal); q.vOff = cl(q.vOff, -12, 12, 0);
+    q.dblH = q.dblH == null ? null : cl(q.dblH, 8, 30, 8); q.dbl = q.dbl ? 1 : 0;
+    q.n = Math.round(cl(q.n, 1, 3, 2));
+    const n = q.n, ang = (a, len) => Array.from({ length: len }, (_, i) => cl(Array.isArray(a) ? a[i] : 0, -180, 180, 0));
+    q.yaw = ang(q.yaw, n + 1); q.pitch = ang(q.pitch, n + 1); q.roll = ang(q.roll, n);
+    const kn = Array.isArray(q.knots) && q.knots.length === n - 1 ? q.knots.map(x => cl(x, 0.05, 0.95, 0.5)) : null;
+    q.knots = kn && kn.every((x, i) => i === 0 || x > kn[i - 1]) ? kn : Array.from({ length: n - 1 }, (_, i) => (i + 1) / n);
+    return { plan: q, warn };
+  }
   async function apply(p) {
     if (!p) { if (S.fib) unload(); return; }
+    const sn = sanitize(p); p = sn.plan; if (sn.warn.length) setTimeout(() => St.alertMsg(sn.warn.join(' ')), 0);
     if (!F || !F.source || F.source.fp !== p.source.fp) {
       if (p.source && p.source.type === 'sample') { if (!(await load('sample'))) return; }
       else { pending = p; msg(`Bu planın fibula serisi "${p.source ? p.source.name : '?'}". Fibula planını açmak için aynı seriyi ilk adımda yükleyin.`); if (window.UI) UI.openStep('st1'); return; }

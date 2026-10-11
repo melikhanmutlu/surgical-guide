@@ -205,10 +205,17 @@ window.Implants = (function () {
   function changed() { update(); render(); St.emit('changed'); }
   const later = () => { clearTimeout(timer); timer = setTimeout(() => { update(); render(); }, 250); };
 
+  // a stored plan is untrusted input: numbers only, each inside the range its control allows
+  const clean = y => {
+    const o = Object.assign({}, DEF, y), num = (v, d) => { const n = Number(v); return Number.isFinite(n) ? n : d; };
+    F.forEach(([k, , mn, mx]) => { o[k] = Math.max(mn, Math.min(mx, num(o[k], DEF[k] === undefined ? mn : DEF[k]))); });
+    o.seg = Math.max(0, Math.min(2, Math.round(num(o.seg, 0))));
+    return o;
+  };
   (window.PlanExt = window.PlanExt || {}).impl = {
     label: 'Dental implant planı',
     get: () => (list.length ? list.map(x => Object.assign({}, x)) : null),
-    set(x) { list = Array.isArray(x) ? x.map(y => Object.assign({}, DEF, y)) : []; sel = list.length - 1; update(); render(); },
+    set(x) { list = Array.isArray(x) ? x.slice(0, 20).filter(y => y && typeof y === 'object').map(clean) : []; sel = list.length - 1; update(); render(); },
   };
   ['parts', 'fibGuide'].forEach(e => bus.addEventListener(e, () => { if (!S.restoring) later(); }));
   bus.addEventListener('changed', () => { if (!S.restoring && !$('implBox').contains(document.activeElement)) later(); });
