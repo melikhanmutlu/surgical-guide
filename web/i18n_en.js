@@ -1243,5 +1243,17 @@ window.I18N_EN = {
 "Şu anki durum": "Current state",
 "şimdi": "now",
 "şu an": "currently",
-"− taraf": "− side"
+"− taraf": "− side",
+"Bitişik kemikler ayrılıyor (kafatası, çene, omurga)…": "Separating touching bones (skull, jaw, spine)…",
+"Tibia ve fibula ayrılıyor…": "Separating tibia and fibula…",
+"Mandibula (otomatik ayrıldı)": "Mandible (separated automatically)",
+"+ bitişik kemik ayırma": "+ touching-bone separation",
+"Eşik maskesi kafatası, çene ve omurgayı tek parça veriyor (# cm³, yükseklik # mm) ve mandibula otomatik ayrılamadı. Planlama kemiği olarak bu büyük parça alındı; kondil, rezeksiyon ve fibula planı güvenilmez. Yalnız mandibulayı \"Seç\" aracıyla ya da kemik listesinden seçin, ya da bitişik kemikleri işaretleyip ayırın.": "The threshold mask joins skull, jaw and spine into one piece (# cm³, # mm tall) and the mandible could not be separated automatically. This large piece was taken as the planning bone; the condyle, resection and fibula plan are not reliable. Select only the mandible with the \"Select\" tool or from the bone list, or mark the touching bones and separate them.",
+"Mandibula otomatik ayrıldı (# cm³, yükseklik # mm) ama parça beklenen aralığın kenarında; üst çene ya da kafatası artıkları karışmış ya da mandibulanın bir kısmı eksik olabilir. Kemik modelini kontrol edin.": "The mandible was separated automatically (# cm³, # mm tall) but the piece is at the edge of the expected range; remnants of the upper jaw or skull may be attached or part of the mandible may be missing. Check the bone model.",
+"Planlama kemiği # cm³; bir mandibula için fazla büyük (# cm³ üstü). Kafatası, üst çene ya da omurga da seçili olabilir; planı bu kemikle kurmayın.": "The planning bone is # cm³, too large for a mandible (above # cm³). Skull, upper jaw or spine may be selected too; do not build the plan on this bone.",
+"Planlama kemiği tarama alanının üst ya da alt kenarına dayanıyor; kafatası ya da omurga seçili olabilir.": "The planning bone reaches the top or bottom edge of the scan; skull or spine may be selected.",
+"Tibia ve fibula eşik maskesinde birleşik ve otomatik ayrılamadı; aday tüm alt bacak olabilir. Fibula planını kurmadan önce adayın çapını ve uzunluğunu kontrol edin.": "Tibia and fibula are joined in the threshold mask and could not be separated automatically; the candidate may be the whole lower leg. Check the candidate's diameter and length before building the fibula plan.",
+"En ince aday bile Ø# mm; bu fibula değil, tibia ya da tüm alt bacak. Fibula planı güvenilmez.": "Even the thinnest candidate is Ø# mm; this is not a fibula but the tibia or the whole lower leg. The fibula plan is not reliable.",
+"Seçili fibula yarıçapı # mm (en çok # mm beklenir); tibia ya da ayak kemikleri fibulaya karışmış olabilir. Başka bir aday seçin ya da BT'yi kontrol edin.": "The selected fibula radius is # mm (# mm at most expected); tibia or foot bones may be attached to the fibula. Choose another candidate or check the CT.",
+"Fibula: mandibula kemiği şüpheli (Kontroller sekmesindeki kemik uyarısına bakın); iki kesi ve rezeke parça olmadan segment planı kurulamaz.": "Fibula: the mandible bone is doubtful (see the bone warning in the Checks tab); the segment plan cannot be built without two cuts and a resected piece."
 };

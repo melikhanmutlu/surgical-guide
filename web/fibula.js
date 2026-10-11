@@ -7,6 +7,9 @@ window.Fibula = (function () {
   const St = window.Studio; if (!St) return null;
   const { S, V, G, fmt, bus } = St, $ = id => document.getElementById(id);
   const MIN_LEN = 20, DEV_WARN = 3, ANGLE_WARN = 35, PROX_KEEP = 60, DISTAL_MIN = 60, THR = 250, DBL_GAP = 15;
+  const FIB_R = [2.5, 12];                 // mm: slenderest / thickest radius a fibula can have (warning above)
+  const FIB_LEN = [120, 500];              // mm: shortest / longest fibula (CT table rails are 800 mm and more)
+  const FIB_RATIOS = [0.45, 0.5, 0.4, 0.55, 0.35, 0.6];   // neck / core thickness ratios tried by G.separator
   const GRAFT = [0xe2a33c, 0xc9822a], FGUIDE = St.COLORS.fguide, BONE = St.COLORS.bone;
   const r2d = THREE.MathUtils.radToDeg, deg = THREE.MathUtils.degToRad;
   St.renderer.localClippingEnabled = true;
@@ -48,25 +51,73 @@ window.Fibula = (function () {
       else { const r = await St.readDicom(files); if (r.error) { St.busy(false); msg(r.error); return false; } ({ vol, source, label } = r); }
     } catch (e) { St.busy(false); msg('Fibula BT\'si açılamadı: ' + e.message); return false; }
     St.busy(true, 'Fibula ayrıştırılıyor…'); await St.sleep();
-    const red = G.reduce(vol, 0.8), { labels, comps } = G.components(G.threshold(red, THR), red.nx, red.ny, red.nz, 200);
-    const stats = boneStats(red, labels, comps.slice(0, 6));
-    const long = stats.filter(c => c.len >= 80 && c.elong >= 3);
+    const red = G.reduce(vol, 0.8), { labels, comps, count } = G.components(G.threshold(red, THR), red.nx, red.ny, red.nz, 200);
+    const top = comps.slice(0, 6), longOf = st => st.filter(c => c.len >= 80 && c.elong >= 3);
+    let stats = boneStats(red, labels, top), long = longOf(stats), strict = fibulaCands(long);
     if (!long.length) { St.busy(false); msg('Bu seride uzun kemik (fibula) bulunamadı. Alt bacak BT\'si yükleyin.'); return false; }
-    // fibula candidates: elongated pieces that are not the thickest one next to them (tibia); thinnest first
-    const cands = long.slice().sort((a, b) => a.rad - b.rad);
-    cands.forEach(c => { const others = long.filter(o => o !== c && o.rad > c.rad * 1.25); c.tibia = others.sort((a, b) => a.C.distanceTo(c.C) - b.C.distanceTo(c.C))[0] || null; });
-    const fibs = cands.filter(c => c.tibia).length ? cands.filter(c => c.tibia) : cands;
-    F = { source, label, vol, red, labels, cands: fibs, c: null };
+    const warn = [];
+    // A bone threshold joins tibia, fibula and foot (one piece per leg: the whole lower leg then looks like a 98 mm
+    // "fibula"). Cut the thick long pieces at their thin necks; the fibula is the slender piece beside a thicker parallel one.
+    const thickAll = long.filter(c => c.rad > FIB_R[1] && c.len >= 150), first = strict, thick = thickAll.length > first.length ? thickAll : [];   // a clean leg CT has as many fibulas as thick pieces
+    if (thick.length) {
+      St.busy(true, 'Tibia ve fibula ayrılıyor…'); await St.sleep();
+      const seps = thick.map(c => ({ c, sepr: G.separator(labels, red.nx, red.ny, red.nz, red.sp, { label: c.label }) }));
+      const rest = top.filter(c => !thick.some(t => t.label === c.label));
+      const cutAt = ratio => {
+        let base = count; const pieces = [];
+        seps.forEach(({ c, sepr }) => { sepr.restore(c.label); const ps = sepr.run({ ratio, base, out: labels, minSize: 100 }); base += ps.ids; pieces.push(...ps); });
+        stats = boneStats(red, labels, rest.concat(pieces.slice(0, 80)));
+        long = longOf(stats); strict = fibulaCands(long);
+        return { ratio, n: strict.length };
+      };
+      let best = null, last = null;
+      for (const ratio of FIB_RATIOS) {
+        last = cutAt(ratio);
+        if (!best || last.n > best.n) best = last;
+        if (last.n >= thick.length) break;               // one fibula per leg-like piece
+        St.busy(true, 'Tibia ve fibula ayrılıyor…'); await St.sleep();
+      }
+      if (best.n > first.length) { if (best.ratio !== last.ratio) cutAt(best.ratio); }
+      else {
+        seps.forEach(({ c, sepr }) => sepr.restore(c.label));         // nothing gained: back to the plain threshold pieces
+        stats = boneStats(red, labels, top); long = longOf(stats); strict = first;
+        if (!first.length) warn.push('Tibia ve fibula eşik maskesinde birleşik ve otomatik ayrılamadı; aday tüm alt bacak olabilir. Fibula planını kurmadan önce adayın çapını ve uzunluğunu kontrol edin.');
+      }
+    }
+    // fibula candidates: slender long pieces with a thicker parallel piece (tibia) beside them, longest first (arms and ribs are
+    // shorter); else the old guess (thinnest long piece)
+    let fibs = strict.slice().sort((a, b) => b.len - a.len || a.rad - b.rad);
+    if (!fibs.length) {
+      fibs = long.slice().sort((a, b) => a.rad - b.rad);
+      fibs.forEach(c => { const others = long.filter(o => o !== c && o.rad > c.rad * 1.25); c.tibia = others.sort((a, b) => a.C.distanceTo(c.C) - b.C.distanceTo(c.C))[0] || null; });
+      const withT = fibs.filter(c => c.tibia); if (withT.length) fibs = withT;
+    }
+    F = { source, label, vol, red, labels, cands: fibs, c: null, warn };
     $('fibCand').innerHTML = fibs.map((c, i) => `<option value="${i}" title="Taraf tahminidir">Aday ${i + 1} · ${fmt(c.len, 0)} mm · Ø${fmt(2 * c.rad, 0)} · ${c.C.x > 0 ? 'sol' : 'sağ'}</option>`).join('');
-    St.busy(false); msg(fibs[0].tibia ? '' : 'Tibia ayırt edilemedi; fibula guide\'ının yanal yönü tahmini.');
+    if (!fibs.some(c => c.rad <= FIB_R[1])) warn.push(`En ince aday bile Ø${fmt(2 * fibs[0].rad, 0)} mm; bu fibula değil, tibia ya da tüm alt bacak. Fibula planı güvenilmez.`);
+    St.busy(false); msg(warn[0] || (fibs[0].tibia ? '' : 'Tibia ayırt edilemedi; fibula guide\'ının yanal yönü tahmini.'));
     $('sceneSeg').hidden = false; $('fibBody').hidden = false;
     return true;
   }
+  // a fibula is slender (radius ~3-9 mm, never above FIB_R[1]), long, and runs beside a thicker, parallel, comparably long
+  // bone (the tibia); `c.tibia` is set on every one that does. Ribs, metatarsals and the like have no such partner.
+  function fibulaCands(long) {
+    const out = [];
+    long.forEach(c => {
+      if (c.len < FIB_LEN[0] || c.len > FIB_LEN[1] || c.elong < 5 || c.rad < FIB_R[0] || c.rad > FIB_R[1]) return;
+      const near = o => { const d = o.C.clone().sub(c.C); return d.sub(c.ax.clone().multiplyScalar(d.dot(c.ax))).length(); };      // distance between the axes
+      const partner = long.filter(o => o !== c && o.rad >= c.rad * 1.3 && o.len >= c.len * 0.6 && Math.abs(o.ax.dot(c.ax)) >= 0.9 && near(o) <= 80).sort((a, b) => near(a) - near(b))[0];
+      if (partner) { c.tibia = partner; out.push(c); }
+    });
+    return out;
+  }
   function boneStats(red, labels, comps) {
-    const want = new Map(comps.map((c, i) => [c.label, i])), acc = comps.map(() => ({ n: 0, s: [0, 0, 0], ss: [[0, 0, 0], [0, 0, 0], [0, 0, 0]] }));
+    const lut = new Int32Array(comps.reduce((m, c) => Math.max(m, c.label), 0) + 1).fill(-1); comps.forEach((c, i) => { lut[c.label] = i; });
+    const acc = comps.map(() => ({ n: 0, s: [0, 0, 0], ss: [[0, 0, 0], [0, 0, 0], [0, 0, 0]] }));
     const { nx, ny, nz } = red;
     for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
-      const id = want.get(labels[i + nx * (j + ny * k)]); if (id === undefined) continue;
+      const lb = labels[i + nx * (j + ny * k)]; if (lb <= 0 || lb >= lut.length) continue;
+      const id = lut[lb]; if (id < 0) continue;
       const w = G.worldOf(red, i, j, k), a = acc[id]; a.n++;
       for (let p = 0; p < 3; p++) { a.s[p] += w[p]; for (let q = 0; q < 3; q++) a.ss[p][q] += w[p] * w[q]; }
     }
@@ -388,7 +439,10 @@ window.Fibula = (function () {
   function checks() {
     if (!active()) return [];
     const out = [], P0 = plan(), c = last;
-    if (!c) return [['warn', 'Uyarı', 'Fibula: mandibulada iki kesi ve rezeke parça olmadan segment planı kurulamaz.']];
+    // the fibula itself: thick = tibia / whole lower leg, not a fibula
+    if (F.c && F.c.FR > FIB_R[1]) out.push(['warn', 'Uyarı', `Seçili fibula yarıçapı ${fmt(F.c.FR, 1)} mm (en çok ${FIB_R[1]} mm beklenir); tibia ya da ayak kemikleri fibulaya karışmış olabilir. Başka bir aday seçin ya da BT'yi kontrol edin.`, 'fib']);
+    if (F.warn) F.warn.forEach(t => out.push(['warn', 'Uyarı', t, 'fib']));
+    if (!c) return out.concat([['warn', 'Uyarı', S.segWarn && S.segWarn.length ? 'Fibula: mandibula kemiği şüpheli (Kontroller sekmesindeki kemik uyarısına bakın); iki kesi ve rezeke parça olmadan segment planı kurulamaz.' : 'Fibula: mandibulada iki kesi ve rezeke parça olmadan segment planı kurulamaz.']]);
     c.segs.forEach(g => { if (g.L < MIN_LEN) out.push(['crit', 'Kritik', `Fibula segmenti ${g.i + 1} ${fmt(g.L)} mm; en az ${MIN_LEN} mm olmalı (kanlanma riski).`]); });
     c.segs.forEach(g => [['başlangıç', g.a0], ['bitiş', g.a1]].forEach(([w, a]) => { if (a > ANGLE_WARN) out.push(['warn', 'Uyarı', `Fibula segmenti ${g.i + 1} ${w} kesisi ${fmt(a)}°; ${ANGLE_WARN}° üstü temas yüzeyini azaltır.`]); }));
     if (c.dev > DEV_WARN) out.push(['warn', 'Uyarı', `Greftler defekt hattından ${fmt(c.dev)} mm sapıyor (eşik ${DEV_WARN} mm). Segment ekleyin ya da "Kesileri öner"i kullanın.`]);
