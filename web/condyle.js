@@ -130,7 +130,7 @@ window.Condyle = (function () {
     if (!box.dataset.built) {
       box.dataset.built = '1';
       box.innerHTML = `<div class="ctl"><div class="ctl-row"><label for="neoOff">Yeni kondil: fossaya mesafe</label><output id="neoOffO"></output></div><input type="range" id="neoOff" min="0" max="${NEO_MAX}" step="0.5"></div><p class="hint more" data-for="neoOff">Fibula ucu yuvarlatılır ve kondilin yerinden (fossa) bu kadar aşağıya, kesiye doğru konur. 3-10 mm önerilir; 10 mm üstü uyarı verir. Eklem diski korunur.</p>`;
-      $('neoOff').addEventListener('input', e => { neo = +e.target.value; $('neoOffO').textContent = `${fmt(neo)} mm`; St.unapprove(S.lesion); St.schedule(true); St.emit('changed'); });
+      $('neoOff').addEventListener('input', e => { neo = +e.target.value; $('neoOffO').textContent = `${fmt(neo)} mm`; St.schedule(true); St.emit('changed'); });
     }
     $('neoOff').value = neo; $('neoOffO').textContent = `${fmt(neo)} mm`;
   }

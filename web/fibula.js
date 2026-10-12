@@ -375,12 +375,17 @@ window.Fibula = (function () {
     if (q.clone().sub(g.P0).dot(g.N0) < 0 || q.clone().sub(g.P1).dot(g.N1) > 0) return false;
     return fibBone(q.clone().applyMatrix4(g.Minv));
   }
-  // approval is tied to what the surgeon decided (fibula parameters + mandible cuts), not to derived numbers
+  // approval is tied to what the surgeon decided (fibula parameters + mandible cuts), not to derived numbers; a cut's
+  // point within its plane (pv / pn, a cut turned with the bone) moves the defect's end, so it counts when it is set
   const r3 = x => Math.round(x * 1000) / 1000;
-  const sig = () => { const { ok, by, at, sig: _s, ...p } = plan(); return JSON.stringify([p, S.planes.map(q => [q.off, q.yaw, q.pitch, q.w]), S.anchor ? [S.anchor.p, S.anchor.n].map(v => [v.x, v.y, v.z].map(r3)) : null,
+  const sig = () => { const { ok, by, at, sig: _s, ...p } = plan(); const a = [p, S.planes.map(q => (q.pv || q.pn ? [q.off, q.yaw, q.pitch, q.w, q.pv || 0, q.pn || 0] : [q.off, q.yaw, q.pitch, q.w])), S.anchor ? [S.anchor.p, S.anchor.n].map(v => [v.x, v.y, v.z].map(r3)) : null,
     // the defect also depends on the condyle (condylar resection) and on the bone mask itself
     S.lesion.condyle || null, S.lesion.condyle && window.Ref && Ref.get() ? Ref.get().cond[S.lesion.condyle] || null : null,
-    document.getElementById('thr').value, window.SegEdit ? SegEdit.key() : '']); };
+    document.getElementById('thr').value, window.SegEdit ? SegEdit.key() : ''];
+    // condylar resection: the graft's condylar end lies `neo` mm short of the fossa (web/condyle.js), so the defect and the
+    // segments follow that distance; appended only then, so the signature of every other plan is unchanged
+    if (S.lesion.condyle && window.Condyle && Condyle.neoOffset) a.push(['neo', r3(Condyle.neoOffset())]);
+    return JSON.stringify(a); };
 
   // ---------- scenes ----------
   function clearLeg() { while (leg.children.length) { const c = leg.children.pop(); c.traverse(o => { if (o.material) o.material.dispose(); if (o.geometry && o.geometry !== F?.c?.geo && o.geometry !== F?.c?.tgeo) o.geometry.dispose(); }); } }
