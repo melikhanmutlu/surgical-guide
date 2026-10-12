@@ -3,7 +3,7 @@
 // stubbed fetch) and the preview mesh, so tests/test_server_preview.py can compare the server's STL with the preview.
 // Synthetic bone and the built-in sample case; a real series only when --real <folder> is given (nothing from it is
 // written anywhere but the output folder you name; never commit it).
-//   node tests/preview_dump.mjs <outdir> [--cases bar,sample,arc,arc_split2] [--real <dicom folder> --cells body:L:45,angle:L:60]
+//   node tests/preview_dump.mjs <outdir> [--cases bar,sample,arc,arc_split2,arc_bar] [--real <dicom folder> --cells body:L:45,angle:L:60]
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
@@ -13,7 +13,7 @@ const args = process.argv.slice(2);
 const out = args[0];
 if (!out) { console.error('usage: node tests/preview_dump.mjs <outdir> [--cases a,b] [--real <dir> --cells body:L:45]'); process.exit(2); }
 const opt = k => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : null; };
-const cases = (opt('--cases') || 'bar,sample,arc,arc_split2').split(',').filter(Boolean);
+const cases = (opt('--cases') || 'bar,sample,arc,arc_split2,arc_bar').split(',').filter(Boolean);
 const real = opt('--real'), cells = (opt('--cells') || 'body:L:45,angle:L:60').split(',').filter(Boolean);
 fs.mkdirSync(out, { recursive: true });
 
@@ -62,6 +62,7 @@ async function plan(offs, opts = {}) {
   S.anchor = { p: V(0, 0, 0), n: V(0, 0, 1), axis: V(1, 0, 0) };
   S.planes = offs.map(off => ({ off, yaw: 0, pitch: 0, w: 1.2 }));
   S.g.split = opts.split || 0; if (opts.split) S.gAuto.split = 0;
+  S.g.bar = opts.bar ? 1 : 0; S.gAuto.bar = 0;
   S.guideOn = true; St.placeScrews(); await St.rebuildResection();
   if (opts.fit) await St.fitWrap();
   await St.regenerate(); await idle();
@@ -72,13 +73,14 @@ async function dump(name, extra = {}) {
   if (!St.parts.guide || !S.result) throw new Error(name + ': no guide');
   captured.length = 0;
   $('expSrv').click();
-  const want = S.result.parts && S.result.parts.length === 2 ? 2 : 1;
+  // one request per guide piece, and one for the connecting bar when the plan has one
+  const hasBar = !!(S.result.bar && S.result.bar.ok), want = (S.result.parts && S.result.parts.length === 2 ? 2 : 1) + (hasBar ? 1 : 0);
   for (let i = 0; i < 6000 && !(captured.length >= want && $('busy').hidden); i++) await sleep(50);
   if (captured.length !== want) throw new Error(`${name}: ${captured.length} requests captured, expected ${want} (${$('prodMsg').textContent})`);
   const R = S.result, parts = R.parts || null;
   const meta = Object.assign({
     name, split: S.g.split, pieces: R.pieces, volume: R.volume, contact: R.contact, undercut: R.undercut, dropped: R.dropped || null,
-    seatDir: R.seatDir ? { tilt: R.seatDir.tilt, az: R.seatDir.az } : null, parts: parts && parts.map(p => ({ g: p.g, seatDir: p.result.seatDir && { tilt: p.result.seatDir.tilt, az: p.result.seatDir.az }, pieces: p.result.pieces, volume: p.result.volume })),
+    bar: hasBar, seatDir: R.seatDir ? { tilt: R.seatDir.tilt, az: R.seatDir.az } : null, parts: parts && parts.map(p => ({ g: p.g, seatDir: p.result.seatDir && { tilt: p.result.seatDir.tilt, az: p.result.seatDir.az }, pieces: p.result.pieces, volume: p.result.volume })),
     g: Object.assign({}, S.g), gAuto: Object.assign({}, S.gAuto), fitLog: S.fitLog, planes: S.planes.map(p => ({ off: p.off, yaw: p.yaw, pitch: p.pitch, w: p.w })),
     screws: R.screwInfo.map(si => ({ ok: !!si.ok, noBody: !!si.noBody, shadowed: si.shadowed || 0 })), anchor: { p: S.anchor.p.toArray(), n: S.anchor.n.toArray() },
     red: { sp: S.red.sp, dims: [S.red.nx, S.red.ny, S.red.nz] }, vol: { sp: S.vol.sp, dims: [S.vol.nx, S.vol.ny, S.vol.nz] }, crit: (S.checkList || []).filter(c => c[0] === 'crit').map(c => c[2]),
@@ -86,6 +88,11 @@ async function dump(name, extra = {}) {
   fs.writeFileSync(path.join(out, name + '_meta.json'), JSON.stringify(meta, null, 1));
   fs.writeFileSync(path.join(out, name + '_reqs.json'), JSON.stringify(captured));
   fs.writeFileSync(path.join(out, name + '_preview.stl'), St.stlOf(St.parts.guide.obj));
+  if (hasBar) {
+    if (!St.parts.bar) throw new Error(name + ': bar planned but no bar mesh');
+    fs.writeFileSync(path.join(out, name + '_bar_preview.stl'), St.stlOf(St.parts.bar.obj));
+    fs.writeFileSync(path.join(out, name + '_bar_meta.json'), JSON.stringify({ route: S.result.bar.route, len: S.result.bar.len, clear: S.result.bar.clear, d: S.result.bar.d }, null, 1));
+  }
   console.log(`${name}: split ${S.g.split} pieces ${R.pieces} volume ${R.volume.toFixed(0)} mm3 seat ${JSON.stringify(meta.seatDir || meta.parts.map(p => p.seatDir))} L ${S.g.L} W ${S.g.W} wrap ${S.g.wrap} screws ${meta.screws.map(s => s.ok ? 'ok' : 'x').join(',')} requests ${captured.length} (${captured.map(r => `${r.crop.nx}x${r.crop.ny}x${r.crop.nz}`).join(' ')})`);
 }
 
@@ -94,6 +101,8 @@ for (const c of cases) {
   if (c === 'bar') { await volume(ellipseBar(10, 6)); await plan([-12, 12], { fit: true }); await dump(c); }
   else if (c === 'arc') { await volume(ARC, { x: 50, y: 24, z: 50 }); await plan([-25, 25], { fit: true }); await dump(c); }
   else if (c === 'arc_split2') { await volume(ARC, { x: 50, y: 24, z: 50 }); await plan([-25, 25], { split: 2 }); await dump(c); }
+  // two guides joined by the connecting bar (the long-resection layout): the bar is a third, separate request
+  else if (c === 'arc_bar') { await volume(ARC, { x: 50, y: 24, z: 50 }); await plan([-25, 25], { split: 2, bar: true }); if (!(S.result.bar && S.result.bar.ok)) throw new Error('arc_bar: no bar (' + JSON.stringify(S.result.bar && S.result.bar.why) + ')'); await dump(c); }
   else if (c === 'sample') {
     S.autoAnchor = true;
     S.source = { type: 'sample', name: 'mandible', fp: 'sample:mandible' };

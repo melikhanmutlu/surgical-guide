@@ -166,6 +166,7 @@ window.SW = (function () {
   function resultJ(R) {
     if (!R) return null;
     return { pieces: R.pieces, contact: +R.contact.toFixed(0), undercut: +R.undercut.toFixed(1), volume: +R.volume.toFixed(0), ms: +R.ms.toFixed(0), seat: seatJ(R.seat), adapt: R.adapt || null,
+      bar: R.bar ? { ok: !!R.bar.ok, why: R.bar.why || null, route: R.bar.route || null, len: R.bar.len != null ? +R.bar.len.toFixed(0) : null, clear: R.bar.clear != null ? +R.bar.clear.toFixed(1) : null } : null,
       screwInfo: R.screwInfo.map(si => ({ ok: si.ok, inBone: si.ok ? +si.inBone.toFixed(1) : null, len: si.s && si.s.sc ? si.s.sc.len : null, crossesPlane: !!si.crossesPlane, slotGap: si.ok && Number.isFinite(si.slotGap) ? +si.slotGap.toFixed(2) : null, exitAt: si.exitAt == null ? null : +si.exitAt.toFixed(1) })) };
   }
   function fitStats() {

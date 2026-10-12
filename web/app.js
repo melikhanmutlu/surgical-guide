@@ -167,6 +167,9 @@
   const G_DEFAULT = { rot: 0, roll: 0, L: 36, W: 22, wrap: 6, wall: 2.5, clear: 0.3, bridge: 4, side: 1, split: 0, flange: 3, peri: 0, fit: 0, stopT: 0, stopB: 0, stopL: 6, stopD: 5, kerfSide: 1, vc: 0 };
   // which body values are still chosen automatically from the bone (a slider edit takes a value over by hand)
   const AUTO_DEFAULT = { L: 1, W: 1, wrap: 1, split: 1 };
+  // bar: the connecting bar between the two guides of a long resection (split 2); stopP: a lip on the posterior edge of a
+  // guide that runs up the ramus (its v axis front to back), so the piece rests on the posterior border
+  Object.assign(G_DEFAULT, { bar: 0, stopP: 0 }); Object.assign(AUTO_DEFAULT, { bar: 1, stopP: 1 });
   const S = {
     vol: null, red: null, labels: null, comps: [], selected: new Set(), mask: null,
     anchor: null,             // {p:Vector3, n:Vector3, axis:Vector3}
@@ -384,7 +387,7 @@
     S.anchor = null; S.planes = []; S.screws = []; S.sel = null; S.result = null; S.guideOn = false; S.resRemoved = false; unapprove(S.lesion);
     // a new volume is a new patient: the previous case's guide settings and lesion bounds must not carry over (a plan restore keeps its own)
     if (S.autoAnchor !== false) { Object.assign(S.g, G_DEFAULT, { wrapU: null }); Object.assign(S.gAuto, AUTO_DEFAULT); S.fitLog = []; S.autoSize = null; Object.assign(S.lesion, { from: -6, to: 6, margin: 3, condyle: null }); syncGuideInputs(); syncLesion(); }
-    ['guide', 'resected', 'anchor', 'lesion'].forEach(id => setPart(id, null, null));
+    ['guide', 'bar', 'resected', 'anchor', 'lesion'].forEach(id => setPart(id, null, null));
     clearElementParts();
     await segment(true);
     renderSeries();
@@ -535,7 +538,7 @@
   const RES_PAD = 6;
   let rpCache = { key: null, mask: null, piece: null };
   function resPieceKey(E) {
-    const cond = E && E.condyle ? E.B.p.toArray() : null;
+    const cond = E && E.condyle ? (E.B.cond || E.B.p).toArray() : null;
     return JSON.stringify([S.anchor && S.anchor.p.toArray(), S.anchor && S.anchor.n.toArray(), S.anchor && S.anchor.axis.toArray(), S.g.rot, S.g.kerfSide, S.lesion.condyle || '', cond, S.planes.map(p => [p.off, p.yaw, p.pitch, p.w, p.pv || 0, p.pn || 0])]);
   }
   function resPiece() {
@@ -546,7 +549,7 @@
     const r = S.red, nxy = r.nx * r.ny, { A, B } = E;
     let piece = null;
     // a condylar resection runs from the cut to the condyle: search a ball around that span, keep the piece at the condyle
-    const ap = E.condyle ? A.p.clone().lerp(B.p, 0.5) : S.anchor.p, R = E.condyle ? A.p.distanceTo(B.p) / 2 + 35 : 70, c = G.indexOf(r, [ap.x, ap.y, ap.z]);
+    const Bc = E.condyle ? B.cond || B.p : B.p, ap = E.condyle ? A.p.clone().lerp(Bc, 0.5) : S.anchor.p, R = E.condyle ? A.p.distanceTo(Bc) / 2 + 35 : 70, c = G.indexOf(r, [ap.x, ap.y, ap.z]);
     const rad = r.sp.map(s => Math.ceil(R / s));
     const lo = c.map((x, a) => Math.max(0, Math.floor(x - rad[a]))), hi = c.map((x, a) => Math.min([r.nx, r.ny, r.nz][a] - 1, Math.ceil(x + rad[a])));
     const cand = new Uint8Array(S.mask.length), ax = r.axes, sp = r.sp, o = r.origin;
@@ -564,7 +567,7 @@
     if (comps.length) {
       // the piece nearest the anchor
       let bd = Infinity, best = null;
-      const near = E.condyle ? B.p : ap;
+      const near = E.condyle ? Bc : ap;
       comps.forEach(cm => { const d = V(...G.worldOf(r, ...cm.centroid)).distanceTo(near); if (d < bd) { bd = d; best = cm; } });
       const mask = new Uint8Array(cand.length), box = [Infinity, Infinity, Infinity, -1, -1, -1];
       for (let v = 0; v < cand.length; v++) if (labels[v] === best.label) {
@@ -620,7 +623,10 @@
       if (!pl.length || !cond) return null;
       const c = V(...cond), A = pl.reduce((a, b) => (b.p.distanceTo(c) > a.p.distanceTo(c) ? b : a)), dir = c.clone().sub(A.p).normalize();
       const N = A.N.clone(); if (N.dot(dir) < 0) N.negate();
-      return { A: Object.assign({}, A, { N }), B: { p: c, N: dir, w: 0, off: A.off, virtual: true }, condyle: side };
+      // new condyle (web/condyle.js): the graft's rounded end lies `neo` mm short of the fossa (the condyle's place), on
+      // the line to the cut; the resected piece is still found at the condyle itself (B.cond)
+      const neo = window.Condyle && Condyle.neoOffset ? Math.max(0, Math.min(c.distanceTo(A.p) - 10, Condyle.neoOffset() || 0)) : 0;
+      return { A: Object.assign({}, A, { N }), B: { p: neo ? c.clone().addScaledVector(dir, -neo) : c, cond: c, neo, N: dir, w: 0, off: A.off, virtual: true }, condyle: side };
     }
     if (pl.length < 2) return null;
     pl.sort((a, b) => a.off - b.off);
@@ -672,7 +678,7 @@
     busy(true, 'Guide oluşturuluyor…'); await sleep();
     const f = await fitWrap();
     $('guideStat').textContent = !f ? '' : !f.ok ? 'Guide bu yerleşimde takılamıyor; kesileri ya da ayarları kontrol edin.'
-      : `Guide hazır · ${S.screws.length} vida` + (f.split ? (S.g.split === 2 ? ' · iki parça, her kesi kendi ekseninde (açı bölgesi)' : ' · iki parça (kavisli kemik)') : '') + (f.wrap < (S.kind === 'leg' ? 6 : 5) ? ` · sarma ${fmt(f.wrap, 1)} mm'ye indirildi` : '');
+      : `Guide hazır · ${S.screws.length} vida` + (f.split ? (S.g.split === 2 && S.g.bar ? ' · iki guide + bağlantı köprüsü' : S.g.split === 2 ? ' · iki parça, her kesi kendi ekseninde (açı bölgesi)' : ' · iki parça (kavisli kemik)') : '') + (f.wrap < (S.kind === 'leg' ? 6 : 5) ? ` · sarma ${fmt(f.wrap, 1)} mm'ye indirildi` : '');
     syncSeq();
   }
   // one button: region (sample spot, painted lesion, or one click on the model), cuts, resected piece removed, guide
@@ -701,7 +707,7 @@
     Object.assign(S.gAuto, AUTO_DEFAULT); S.g.wrapU = null; S.g.vc = 0; S.fitLog = []; S.autoSize = null;
     unapproveAll(); $('guideStat').textContent = '';
     if (window.Lesion && Lesion.clear) Lesion.clear();
-    ['guide', 'resected', 'anchor', 'lesion'].forEach(id => setPart(id, null, null)); clearElementParts();
+    ['guide', 'bar', 'resected', 'anchor', 'lesion'].forEach(id => setPart(id, null, null)); clearElementParts();
     busy(true, 'Kemik modeli yenileniyor…'); await sleep(); await rebuildResection(); busy(false);
     setMode('orbit'); updatePanels(); syncSeq(); render(); emit('parts'); emit('changed');
   }
@@ -1215,6 +1221,30 @@
   // automatic screws are placed again for every rung (the body they stand on is as deep as that rung's wrap), and a
   // rung whose guide drops a screw, holds one on a sleeve off the body or out of bone, or is held at one end only is
   // not ok, so a straight guide that cannot hold screws on a curved jaw goes on to the two-guide layouts.
+  // A1: when two guides joined by a bar are proposed instead of one straight guide (lesion length, the straight axis
+  // leaving the bone, a segment of the ramus with the condyle kept); null when one guide is the first choice
+  const LONG_MM = 55, AXIS_DROP = 20;
+  function longCase() {
+    const L = S.lesion, len = Math.abs(L.to - L.from), E = resEnds();
+    if (!S.anchor || S.planes.length < 2 || (E && E.condyle)) return null;
+    if (len >= LONG_MM) return { len, why: 'len' };
+    if (ramusAxis()) return { len, why: 'ramus' };
+    const off = axisOffBone(); return off ? { len, why: 'axis', at: off.off } : null;
+  }
+  // the guide axis runs up the ramus (more vertical than not)
+  function ramusAxis() { return !!S.anchor && Math.abs(frameAxes().u.z) > 0.6; }
+  // the straight guide axis between the outer cuts: the first position where no bone lies within AXIS_DROP mm below the
+  // guide plane across the body width (a single straight guide cannot follow the bone there), or null
+  function axisOffBone() {
+    if (!S.anchor || S.planes.length < 2) return null;
+    const pl = planesWorld().sort((a, b) => a.off - b.off), { u, v, n } = frameAxes(), W = S.g.W || 22, vc = S.g.vc || 0, q = V();
+    for (let uu = pl[0].off; uu <= pl[pl.length - 1].off + 1e-6; uu += 2) {
+      let hit = false;
+      for (let vv = vc - W / 2; vv <= vc + W / 2 + 1e-6 && !hit; vv += 2) for (let t = -10; t <= AXIS_DROP; t += 1) { q.copy(S.anchor.p).addScaledVector(u, uu).addScaledVector(v, vv).addScaledVector(n, -t); if (boneAt(q)) { hit = true; break; } }
+      if (!hit) return { off: uu };
+    }
+    return null;
+  }
   const FIT_BUDGET_MS = 45000;
   async function fitWrap() {
     if (!S.anchor) return null;
@@ -1238,7 +1268,7 @@
       return bad + (held ? 0 : 1);
     };
     const test = async (h = 0.8) => {
-      const o = await buildGuideSet(Object.assign({ g: S.g, P: S.anchor.p, pls: planesWorld(), scs: screwsWorld(), bone: boneAt, field: boneField, h }, frameAxes())); const R = o.result, want = S.g.split && S.planes.length >= 2 ? 2 : 1; disposeObj(o.mesh);
+      const o = await buildGuideSet(Object.assign({ g: S.g, P: S.anchor.p, pls: planesWorld(), scs: screwsWorld(), bone: boneAt, field: boneField, h, noBarMesh: true }, frameAxes())); const R = o.result, want = S.g.split && S.planes.length >= 2 ? 2 : 1; disposeObj(o.mesh);
       const bad = screwsBad(R), scOk = !bad, piecesOk = R.pieces === want, seatFree = !R.seat || !R.seat.ok || R.seat.free > 0;
       if (!scOk) log.push({ step: 'screws', split: S.g.split, wrap: S.g.wrap, flange: S.g.flange, ok: false, screws: bad });
       const score = (piecesOk ? 1000 : 0) + (seatFree ? 100 : 0) - bad - (h > 0.5 ? 0.5 : 0);
@@ -1256,28 +1286,42 @@
     // shallower wrap (a shallower body holds fewer of them), so that ladder ends there
     // (a sleeve the built guide finds no body under: its spot is kept clear and the screws placed again, twice at most;
     // the whole fit stops at FIT_BUDGET_MS and keeps the closest rung)
-    const ladder = async (step, from) => {
+    const ladder = async (step, from, stop = over, dw = 1) => {
       let ok = false;
-      for (let w = from; !ok && w >= wMin && !over(); w--) {
+      for (let w = from; !ok && w >= wMin && !stop(); w -= dw) {
         S.g.wrap = w; place(); onlyScrews = false; ok = await okAt(); log.push({ step, split: S.g.split, wrap: w, flange: S.g.flange, ok });
-        for (let r = 0; !ok && r < 2 && onlyScrews && rejected.length && !over(); r++) { S.screwBlocked.push(...rejected); place(); ok = await okAt(); log.push({ step, split: S.g.split, wrap: w, flange: S.g.flange, ok, retry: r + 1 }); }
+        for (let r = 0; !ok && r < 2 && onlyScrews && rejected.length && !stop(); r++) { S.screwBlocked.push(...rejected); place(); ok = await okAt(); log.push({ step, split: S.g.split, wrap: w, flange: S.g.flange, ok, retry: r + 1 }); }
         if (!ok && (onlyScrews || noBoneDrop)) break;
       }
       return ok;
     };
-    let ok = await ladder('wrap', top), split = false;
+    // A1 / B3: a long resection (lesion LONG_MM or more), a straight guide axis that leaves the bone between the cuts, or a
+    // segment of the ramus (condyle kept): two guides on their own frames joined by the connecting bar are tried first,
+    // the single guide only when they cannot be put on. A guide running up the ramus rests on the posterior border (stopP).
     // a cut that meets no bone leaves nothing for a guide to hold past it: no layout mends that (the check says so)
     const sortedPl = S.planes.length >= 2 ? planesWorld().sort((x, y) => x.off - y.off) : [], misses = cutMisses();
     const outerMiss = sortedPl.length >= 2 && (misses.includes(S.planes.indexOf(sortedPl[0].pl)) || misses.includes(S.planes.indexOf(sortedPl[sortedPl.length - 1].pl)));
+    const lng = S.planes.length >= 2 && auto.split && S.bonelessCut == null && !outerMiss ? longCase() : null;
+    S.longCase = lng; S.fitAngle = 0;
+    if (auto.bar) S.g.bar = 0;
+    if (auto.stopP) S.g.stopP = ramusAxis() ? 1 : 0;
+    let ok = false, split = false, tried2 = false;
+    if (lng && !over()) {
+      S.g.split = 2; if (auto.bar) S.g.bar = 1; tried2 = true;
+      // (3 mm rungs within half the fit budget, so the single guide is still tried when the two cannot be put on)
+      ok = await ladder('long', auto.wrap ? Math.min(20, Math.max(top, Math.round(pieceWrapTop()))) : top, () => performance.now() - t0 > FIT_BUDGET_MS * 0.5, 3);
+      if (ok) split = true; else { S.g.split = s0; if (auto.bar) S.g.bar = 0; }
+    }
+    if (!ok) ok = await ladder('wrap', top);
     // a long resection on a curved jaw: two separate guides, one on each side, sit on straighter bone and hold their
     // screws along their own bone; two guides on their own frames start from the depth their own bone allows
     if (!ok && auto.split && !S.g.split && S.planes.length >= 2 && S.bonelessCut == null && !outerMiss && !over()) {
       const ang = cutsAngle();
       // the screws follow the layout: on two frames each piece holds its own, on one frame they sit beside the cuts
       const layout = sp => { S.g.split = sp; return sp === 2 && auto.wrap ? Math.min(20, Math.max(top, Math.round(pieceWrapTop()))) : top; };
-      let from = layout(ang > 20 ? 2 : 1); S.fitAngle = ang;
+      let from = layout(ang > 20 && !tried2 ? 2 : 1); S.fitAngle = ang;
       ok = await ladder('split', from);
-      if (!ok && auto.split && !over()) { from = layout(S.g.split === 2 ? 1 : 2); ok = await ladder('split', from); }
+      if (!ok && auto.split && !over() && !(tried2 && S.g.split === 1)) { from = layout(S.g.split === 2 ? 1 : 2); ok = await ladder('split', from); }
       // the capture flange past each slot shortened: each guide reaches less far around the curve
       if (!ok && S.g.flange > 2 && !over()) { S.g.flange = 2; ok = await ladder('flange', from); if (!ok) S.g.flange = f0; }
       if (ok) split = true; else S.g.split = s0;
@@ -1288,6 +1332,7 @@
       if (auto.wrap) S.g.wrap = best.wrap; S.g.flange = best.flange;
       place();
       log.push({ step: 'kept', split: S.g.split, wrap: S.g.wrap, flange: S.g.flange, ok: false, pieces: best.pieces, want: best.want, free: best.free, screws: best.screws });
+      if (lng && auto.bar) S.g.bar = S.g.split === 2 ? 1 : 0;
     } else if (!ok) { S.g.wrap = top; place(); }
     S.fitLog = log;
     if ($('g_split')) $('g_split').value = String(S.g.split || 0);
@@ -1360,15 +1405,17 @@
   // generic voxel guide builder: ctx = { P, u, v, n, g, pls:[{p,N,w}], scs:[{sc,dir,entry}], bone(q) -> bool }
   // which guide edge (+v or −v) is the upper one (patient superior, +z in LPS); the stop flags map onto them
   function stopSides(g, v) {
-    const upPos = v.z >= 0;
-    return { pos: !!(upPos ? g.stopT : g.stopB), neg: !!(upPos ? g.stopB : g.stopT) };
+    const upPos = v.z >= 0, out = { pos: !!(upPos ? g.stopT : g.stopB), neg: !!(upPos ? g.stopB : g.stopT) };
+    // posterior stop (ramus): only on a frame whose v axis runs front to back (LPS +y = posterior)
+    if (g.stopP && Math.abs(v.y) > 0.5) { if (v.y > 0) out.pos = true; else out.neg = true; }
+    return out;
   }
   async function buildGuide(ctx) {
     const t0 = performance.now();
     const { g, P, u, v, n, pls, scs } = ctx, boneAt = ctx.bone, h = ctx.h || 0.4, T = {};
     const maxSleeve = Math.max(0, ...scs.map(s => s.sc.sleeveH));
     // optional stops: lips past the upper / lower guide edge that reach around the bone edge (crest, lower border)
-    const sUp = stopSides(g, v), stopX = g.stopT || g.stopB ? (g.stopL || 6) : 0, stopZ = g.stopT || g.stopB ? (g.stopD || 5) : 0, vc = g.vc || 0;
+    const sUp = stopSides(g, v), anyStop = sUp.pos || sUp.neg, stopX = anyStop ? (g.stopL || 6) : 0, stopZ = anyStop ? (g.stopD || 5) : 0, vc = g.vc || 0;
     // wrap depth at a position along the guide: the hand / global value, capped by the automatic per-position profile
     // (g.wrapU = [[uu, depth], ...]) where the bone's widest level is shallower towards an end of the guide
     const wrapOf = uu => { const pr = g.wrapU; if (!pr || !pr.length) return g.wrap; if (uu <= pr[0][0]) return Math.min(g.wrap, pr[0][1]); for (let a = 1; a < pr.length; a++) if (uu <= pr[a][0]) { const t = (uu - pr[a - 1][0]) / ((pr[a][0] - pr[a - 1][0]) || 1); return Math.min(g.wrap, pr[a - 1][1] + t * (pr[a][1] - pr[a - 1][1])); } return Math.min(g.wrap, pr[pr.length - 1][1]); };
@@ -1779,7 +1826,7 @@
     const A = sorted[0], B = sorted[sorted.length - 1], mid = (A.p.dot(ctx.u) + B.p.dot(ctx.u)) / 2;
     const pf = pieceFrames(), fa = pf ? pf.a : cutFrame(A, ctx.u.clone().negate(), ctx.n), fb = pf ? pf.b : cutFrame(B, ctx.u, ctx.n);
     if (!fa || !fb) return buildGuide(Object.assign({}, ctx, { g: Object.assign({}, g, { split: 1 }) }));
-    const parts = [], meshes = [], infos = [];
+    const parts = [], meshes = [], infos = [], withBar = !!g.bar, defS = SCREW_DEFAULT[S.kind] || SCREW_DEFAULT.dicom, E = withBar ? resEnds() : null;
     for (const [fr, side] of [[fa, -1], [fb, 1]]) {
       // this piece: the cuts and screws on its side of the defect middle
       const myPls = pls.filter(p => Math.sign(p.p.dot(ctx.u) - mid) === side || sorted.length === 2 && p === (side < 0 ? A : B));
@@ -1788,16 +1835,26 @@
       // extent along the piece's own u: the capture flange past the slot on the defect side, the screws on the kept side
       let reach = 10;
       for (const s of myScs) reach = Math.max(reach, (s.entry ? s.entry.clone().sub(fr.P).dot(fr.u) : s.sc.part ? s.sc.u : 0) + s.sc.D / 2 + 2);
-      const back = half + g.flange, L = Math.min(100, Math.max(16, Math.ceil(reach + back))), cShift = (reach - back) / 2;
-      const Pc = fr.P.clone().addScaledVector(fr.u, cShift);
-      // the piece's anchor lies on the bone surface at its centre (walk down the normal), so the wrap is measured from the bone
-      let Pq = null; const top = Pc.clone().addScaledVector(fr.n, 20);
-      for (let t = 0; t < 70; t += 0.25) { const c = top.clone().addScaledVector(fr.n, -t); if (boneAt(c)) { Pq = c; break; } }
-      const frame = { P: Pq || Pc, u: fr.u, v: fr.v, n: fr.n };
-      const auto = S.gAuto || AUTO_DEFAULT, sz = ctx.field ? sizeBody(frame, ctx.field, -L / 2, L / 2, g, { W: !!auto.W, wrap: !!auto.wrap }) : { W: g.W, vc: 0, wrap: g.wrap, wrapU: null };
-      const gi = Object.assign({}, g, { split: 0, L, W: sz.W, vc: sz.vc, wrap: Math.min(g.wrap, sz.wrap), wrapU: sz.wrapU });
-      const o = await buildGuide(Object.assign({}, ctx, frame, { g: gi, pls: myPls, scs: myScs }));
-      parts.push({ frame, g: gi, pls: myPls, scs: myScs, result: o.result, grid: o.grid, wrapProfile: o.result.wrapProfile, side });
+      const back = half + g.flange;
+      const pieceAt = reach => {
+        const L = Math.min(100, Math.max(16, Math.ceil(reach + back))), cShift = (reach - back) / 2;
+        const Pc = fr.P.clone().addScaledVector(fr.u, cShift);
+        // the piece's anchor lies on the bone surface at its centre (walk down the normal), so the wrap is measured from the bone
+        let Pq = null; const top = Pc.clone().addScaledVector(fr.n, 20);
+        for (let t = 0; t < 70; t += 0.25) { const c = top.clone().addScaledVector(fr.n, -t); if (boneAt(c)) { Pq = c; break; } }
+        const frame = { P: Pq || Pc, u: fr.u, v: fr.v, n: fr.n };
+        const auto = S.gAuto || AUTO_DEFAULT, sz = ctx.field ? sizeBody(frame, ctx.field, -L / 2, L / 2, g, { W: !!auto.W, wrap: !!auto.wrap }) : { W: g.W, vc: 0, wrap: g.wrap, wrapU: null };
+        return { frame, gi: Object.assign({}, g, { split: 0, L, W: sz.W, vc: sz.vc, wrap: Math.min(g.wrap, sz.wrap), wrapU: sz.wrapU }) };
+      };
+      let { frame, gi } = pieceAt(reach);
+      // (the connecting bar's lug stands on the piece like a screw sleeve, the drill through it; when the screws leave
+      // no room for it the piece reaches a lug's width further along its kept bone)
+      let lug = withBar ? placeLug(frame, gi, cut, myScs, E, defS, false) : null;
+      if (withBar && !lug) { const w = pieceAt(reach + BAR.lugD + 1), l2 = placeLug(w.frame, w.gi, cut, myScs, E, defS, false); if (l2) { ({ frame, gi } = w); lug = l2; } }
+      if (withBar && !lug) lug = placeLug(frame, gi, cut, myScs, E, defS, true);
+      const o = await buildGuide(Object.assign({}, ctx, frame, { g: gi, pls: myPls, scs: lug ? myScs.concat([lug]) : myScs }));
+      const li = lug && o.result.screwInfo.find(i => i.s === lug);
+      parts.push({ frame, g: gi, pls: myPls, scs: myScs, result: o.result, grid: o.grid, wrapProfile: o.result.wrapProfile, side, lug, lugOk: !!(li && li.ok) });
       meshes.push(o.mesh); infos.push(...o.result.screwInfo);
     }
     // merged mesh (two bodies), screws back in their original order, the seat as the worse of the two pieces
@@ -1811,7 +1868,10 @@
     } else if (seats.length) seat = seats.find(s => s.ok) || seats[0];
     const sum = k => parts.reduce((s, p) => s + p.result[k], 0);
     const result = { pieces: sum('pieces'), contact: sum('contact'), undercut: sum('undercut'), volume: sum('volume'), screwInfo, pls, seat, wrapProfile: parts[0].wrapProfile, parts, ms: sum('ms'), T: parts[0].result.T };
-    return { mesh, result, grid: Object.assign(parts[0].grid, { parts: parts.map(p => p.grid) }) };
+    // the connecting bar: a separate part, built only for the guide that is shown (the fit ladder asks for the route only)
+    let barMesh = null;
+    if (withBar) { result.bar = barPlan(parts, g); if (result.bar.ok && !ctx.noBarMesh) barMesh = buildBarMesh(result.bar.spec, 0.4); }
+    return { mesh, result, barMesh, grid: Object.assign(parts[0].grid, { parts: parts.map(p => p.grid) }) };
   }
   function mergeMeshes(meshes, material) {
     let np = 0, ni = 0;
@@ -1833,6 +1893,200 @@
     out.set(a.subarray(84, 84 + ca * 50), 84); out.set(b.subarray(84, 84 + cb * 50), 84 + ca * 50);
     return out;
   }
+  // ---------- connecting bar between the two guides of a long resection (split 2 with g.bar) ----------
+  // Each piece carries a lug: a boss like a screw sleeve (BAR.lugD wide, one millimetre higher than the screw sleeves),
+  // towards the piece's inferior edge on its kept side of the slot, with a drill through it (a lug's width more piece
+  // when the screws leave no room; round a screw sleeve as a last resort). The bar is a separate part: a pad on
+  // each lug (the same hole through it) and a rod of radius BAR.r between the pads. The rod runs below the jaw where it
+  // can (inferior), else beside or behind it, buccally only when nothing else is free, always clear of the whole bone (the
+  // bar goes on before the cuts, so the resected piece is still there) and of both guide pieces. Pinned or screwed
+  // through the pads before the cuts it holds the two stumps where they are; it comes off after the cuts. The server
+  // builds the same bar from the same spec (path, radius, pads) with exact solids (yolmed_server.build_bar).
+  const BAR = { r: 2, padR: 3.5, padT: 4, gap: 0.3, lugD: 7, clearBone: 1.5, clearGuide: 0.8, maxD: 60, color: 0xc08a2e };
+  function placeLug(fr, gi, cut, scs, E, def, onScrew = true) {
+    const R = BAR.lugD / 2, H = def.sleeveH + 1, sInf = -(Math.sign(fr.v.z) || 1), vc = gi.vc || 0;
+    const body = screwBodyOn(fr, -gi.L / 2, gi.L / 2, gi.W, vc, gi.wrap, gi.wrapU, 0); if (!body) return null;
+    const pc = cut.pSlot || cut.p, keep = Math.sign(fr.P.clone().sub(pc).dot(cut.N)) || 1;
+    const ents = scs.filter(s => s.entry).map(s => { const q = s.entry.clone().sub(fr.P); return { uu: q.dot(fr.u), vv: q.dot(fr.v), R: s.sc.D / 2, r: s.sc.d / 2 }; });
+    // candidates over the whole piece on its kept side of the slot: the inferior lanes first, then the farther from the
+    // slot (the more bone under the lug). The lug may merge with a screw sleeve (both are part of the guide; the lug is a
+    // millimetre higher, so the pad above it clears the sleeve) but each drill hole stays outside the other boss.
+    const cands = [], half = gi.W / 2 - R - 1.5;
+    for (let vv = vc - half; vv <= vc + half + 1e-6; vv += 1) for (let uu = -gi.L / 2 + R + 0.5; uu <= gi.L / 2 - R - 0.5 + 1e-6; uu += 1) {
+      const q = fr.P.clone().addScaledVector(fr.u, uu).addScaledVector(fr.v, vv), sd = q.clone().sub(pc).dot(cut.N) * keep;
+      if (sd - cut.w / 2 - R < SCREW_SLOT_GAP) continue;
+      if (ents.some(e => Math.hypot(e.uu - uu, e.vv - vv) < Math.max(e.R + def.d / 2, R + e.r) + 0.8)) continue;
+      cands.push({ uu, vv, cost: -Math.round(sInf * (vv - vc)) * 100 - Math.min(sd, 30) });
+    }
+    cands.sort((a, b) => a.cost - b.cost);
+    for (const { uu, vv } of cands) {
+      const top = fr.P.clone().addScaledVector(fr.u, uu).addScaledVector(fr.v, vv).addScaledVector(fr.n, 20);
+      let entry = null; for (let t = 0; t < 60; t += 0.2) { const q = top.clone().addScaledVector(fr.n, -t); if (boneAt(q)) { entry = q; break; } }
+      if (!entry || !onBody(body, uu, vv, entry.clone().sub(fr.P).dot(fr.n))) continue;
+      if (entry.clone().sub(pc).dot(cut.N) * keep - cut.w / 2 - R < SCREW_SLOT_GAP) continue;
+      if (E && resectedAt(entry, E, 2)) continue;
+      if (!padRoom(entry, fr.n, H, false, gi)) continue;
+      return { sc: { d: def.d, D: BAR.lugD, sleeveH: H, len: 0, lug: true }, dir: fr.n.clone().negate(), entry, uu, vv };
+    }
+    // no free spot: the lug goes round a screw sleeve of the piece (same axis, a millimetre higher), the one whose pad
+    // has the most room around it, then the most inferior; the guide screw there passes through the bar's pad as well
+    const host = onScrew && scs.filter(sc => sc.entry && sc.dir).map(sc => { const q = sc.entry.clone().sub(fr.P); return { sc, uu: q.dot(fr.u), vv: q.dot(fr.v), room: padRoom(sc.entry, sc.dir.clone().negate(), Math.max(H, sc.sc.sleeveH + 1), true, gi) }; })
+      .filter(h => !(E && resectedAt(h.sc.entry, E, 2))).sort((x, y) => Math.min(y.room, 6) - Math.min(x.room, 6) || sInf * (y.vv - x.vv))[0];
+    if (host) return { sc: { d: host.sc.sc.d, D: Math.max(BAR.lugD, host.sc.sc.D + 2), sleeveH: Math.max(H, host.sc.sc.sleeveH + 1), len: 0, lug: true, onScrew: true }, dir: host.sc.dir.clone(), entry: host.sc.entry.clone(), uu: host.uu, vv: host.vv };
+    return null;
+  }
+  // room for the bar's pad above a lug at `entry` (sleeve height H, axis `ax` out of the bone): the bone distance at the
+  // pad centre; as a test, enough for the pad and a rod leaving it (BAR.padR + BAR.r + BAR.clearBone)
+  function padRoom(entry, ax, H, value, g = S.g) {
+    const cw = g.clear + (g.peri || 0) + g.wall, d = boneDist(entry.clone().addScaledVector(ax, cw + H + BAR.gap + BAR.padT / 2));
+    return value ? d : d >= BAR.padR + BAR.r + BAR.clearBone;
+  }
+  // distance (mm) from a point to the nearest bone voxel of the whole planning bone (resected piece included), from one
+  // distance transform of the work mask per segmentation
+  let bdCache = { mask: null, d: null };
+  function boneDist(q) {
+    const r = S.red; if (!r || !S.mask) return Infinity;
+    if (bdCache.mask !== S.mask) bdCache = { mask: S.mask, d: G.edt(S.mask, r.nx, r.ny, r.nz, r.sp) };
+    const ix = G.indexOf(r, [q.x, q.y, q.z]), i = Math.round(ix[0]), j = Math.round(ix[1]), k = Math.round(ix[2]);
+    if (i < 0 || j < 0 || k < 0 || i >= r.nx || j >= r.ny || k >= r.nz) return Infinity;
+    return bdCache.d[i + r.nx * (j + r.ny * k)] - Math.max(...r.sp) / 2;
+  }
+  // a guide voxel of either piece within rad of q (the pieces' own grids, a ball of 15 probes)
+  const BALL = [[0, 0, 0], [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1], ...[[1, 1, 1], [1, 1, -1], [1, -1, 1], [1, -1, -1], [-1, 1, 1], [-1, 1, -1], [-1, -1, 1], [-1, -1, -1]].map(a => a.map(x => x / Math.sqrt(3)))];
+  function guideNear(q, rad, grids) {
+    for (const gr of grids) {
+      const d = q.clone().sub(gr.P), x = d.dot(gr.u), y = d.dot(gr.v), z = d.dot(gr.n);
+      for (const b of BALL) {
+        const i = Math.round((x + b[0] * rad - gr.lo[0]) / gr.h), j = Math.round((y + b[1] * rad - gr.lo[1]) / gr.h), k = Math.round((z + b[2] * rad - gr.lo[2]) / gr.h);
+        if (i >= 0 && j >= 0 && k >= 0 && i < gr.nx && j < gr.ny && k < gr.nz && gr.Gm[i + gr.nx * (j + gr.ny * k)]) return true;
+      }
+    }
+    return false;
+  }
+  // the rod's path between the two pads: straight when that is free, else out from both pads by d mm along one
+  // direction across the chord, across, and back; of the free paths the cheapest (length, plus a penalty for passing
+  // buccally over the defect or over the teeth). Returns { path, w, d, route, clear } or null.
+  function barRoute(pads, grids, cw) {
+    // the rod meets each pad near its top (the attach point; the pad centre for a pad of the usual height)
+    const att = p => p.c.clone().addScaledVector(p.axis, Math.max(0, p.T / 2 - BAR.r - 0.2));
+    const PA = att(pads[0]), PB = att(pads[1]), ch = PB.clone().sub(PA), len = ch.length(); if (len < 2) return null;
+    const e1 = ch.clone().divideScalar(len), upW = V(0, 0, 1);
+    let a = upW.clone().addScaledVector(e1, -e1.z); if (a.lengthSq() < 1e-4) a = V(1, 0, 0).addScaledVector(e1, -e1.x); a.normalize();
+    const b = V().crossVectors(e1, a), outW = pads[0].axis.clone().add(pads[1].axis).normalize();
+    const needB = BAR.r + BAR.clearBone, needG = BAR.r + BAR.clearGuide, nearG = cw + 12 + BAR.r;
+    // the rod ends on each pad's rim, towards the next point of the path (the hole in the middle stays free)
+    const rim = (p, next) => { const a = att(p); let t = next.clone().sub(a); t.addScaledVector(p.axis, -t.dot(p.axis)); if (t.lengthSq() < 1e-6) t = V().crossVectors(p.axis, e1); return a.addScaledVector(t.normalize(), p.hole + BAR.r + 0.4); };
+    const pathOf = (w, d) => { const A1 = w ? PA.clone().addScaledVector(w, d) : PB, B1 = w ? PB.clone().addScaledVector(w, d) : PA; return w ? [rim(pads[0], A1), A1, B1, rim(pads[1], B1)] : [rim(pads[0], PB), rim(pads[1], PA)]; };
+    const free = path => {
+      let minB = Infinity;
+      for (let s = 0; s + 1 < path.length; s++) {
+        const p0 = path[s], seg = path[s + 1].clone().sub(p0), sl = seg.length(), n = Math.max(1, Math.ceil(sl / 0.5));
+        for (let k = 0; k <= n; k++) {
+          const q = p0.clone().addScaledVector(seg, k / n);
+          if (q.distanceTo(PA) < BAR.padR + 0.5 || q.distanceTo(PB) < BAR.padR + 0.5) continue;
+          const db = boneDist(q); if (db < needB) return -1;
+          minB = Math.min(minB, db);
+          if (db < nearG && guideNear(q, needG, grids)) return -1;
+        }
+      }
+      return minB;
+    };
+    let best = null;
+    const consider = (w, d) => {
+      const path = pathOf(w, d), c = free(path); if (c < 0) return false;
+      let L = 0; for (let s = 0; s + 1 < path.length; s++) L += path[s].distanceTo(path[s + 1]);
+      const cost = L + (w ? 30 * Math.max(0, w.dot(outW) - 0.3) + 40 * Math.max(0, w.dot(upW) - 0.3) : 0);
+      if (!best || cost < best.cost) best = { path, w, d, cost, len: L, clear: c - BAR.r };
+      return true;
+    };
+    consider(null, 0);
+    for (let k = 0; k < 12; k++) {
+      const ph = k * Math.PI / 6, w = a.clone().multiplyScalar(-Math.cos(ph)).addScaledVector(b, Math.sin(ph));   // k = 0: inferior
+      for (let d = 4; d <= BAR.maxD; d += 2) if (consider(w, d)) break;
+    }
+    if (!best) return null;
+    const w = best.w, route = !w ? 'direct' : w.z < -0.5 ? 'inferior' : w.dot(outW) > 0.5 ? 'buccal' : w.z > 0.5 ? 'superior' : w.dot(outW) < -0.5 ? 'lingual' : 'side';
+    return { path: best.path, w, d: best.d, len: best.len, route, clear: best.clear };
+  }
+  // the bar of a two-piece layout: pads on both lugs, the rod's route; ok only when both lugs stand on their piece
+  function barPlan(parts, g) {
+    const out = { ok: false, why: null, lugs: parts.map(p => !!p.lugOk) };
+    if (parts.length !== 2) { out.why = 'pieces'; return out; }
+    if (!parts.every(p => p.lug && p.lugOk)) { out.why = 'lug'; return out; }
+    const cw = g.clear + (g.peri || 0) + g.wall;
+    // a pad clear of the bone: its rim and axis sampled from the bottom (on the lug) to the top
+    const padFree = pd => {
+      const a = Math.abs(pd.axis.z) < 0.9 ? V(0, 0, 1) : V(1, 0, 0), e1 = V().crossVectors(pd.axis, a).normalize(), e2 = V().crossVectors(pd.axis, e1);
+      for (let h = -pd.T / 2; h <= pd.T / 2 + 1e-6; h += 1) for (let k = 0; k <= 8; k++) {
+        const q = pd.c.clone().addScaledVector(pd.axis, h); if (k < 8) q.addScaledVector(e1, pd.R * Math.cos(k * Math.PI / 4)).addScaledVector(e2, pd.R * Math.sin(k * Math.PI / 4));
+        if (boneDist(q) < 0.5) return false;
+      }
+      return true;
+    };
+    const grids = parts.map(p => Object.assign({}, p.grid, { h: p.grid.h }));
+    // the pads grow upwards (a taller pad on the same lug, part of the bar) until the rod finds a free way out of a
+    // hollow between the bone and the guide
+    let rt = null, pads = null, padOk = false;
+    for (const ext of [0, 4, 8, 12]) {
+      pads = parts.map(p => { const L = p.lug, ax = L.dir.clone().negate(), T = BAR.padT + ext; return { c: L.entry.clone().addScaledVector(ax, cw + L.sc.sleeveH + BAR.gap + T / 2), axis: ax, R: BAR.padR, T, hole: (L.sc.d + (g.fit || 0)) / 2 + 0.1 }; });
+      if (!pads.every(padFree)) continue;
+      padOk = true; rt = barRoute(pads, grids, cw); if (rt) break;
+    }
+    if (!rt) { out.why = padOk ? 'route' : 'lug'; return out; }
+    return Object.assign(out, { ok: true, route: rt.route, len: rt.len, clear: rt.clear, d: rt.d, spec: { path: rt.path, r: BAR.r, pads } });
+  }
+  // signed distance to the bar (negative inside): rod capsules and pads united, the pad holes taken out
+  function barSdf(spec) {
+    const segs = []; for (let i = 0; i + 1 < spec.path.length; i++) segs.push([spec.path[i], spec.path[i + 1]]);
+    const pads = spec.pads.map(p => ({ c: p.c, a: p.axis.clone().normalize(), R: p.R, T: p.T, hole: p.hole }));
+    return (x, y, z) => {
+      let f = Infinity;
+      for (const [A, B] of segs) {
+        const bx = B.x - A.x, by = B.y - A.y, bz = B.z - A.z, px = x - A.x, py = y - A.y, pz = z - A.z, l2 = bx * bx + by * by + bz * bz;
+        const t = l2 > 0 ? Math.max(0, Math.min(1, (px * bx + py * by + pz * bz) / l2)) : 0, dx = px - t * bx, dy = py - t * by, dz = pz - t * bz;
+        f = Math.min(f, Math.sqrt(dx * dx + dy * dy + dz * dz) - spec.r);
+      }
+      const cyl = pads.map(p => { const dx = x - p.c.x, dy = y - p.c.y, dz = z - p.c.z, t = dx * p.a.x + dy * p.a.y + dz * p.a.z; return [Math.sqrt(Math.max(0, dx * dx + dy * dy + dz * dz - t * t)), t]; });
+      pads.forEach((p, i) => { f = Math.min(f, Math.max(cyl[i][0] - p.R, Math.abs(cyl[i][1]) - p.T / 2)); });
+      pads.forEach((p, i) => { f = Math.max(f, -Math.max(cyl[i][0] - p.hole, Math.abs(cyl[i][1]) - (p.T / 2 + 1))); });
+      return f;
+    };
+  }
+  // the bar as a closed mesh: the distance field on a grid aligned with the bar's plane, marched once (as the guide)
+  function buildBarMesh(spec, h = 0.4) {
+    const P0 = spec.path[0], P1 = spec.path[spec.path.length - 1], e1 = P1.clone().sub(P0).normalize();
+    let e2 = spec.path.length > 2 ? spec.path[1].clone().sub(P0) : V().crossVectors(spec.pads[0].axis, e1);
+    e2.addScaledVector(e1, -e2.dot(e1)); if (e2.lengthSq() < 1e-6) e2 = Math.abs(e1.z) < 0.9 ? V(0, 0, 1).addScaledVector(e1, -e1.z) : V(1, 0, 0).addScaledVector(e1, -e1.x); e2.normalize();
+    const e3 = V().crossVectors(e1, e2), m = Math.max(spec.r, ...spec.pads.map(p => Math.max(p.R, p.T / 2 + 1))) + 2 * h + 1;
+    const pts = spec.path.concat(spec.pads.map(p => p.c)), co = q => { const d = q.clone().sub(P0); return [d.dot(e1), d.dot(e2), d.dot(e3)]; };
+    const lo = [0, 1, 2].map(a => Math.min(...pts.map(q => co(q)[a])) - m), hi = [0, 1, 2].map(a => Math.max(...pts.map(q => co(q)[a])) + m);
+    const nx = Math.ceil((hi[0] - lo[0]) / h) + 1, ny = Math.ceil((hi[1] - lo[1]) / h) + 1, nz = Math.ceil((hi[2] - lo[2]) / h) + 1;
+    const sdf = barSdf(spec), F = new Float32Array(nx * ny * nz);
+    for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      const a = lo[0] + i * h, b = lo[1] + j * h, c = lo[2] + k * h, id = i + nx * (j + ny * k);
+      F[id] = (i === 0 || j === 0 || k === 0 || i === nx - 1 || j === ny - 1 || k === nz - 1) ? h : sdf(P0.x + e1.x * a + e2.x * b + e3.x * c, P0.y + e1.y * a + e2.y * b + e3.y * c, P0.z + e1.z * a + e2.z * b + e3.z * c);
+    }
+    const net = G.marchTets(F, nx, ny, nz, 0);
+    const toW = (a, b, c) => { const x = lo[0] + a * h, y = lo[1] + b * h, z = lo[2] + c * h; return [P0.x + e1.x * x + e2.x * y + e3.x * z, P0.y + e1.y * x + e2.y * y + e3.y * z, P0.z + e1.z * x + e2.z * y + e3.z * z]; };
+    return meshFromNets(net, toW, mat(BAR.color));
+  }
+  // the server request for the bar: its spec and the bone mask around it (the server measures the bar's clearance
+  // from the full-resolution bone)
+  function barRequest(spec, c) {
+    const { vol } = c, arr = q => [q.x, q.y, q.z], pts = spec.path.concat(spec.pads.map(p => p.c));
+    const wlo = [0, 1, 2].map(a => Math.min(...pts.map(q => arr(q)[a])) - 8), whi = [0, 1, 2].map(a => Math.max(...pts.map(q => arr(q)[a])) + 8), ix = [];
+    for (const x of [wlo[0], whi[0]]) for (const y of [wlo[1], whi[1]]) for (const z of [wlo[2], whi[2]]) ix.push(G.indexOf(vol, [x, y, z]));
+    const dims = [vol.nx, vol.ny, vol.nz], lo = [0, 1, 2].map(a => Math.max(0, Math.floor(Math.min(...ix.map(q => q[a]))))), hi = [0, 1, 2].map(a => Math.min(dims[a] - 1, Math.ceil(Math.max(...ix.map(q => q[a])))));
+    const [nx, ny, nz] = [0, 1, 2].map(a => hi[a] - lo[a] + 1), req = { kind: 'bar', resolution: 0.2, bar: { path: spec.path.map(arr), r: spec.r, pads: spec.pads.map(p => ({ c: arr(p.c), axis: arr(p.axis), R: p.R, T: p.T, hole: p.hole })) } };
+    if (nx < 2 || ny < 2 || nz < 2 || nx * ny * nz > 60e6) return req;
+    const mask = new Uint8Array(nx * ny * nz), cut = c.thr == null ? 0.5 : 0.05;
+    for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      if (c.thr != null && vol.hu[lo[0] + i + vol.nx * (lo[1] + j + vol.ny * (lo[2] + k))] < c.thr) continue;
+      if (fieldAt(c.red, c.F, G.worldOf(vol, lo[0] + i, lo[1] + j, lo[2] + k)) > cut) mask[i + nx * (j + ny * k)] = 1;
+    }
+    let bin = ''; for (let i = 0; i < mask.length; i += 0x8000) bin += String.fromCharCode.apply(null, mask.subarray(i, i + 0x8000));
+    return Object.assign(req, { crop: { nx, ny, nz, sp: vol.sp.slice(), origin: G.worldOf(vol, ...lo), axes: vol.axes.map(q => q.slice()) }, mask_b64: btoa(bin) });
+  }
   // every edit bumps ver; a built guide is shown only if it is at least as new as the one on screen
   const live = { ver: 0, shown: 0, running: false, dirty: false, planes: false, resAt: 0 };
   async function regenerate() {
@@ -1840,7 +2094,7 @@
     if (!S.guideOn) {
       // cuts only: no guide until the user asks for one
       live.shown = live.ver; S.liveScrews = null; S.result = null; S.grid = null;
-      setPart('guide', null, null); rebuildElementParts(planesWorld(), []); showResected();
+      setPart('guide', null, null); setPart('bar', null, null); rebuildElementParts(planesWorld(), []); showResected();
       applyExplode(); updatePanels(); busy(false); render(); emit('parts'); emit('changed');
       return;
     }
@@ -1848,9 +2102,10 @@
     busy(true, 'Guide üretiliyor…'); await sleep();
     const pls = planesWorld(), scs = screwsWorld();
     const out = await buildGuideSet(Object.assign({ g: S.g, P: S.anchor.p, pls, scs, bone: boneAt, field: boneField }, frameAxes()));
-    if (ver < live.shown) { disposeObj(out.mesh); return; }
+    if (ver < live.shown) { disposeObj(out.mesh); if (out.barMesh) disposeObj(out.barMesh); return; }
     live.shown = ver; S.liveScrews = null;
     setPart('guide', 'Guide', out.mesh, COLORS.guide);
+    setPart('bar', out.barMesh ? 'Bağlantı köprüsü' : null, out.barMesh, BAR.color);
     S.result = out.result; S.grid = out.grid; simplifyMesh(out.mesh);
     // automatic width = the width of the body that was actually built (the box only bounds it): shown in the controls
     // and used by the screw / cut checks; the lateral centre follows. Hand-set widths are left alone.
@@ -2028,8 +2283,8 @@
         if (scMax && last.ok && last.split === 2) out.push(['info', 'Bilgi', `Otomatik uyum: tek parça düzeninde ${scMax} vidanın altında kemik ya da guide gövdesi yoktu; iki guide düzeninde her vida kendi parçasının kemiğinde.`, 'guide']);
         const w0 = fmt(first.wrap, 1), w1 = fmt(last.wrap, 1), ang = fmt(S.fitAngle || 0, 0), fl = fmt(last.flange, 1);
         if (last.ok && last.step === 'wrap' && last.wrap < first.wrap) out.push(['info', 'Bilgi', `Otomatik uyum: sarma ${w0} mm ile takılamadı; ${w1} mm ile takılabiliyor.`, 'guide']);
-        else if (last.ok && last.step !== 'wrap' && last.split === 2) out.push(['info', 'Bilgi', last.step === 'flange' ? `Otomatik uyum: tek parça hiçbir sarmada takılamadı (${n1} deneme); iki guide, her kesi kendi kemik ekseninde (eksenler arası ${ang}°), kesi ötesi kenar ${fl} mm, sarma ${w1} mm ile takılabiliyor.` : `Otomatik uyum: tek parça hiçbir sarmada takılamadı (${n1} deneme); iki guide, her kesi kendi kemik ekseninde (eksenler arası ${ang}°), sarma ${w1} mm ile takılabiliyor.`, 'guide']);
-        else if (last.ok && last.step !== 'wrap') out.push(['info', 'Bilgi', last.step === 'flange' ? `Otomatik uyum: tek parça hiçbir sarmada takılamadı (${n1} deneme); iki guide (ortak eksen), kesi ötesi kenar ${fl} mm, sarma ${w1} mm ile takılabiliyor.` : `Otomatik uyum: tek parça hiçbir sarmada takılamadı (${n1} deneme); iki guide (ortak eksen), sarma ${w1} mm ile takılabiliyor.`, 'guide']);
+        else if (last.ok && last.step !== 'wrap' && last.step !== 'long' && last.split === 2) out.push(['info', 'Bilgi', last.step === 'flange' ? `Otomatik uyum: tek parça hiçbir sarmada takılamadı (${n1} deneme); iki guide, her kesi kendi kemik ekseninde (eksenler arası ${ang}°), kesi ötesi kenar ${fl} mm, sarma ${w1} mm ile takılabiliyor.` : `Otomatik uyum: tek parça hiçbir sarmada takılamadı (${n1} deneme); iki guide, her kesi kendi kemik ekseninde (eksenler arası ${ang}°), sarma ${w1} mm ile takılabiliyor.`, 'guide']);
+        else if (last.ok && last.step !== 'wrap' && last.step !== 'long') out.push(['info', 'Bilgi', last.step === 'flange' ? `Otomatik uyum: tek parça hiçbir sarmada takılamadı (${n1} deneme); iki guide (ortak eksen), kesi ötesi kenar ${fl} mm, sarma ${w1} mm ile takılabiliyor.` : `Otomatik uyum: tek parça hiçbir sarmada takılamadı (${n1} deneme); iki guide (ortak eksen), sarma ${w1} mm ile takılabiliyor.`, 'guide']);
         if (!last.ok && kept) {
           const kw = fmt(kept.wrap, 1), ks = String(kept.screws), kp = String(kept.pieces), kq = String(kept.want);
           const lay = xl(kept.split === 2 ? 'iki guide (kendi eksenlerinde)' : kept.split ? 'iki guide (ortak eksen)' : 'tek parça');
@@ -2621,7 +2876,7 @@
     if ($('g_kerf')) $('g_kerf').value = String(S.g.kerfSide ? 1 : 0);
     // values still chosen from the bone are marked on their control
     ['L', 'W', 'wrap'].forEach(k => { const el = $('gc_' + k); if (el && el.classList) el.classList.toggle('auto', !!S.gAuto[k]); });
-    $('g_stopT').checked = !!S.g.stopT; $('g_stopB').checked = !!S.g.stopB; $('stopBox').hidden = !(S.g.stopT || S.g.stopB);
+    $('g_stopT').checked = !!S.g.stopT; $('g_stopB').checked = !!S.g.stopB; $('stopBox').hidden = !(S.g.stopT || S.g.stopB || S.g.stopP); if ($('g_stopP')) $('g_stopP').checked = !!S.g.stopP; if ($('g_bar')) $('g_bar').checked = !!S.g.bar;
     ['stopL', 'stopD'].forEach(k => { $('g_' + k).value = S.g[k]; $('go_' + k).textContent = `${fmt(S.g[k], 1)} mm`; });
     $('gc_flange').hidden = !S.g.split; $('gc_bridge').hidden = !!S.g.split; $('g_side').closest('.ctl').hidden = !!S.g.split;
   }
@@ -2658,7 +2913,9 @@
     if (S.screws.length) schedule(false, true);
   });
   $('gScrewD').addEventListener('change', () => { if (S.screws.length) { schedule(false); emit('changed'); } });
-  ['stopT', 'stopB'].forEach(k => $('g_' + k).addEventListener('change', e => { S.g[k] = e.target.checked ? 1 : 0; syncGuideInputs(); unapproveAll(); schedule(false); }));
+  ['stopT', 'stopB', 'stopP'].forEach(k => $('g_' + k).addEventListener('change', e => { S.g[k] = e.target.checked ? 1 : 0; if (k === 'stopP') S.gAuto.stopP = 0; syncGuideInputs(); unapproveAll(); schedule(false); }));
+  // the connecting bar is the surgeon's call once touched: the automatic two-guide proposal leaves it alone from then on
+  $('g_bar').addEventListener('change', e => { S.g.bar = e.target.checked ? 1 : 0; S.gAuto.bar = 0; syncGuideInputs(); unapproveAll(); schedule(false); });
   [['stopL', 'mm'], ['stopD', 'mm']].forEach(([k, un]) => $('g_' + k).addEventListener('input', e => { S.g[k] = +e.target.value; $('go_' + k).textContent = `${fmt(S.g[k], 1)} ${un}`; schedule(false, true); }));
   $('g_split').addEventListener('change', e => { const was = S.g.split; S.g.split = +e.target.value; S.gAuto.split = 0; if ((was === 2) !== (S.g.split === 2) && S.anchor && S.planes.length && S.guideOn) placeScrews(); syncGuideInputs(); unapproveAll(); schedule(false); });
   // where the saw slot lies: on the resected side (the graft meets the stump flush) or centred on the planned plane
@@ -2822,6 +3079,19 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     const bin = atob(js.stl_b64), u8 = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
     return { stl: u8, watertight: js.watertight, bodies: js.bodies, volume: js.volume_mm3, faces: js.faces, ms: js.ms };
   }
+  async function serverBar(spec, outer) {
+    const url = serverUrl(); if (!url) throw new Error('Bu işlem sunucu gerektirir; yayındaki sitede (sguide.up.railway.app) çalışır. Pakette önizleme STL\'i vardır.');
+    const ac = new AbortController(), to = setTimeout(() => ac.abort(), 180000);
+    if (outer) outer.addEventListener('abort', () => ac.abort());
+    let res;
+    try { res = await fetch(url + '/guide', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(barRequest(spec, { vol: S.vol, red: S.red, F: S.maskF, thr: segThr() })), signal: ac.signal }); }
+    catch (e) { if (outer && outer.aborted) throw new Error('Üretim STL\'i iptal edildi.'); throw new Error(`Sunucuya ulaşılamadı. Pakette önizleme STL'i vardır.`); }
+    finally { clearTimeout(to); }
+    const js = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(`${xl('Sunucu hatası:')} ${js.error || res.status}`);
+    const bin = atob(js.stl_b64), u8 = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    return { stl: u8, watertight: js.watertight, bodies: js.bodies, volume: js.volume_mm3, clear: js.bone_clear_mm, inBone: js.in_bone_verts };
+  }
   const prodKey = () => JSON.stringify([S.source && S.source.fp, S.g, S.anchor && vec(S.anchor.p), S.anchor && vec(S.anchor.n), S.planes.map(p => [p.off, p.yaw, p.pitch, p.w]), S.screws.map(s => [s.u, s.v, s.tiltU, s.tiltV, s.d, s.D, s.sleeveH]), S.segMethod, $('thr').value, [...S.selected].sort((a, b) => a - b), window.SegEdit ? SegEdit.key() : '']);
   const segThr = () => (/^Eşik/.test(S.segMethod) && !(window.SegEdit && SegEdit.edited()) ? +$('thr').value : null);
   async function productionSTL() {
@@ -2833,11 +3103,14 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
       if (S.result && S.result.parts && S.result.parts.length === 2) {
         // a two-frame guide: one server call per piece on its own frame, the two STLs joined into one file
         const rs = [];
-        for (const pt of S.result.parts) rs.push(await serverGuide(Object.assign({ vol: S.vol, red: S.red, F: S.maskF, thr: segThr(), g: pt.g, P: pt.frame.P, pls: pt.pls, scs: pt.scs, wrapProfile: pt.wrapProfile, seatDir: pt.result.seatDir }, pt.frame), ac.signal));
+        for (const pt of S.result.parts) rs.push(await serverGuide(Object.assign({ vol: S.vol, red: S.red, F: S.maskF, thr: segThr(), g: pt.g, P: pt.frame.P, pls: pt.pls, scs: pt.lug ? pt.scs.concat([pt.lug]) : pt.scs, wrapProfile: pt.wrapProfile, seatDir: pt.result.seatDir }, pt.frame), ac.signal));
         r = { stl: mergeStl(rs[0].stl, rs[1].stl), watertight: rs.every(x => x.watertight), bodies: rs.reduce((s, x) => s + x.bodies, 0), volume: rs.reduce((s, x) => s + x.volume, 0), faces: rs.reduce((s, x) => s + x.faces, 0), ms: rs.reduce((s, x) => s + x.ms, 0) };
       } else r = await serverGuide(Object.assign({ vol: S.vol, red: S.red, F: S.maskF, thr: segThr(), g: S.g, P: S.anchor.p, pls: planesWorld(), scs: screwsWorld(), wrapProfile: S.result && S.result.wrapProfile, seatDir: S.result && S.result.seatDir }, frameAxes()), ac.signal);
+      // the connecting bar: a separate part, its own server call (exact solids; the server also measures its bone clearance)
+      if (S.result && S.result.bar && S.result.bar.ok) r.bar = await serverBar(S.result.bar.spec, ac.signal);
       S.prod = Object.assign(r, { key: prodKey() });
       $('prodMsg').textContent = `${xl("Üretim STL'i hazır:")} ${r.watertight ? xl('su geçirmez') : xl('SU GEÇİRMEZ DEĞİL')}, ${xl(`${r.bodies} parça`)}${r.bodies > (S.g.split ? 2 : 1) ? ' ' + xl("(BEKLENENDEN FAZLA PARÇA, guide'ı kontrol edin)") : ''}, ${fmt(r.volume / 1000, 2)} cm³, ${xl(`${r.faces} üçgen`)}. ${xl('Pakete guide_uretim.stl olarak eklenir.')}`;
+      if (r.bar) $('prodMsg').textContent += ` ${xl("Köprü STL'i:")} ${r.bar.watertight ? xl('su geçirmez') : xl('SU GEÇİRMEZ DEĞİL')}${r.bar.clear != null ? ', ' + xl(`kemiğe en yakın ${fmt(r.bar.clear)} mm`) : ''}. ${xl('Pakete kopru_uretim.stl olarak eklenir.')}`;
       if (S.fib && S.fib.guide && window.Fibula && !ac.signal.aborted) try { await Fibula.production(ac.signal); } catch (e) { $('prodMsg').textContent += ` Fibula guide'ı: ${e.message}`; }
     } catch (e) { S.prod = null; $('prodMsg').textContent = e.message; }
     busy(false);
@@ -2858,6 +3131,8 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     const files = [{ name: prod ? 'guide_onizleme.stl' : 'guide.stl', data: stlOf(parts.guide.obj) }, { name: 'kemik_kalan.stl', data: stlOf(parts.bone.obj) }];
     const fg = fullBoneGeo(); if (fg) files.push({ name: 'kemik_tam.stl', data: stlOf(new THREE.Mesh(fg)) });
     if (prod) files.unshift({ name: 'guide_uretim.stl', data: prod.stl });
+    // the connecting bar is printed as its own part
+    if (prod && prod.bar) files.push({ name: 'kopru_uretim.stl', data: prod.bar.stl }); else if (parts.bar) files.push({ name: 'kopru.stl', data: stlOf(parts.bar.obj) });
     if (window.Fibula) Fibula.exportFiles(files);
     (window.ExportHooks || []).forEach(f => { try { f(files); } catch (e) { /* optional files */ } });
     if (parts.resected) files.push({ name: 'rezeke_parca.stl', data: stlOf(parts.resected.obj) });
@@ -2933,6 +3208,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
       clampTo(S.g, 'vc', -15, 15);
       S.g.side = S.g.side < 0 ? -1 : 1; S.g.split = S.g.split === 2 ? 2 : S.g.split ? 1 : 0; clampTo(S.g, 'fit', -0.5, 0.5);
       S.g.stopT = S.g.stopT ? 1 : 0; S.g.stopB = S.g.stopB ? 1 : 0; clampTo(S.g, 'stopL', 2, 15); clampTo(S.g, 'stopD', 1, 15);
+      S.g.stopP = S.g.stopP ? 1 : 0; S.g.bar = S.g.bar ? 1 : 0;
       const L0 = { from: -6, to: 6, margin: 3 }, pl = plan.lesion || {};
       S.lesion = Object.assign(num(pl, ['from', 'to', 'margin'], L0), who(pl), { condyle: pl.condyle === 'R' || pl.condyle === 'L' ? pl.condyle : null });
       const P0 = { off: 0, yaw: 0, pitch: 0, w: 1.2 }, C0 = Object.assign({ u: 0, v: 0, tiltU: 0, tiltV: 0 }, SCREW_DEFAULT.mandible);
@@ -2950,7 +3226,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
       if (S.sel && !(S.sel[0] === 'p' ? S.planes : S.screws)[+S.sel.slice(1)]) S.sel = null;
       if (lostScrew && S.anchor && S.planes.length) { placeScrews(); alertMsg('Planda boş bir vida kaydı vardı; vidalar yeniden yerleştirildi. Kontrol edip onaylayın.'); }
       syncGuideInputs(); syncLesion(); showAnchor(); updateLesionPart(); if (S.anchor && S.mode === 'anchor') setMode('orbit');
-      if (!S.anchor) { ['guide', 'resected', 'lesion'].forEach(id => setPart(id, null, null)); clearElementParts(); S.result = null; }
+      if (!S.anchor) { ['guide', 'bar', 'resected', 'lesion'].forEach(id => setPart(id, null, null)); clearElementParts(); S.result = null; }
       const ext = plan.ext || {};
       // one damaged extension must not stop the rest of the plan from opening
       const setExt = async k => { try { await PlanExt[k].set(ext[k] || null); } catch (e) { console.warn('plan ext', k, e); try { await PlanExt[k].set(null); } catch (x) {} } };
@@ -2976,7 +3252,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   function serverUrl() { return ($('aiUrl').value || '').trim().replace(/\/+$/, ''); }
   function select(sel) { if (sel) S.guideSel = false; S.sel = sel; emit('select', sel); renderElements(); rebuildElementParts(S.result ? S.result.pls : planesWorld(), S.result ? S.result.screwInfo : []); applyExplode(); render(); }
   window.Studio = { mandibleView, startLoad, loadStopped, LOAD_CANCELLED, renderComps, setGuideRot, setGuideRoll, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, resEnds, splitGap, cutMisses, evalScrew, resectedAt, resectedNear, resPiece, boneTrack, cutAlongBone, bestScrew,
-    boneSections, sizeBody, autoBody, buildGuideSet, cutsAngle, cutFrame, pieceFrames, pieceBody, screwBodyOn, pieceWrapTop, frameAt, stumpGap, mergeStl, mergeMeshes, AUTO_DEFAULT, G_DEFAULT, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume, boneField, simplifyMesh };
+    boneSections, sizeBody, autoBody, buildGuideSet, cutsAngle, cutFrame, pieceFrames, pieceBody, screwBodyOn, pieceWrapTop, frameAt, stumpGap, mergeStl, mergeMeshes, AUTO_DEFAULT, G_DEFAULT, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume, boneField, simplifyMesh, BAR, barPlan, barSdf, buildBarMesh, placeLug, longCase, axisOffBone, ramusAxis, stopSides, LONG_MM };
   bus.addEventListener('planeDragged', () => { renderElements(); schedule(true, true); });
   // messages assembled at run time are written in the language that was active: write them again when it changes
   if (window.addEventListener) window.addEventListener('langchange', () => { try { renderAppr(); syncLesion(); } catch (e) { /* no case open yet */ } });

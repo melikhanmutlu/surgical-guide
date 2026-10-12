@@ -44,7 +44,7 @@ function cdnFetch(url) {
 
 // ---------- CSV ----------
 const COLS = ['dataset', 'region', 'side', 'len', 'id', 'status', 'error', 'plan_ok', 'n_cuts', 'cut_offs', 'cut_angles', 'res_len_mm', 'res_vol_cm3', 'lesion_from', 'lesion_to', 'condyle', 'arch_s', 'arch_sEnd', 'anchor', 'axis_dot_dir',
-  'g_L', 'g_W', 'g_wrap', 'split', 'm_pieces', 'm_undercut_mm2', 'm_contact_mm2', 'm_seat_ok', 'm_seat_free', 'm_seat_dirs', 'm_seat_tilt', 'm_seat_block_mm2', 'm_fit_band_pct', 'm_fit_tight_pct', 'm_screws', 'm_screws_null', 'm_screws_ok', 'm_screw_inbone_min', 'm_screw_cross',
+  'g_L', 'g_W', 'g_wrap', 'split', 'bar', 'm_pieces', 'm_undercut_mm2', 'm_contact_mm2', 'm_seat_ok', 'm_seat_free', 'm_seat_dirs', 'm_seat_tilt', 'm_seat_block_mm2', 'm_fit_band_pct', 'm_fit_tight_pct', 'm_screws', 'm_screws_null', 'm_screws_ok', 'm_screw_inbone_min', 'm_screw_cross',
   'm_crit', 'm_warn', 'f_active', 'f_FR', 'f_n', 'f_seg_lens', 'f_seg_min', 'f_angle_max', 'f_dev', 'f_proxLeft', 'f_defect_L', 'f_guide_pieces', 'f_guide_seat_free', 'f_guide_dirs', 'f_guide_contact', 'f_guide_wrap', 'f_guide_fit_band_pct', 'f_guide_screws_ok', 'f_crit', 'f_warn',
   'crit_total', 'qc_crit', 'pill', 'approval_blocked', 'approval_why', 'checks', 't_load_m_s', 't_plan_s', 't_load_f_s', 't_fib_s', 't_total_s', 'shots'];
 const csvPath = path.join(OUT, 'tarama_app.csv');
@@ -69,7 +69,7 @@ function flatten(r) {
     plan_ok: r.setup && r.setup.ok ? 1 : 0, n_cuts: d.planes ? d.planes.length : '', cut_offs: sorted.map(p => p.off), cut_angles: sorted.map(p => [p.yaw, p.pitch]),
     res_len_mm: d.resEnds ? d.resEnds.L : '', res_vol_cm3: d.resectedVolume != null ? +(d.resectedVolume / 1000).toFixed(2) : '', lesion_from: d.lesion && d.lesion.from, lesion_to: d.lesion && d.lesion.to, condyle: d.lesion && d.lesion.condyle || '',
     arch_s: r.setup && r.setup.centre ? r.setup.centre.s : '', arch_sEnd: r.setup && r.setup.centre ? r.setup.centre.sEnd : '', anchor: d.anchor && d.anchor.p, axis_dot_dir: r.setup && r.setup.axisDotDir,
-    g_L: d.g && d.g.L, g_W: d.g && d.g.W, g_wrap: d.g && d.g.wrap, split: d.g && d.g.split ? 1 : 0,
+    g_L: d.g && d.g.L, g_W: d.g && d.g.W, g_wrap: d.g && d.g.wrap, split: d.g && d.g.split ? 1 : 0, bar: R && R.bar ? (R.bar.ok ? `${R.bar.route} ${R.bar.len} mm, ${R.bar.clear} mm` : 'yok: ' + R.bar.why) : '',
     m_pieces: R ? R.pieces : '', m_undercut_mm2: R ? R.undercut : '', m_contact_mm2: R ? R.contact : '', m_seat_ok: R && R.seat ? (R.seat.ok ? 1 : 0) : '', m_seat_free: R && R.seat && R.seat.ok ? R.seat.free : '', m_seat_dirs: R && R.seat && R.seat.ok ? R.seat.ndirs : '',
     m_seat_tilt: R && R.seat && R.seat.ok ? R.seat.bestTilt : '', m_seat_block_mm2: R && R.seat && R.seat.ok ? R.seat.bestBlock : '', m_fit_band_pct: fitM && fitM.mode === 'gap' ? Math.round(fitM.inBand * 100) : '', m_fit_tight_pct: fitM && fitM.mode === 'gap' ? Math.round(fitM.tight * 100) : '',
     m_screws: d.screws ? d.screws.length : '', m_screws_null: d.screws ? d.screws.filter(s => !s).length : '', m_screws_ok: R ? R.screwInfo.filter(s => s.ok).length : '', m_screw_inbone_min: R && R.screwInfo.some(s => s.ok) ? Math.min(...R.screwInfo.filter(s => s.ok).map(s => s.inBone)) : '', m_screw_cross: R ? R.screwInfo.filter(s => s.crossesPlane).length : '',

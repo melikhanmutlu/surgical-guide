@@ -106,8 +106,8 @@ def main():
                             f"## Uygulama · {ds} ({len(rows)} koşu)",
                             "Sayılar: " + ", ".join(f"{k.replace('v_', '')} ✓ {sum(1 for r in rows if r[k] == 'OK')} / ~ {sum(1 for r in rows if r[k] == 'warn')} / ✗ {sum(1 for r in rows if r[k] == 'fail')}" for k in ("v_mand_guide", "v_fib_plan", "v_fib_guide", "v_approval")))
         # detail matrix: pieces / seat / fibula segments
-        md += [""] + matrix(rows, lengths, lambda r: f"L{r['g_L']}{'·2g' if r.get('split') == '1' else ''} p{r['m_pieces']} s{r['m_seat_free']}/{r['m_seat_dirs']} · f{r['f_n']}:{r['f_seg_min']} g{r['f_guide_pieces']}/{r['f_guide_seat_free']}" if r["status"] == "done" else r["status"],
-                            f"### {ds} · ayrıntı", "L = guide boyu (2g: iki guide), p = parça, s = uygun takma yönü / denenen; f = segment sayısı : en kısa segment mm, g = fibula guide parçası / uygun yön")
+        md += [""] + matrix(rows, lengths, lambda r: f"L{r['g_L']}{'·2g' if r.get('split') == '1' else ''}{'+k' if (r.get('bar') or 'yok').split(':')[0] != 'yok' else ''} p{r['m_pieces']} s{r['m_seat_free']}/{r['m_seat_dirs']} · f{r['f_n']}:{r['f_seg_min']} g{r['f_guide_pieces']}/{r['f_guide_seat_free']}" if r["status"] == "done" else r["status"],
+                            f"### {ds} · ayrıntı", "L = guide boyu (2g: iki guide, +k: bağlantı köprüsü), p = parça, s = uygun takma yönü / denenen; f = segment sayısı : en kısa segment mm, g = fibula guide parçası / uygun yön")
         # patterns
         pat = collections.defaultdict(list)
         for r in rows:
