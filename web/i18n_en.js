@@ -289,8 +289,6 @@ window.I18N_EN = {
 "Eşikler örnek değerlerdir; klinik ekip belirler. Bir satıra tıklayınca ilgili öğe açılır.": "Thresholds are sample values; the clinical team decides. Clicking a row opens the related item.",
 "Eşiğin üstünde yapı bulunamadı.": "No structure found above the threshold.",
 "Fibula (bacak) BT'si": "Fibula (leg) CT",
-"Fibula BT (LPS)": "Fibula CT (LPS)",
-"Fibula BT tarihi": "Fibula CT date",
 "Fibula BT'si": "Fibula CT",
 "Fibula BT'si açılamadı:": "Could not open fibula CT:",
 "Fibula BT'si okunuyor…": "Reading fibula CT…",
@@ -1520,6 +1518,8 @@ window.I18N_EN = {
 "Zip içinde # dosya açılamadı ve atlandı (şifreli, desteklenmeyen sıkıştırma ya da çok iç içe)": "# files in the zip could not be opened and were skipped (encrypted, unsupported compression or nested too deep)",
 "# onay": "# approvals",
 "Sürüm S#": "Version V#",
-"Mandibula BT # gün önce çekilmiş; BT yaşı kontrolü için ameliyat tarihini girin.": "The mandible CT was taken # days ago; enter the surgery date to check CT age.",
-"Fibula BT # gün önce çekilmiş; BT yaşı kontrolü için ameliyat tarihini girin.": "The fibula CT was taken # days ago; enter the surgery date to check CT age."
+"Vaka tipi": "Case type",
+"Çene rekonstrüksiyonu": "Jaw reconstruction",
+"Mandibula rezeksiyonu, fibula grefti ile rekonstrüksiyon, kesi ve fibula guide'ları.": "Mandibular resection, fibula free-flap reconstruction, cutting and fibula guides.",
+"Adımlar ve paneller seçilen vaka tipine göre açılır; yeni tipler buraya eklenecek.": "Steps and panels follow the selected case type; new types will be added here."
 };

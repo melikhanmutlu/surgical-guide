@@ -56,7 +56,7 @@ window.UI = (function () {
     const pend = S.anchor ? St.pendingList().length : 0;
     tag($('tag7'), !S.anchor ? '' : S.crit ? 'crit' : done.st7 ? 'ok' : 'warn', !S.anchor ? '' : S.crit ? `${S.crit} kritik` : done.st7 ? 'Onaylı' : `${pend} bekliyor`);
     tag($('tag8'), done.st8 ? 'ok' : '', done.st8 ? 'Alındı' : '');
-    const counted = steps.filter(d => d.id !== 'st4' || fibOn);
+    const counted = steps.filter(d => !d.hidden && (d.id !== 'st4' || fibOn));
     steps.forEach(d => d.classList.toggle('done', !!done[d.id]));
     const n = counted.filter(d => done[d.id]).length;
     $('flowBar').style.width = (100 * n / counted.length) + '%';
@@ -181,7 +181,7 @@ window.UI = (function () {
   function onRender() { if (cube && !cubeRaf) cubeRaf = requestAnimationFrame(() => { cubeRaf = 0; cube.draw(); }); }
 
   // restore the last open step
-  const last = store.get('gs.step'); if (last && $(last)) openStep(last);
+  const last = store.get('gs.step'); if (last && $(last) && !$(last).hidden) openStep(last);
   sync();
   $('readyPill').addEventListener('click', () => { if ($('readyPill').classList.contains('crit')) window.Layout && Layout.openTab('pChk', true); });
   return { openStep, openTab: id => window.Layout && Layout.openTab(id, true), onRender, sync, viewFrom };
