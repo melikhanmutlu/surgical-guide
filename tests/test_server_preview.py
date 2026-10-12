@@ -6,7 +6,7 @@ surface distance (median, 95th percentile, maximum = Hausdorff), piece count, an
 deterministic (same request -> same SHA-256). Synthetic bone and the built-in sample case only; a real series is
 compared when --real <dicom folder> is given (nothing of it is stored in the repository).
 
-    python3 tests/test_server_preview.py [--cases bar,sample,arc,arc_split2] [--real <dir> --cells body:L:45,angle:L:60]
+    python3 tests/test_server_preview.py [--cases bar,sample,arc,arc_split2,arc_bar] [--real <dir> --cells body:L:45,angle:L:60]
                                          [--out <dir>] [--keep]
 
 Expected differences (why the thresholds are not zero): the preview runs on a 0.4 mm grid over the 0.8 mm work volume
@@ -69,6 +69,9 @@ def compare(name, out, build):
     meta = json.load(open(os.path.join(out, name + "_meta.json")))
     reqs = json.load(open(os.path.join(out, name + "_reqs.json")))
     preview = load_stl(open(os.path.join(out, name + "_preview.stl"), "rb").read())
+    # the connecting bar (a separate request and part) is compared on its own
+    bar_reqs = [r for r in reqs if r.get("kind") == "bar"]
+    reqs = [r for r in reqs if r.get("kind") != "bar"]
     pieces, parts, info = [], [], []
     for k, req in enumerate(reqs):
         t = time.perf_counter()
@@ -90,7 +93,47 @@ def compare(name, out, build):
         "preview_to_server_mm": stats(d_ps), "server_to_preview_mm": stats(d_sp),
         "hausdorff_mm": float(max(d_ps.max(), d_sp.max())), "pieces_info": info,
     }
+    if meta.get("bar") or bar_reqs:
+        res["bar"] = compare_bar(name, out, build, bar_reqs)
     return res, meta
+
+
+THR_BAR = {"p95": 0.4, "max": 1.0, "vol": 0.05, "clear": 0.5}    # preview (0.4 mm field) against the exact solids; bone clearance >= 0.5 mm
+
+
+def compare_bar(name, out, build, bar_reqs):
+    """The bar: one request, closed, one body, deterministic, clear of the bone the request carries, and the same solid
+    as the preview's bar mesh."""
+    if len(bar_reqs) != 1:
+        return {"error": f"{len(bar_reqs)} bar requests (expected 1)"}
+    r1, r2 = build(bar_reqs[0]), build(bar_reqs[0])
+    m = load_stl(base64.b64decode(r1["stl_b64"]))
+    pv = load_stl(open(os.path.join(out, name + "_bar_preview.stl"), "rb").read())
+    bm = json.load(open(os.path.join(out, name + "_bar_meta.json")))
+    sp, pp = surface_points(m), surface_points(pv)
+    d_ps, d_sp = distances(pp, sp), distances(sp, pp)
+    return {"watertight": r1["watertight"], "bodies": r1["bodies"], "deterministic": r1["stl_b64"] == r2["stl_b64"], "bone_clear_mm": r1["bone_clear_mm"],
+            "in_bone": r1["in_bone_verts"], "preview_clear_mm": bm.get("clear"), "route": bm.get("route"), "preview_watertight": bool(pv.is_watertight), "preview_bodies": int(pv.body_count),
+            "vol_ratio": float(m.volume / pv.volume) if pv.volume else None, "p95": float(max(np.percentile(d_ps, 95), np.percentile(d_sp, 95))), "hausdorff": float(max(d_ps.max(), d_sp.max()))}
+
+
+def verdict_bar(b):
+    if "error" in b:
+        return ["bar: " + b["error"]]
+    bad = []
+    if not b["watertight"] or b["bodies"] != 1:
+        bad.append(f"bar not one closed body (watertight {b['watertight']}, bodies {b['bodies']})")
+    if not b["preview_watertight"] or b["preview_bodies"] != 1:
+        bad.append("preview bar not one closed body")
+    if not b["deterministic"]:
+        bad.append("bar not deterministic")
+    if b["in_bone"] is None or b["in_bone"] > 0 or b["bone_clear_mm"] is None or b["bone_clear_mm"] < THR_BAR["clear"]:
+        bad.append(f"bar enters the bone or no clearance measured (in bone {b['in_bone']}, clearance {b['bone_clear_mm']})")
+    if b["p95"] > THR_BAR["p95"] or b["hausdorff"] > THR_BAR["max"]:
+        bad.append(f"bar preview vs server p95 {b['p95']:.2f} / max {b['hausdorff']:.2f}")
+    if b["vol_ratio"] is None or abs(b["vol_ratio"] - 1) > THR_BAR["vol"]:
+        bad.append(f"bar volume ratio {b['vol_ratio']}")
+    return bad
 
 
 def verdict(res):
@@ -112,12 +155,14 @@ def verdict(res):
         bad.append(f"hausdorff {res['hausdorff_mm']:.2f} > {thr['max']}")
     if res["vol_ratio"] is None or abs(res["vol_ratio"] - 1) > thr["vol"]:
         bad.append(f"volume ratio {res['vol_ratio']}")
+    if "bar" in res:
+        bad += verdict_bar(res["bar"])
     return bad
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--cases", default="bar,sample,arc,arc_split2")
+    ap.add_argument("--cases", default="bar,sample,arc,arc_split2,arc_bar")
     ap.add_argument("--real", default=None, help="folder with one DICOM series (compared, never stored)")
     ap.add_argument("--cells", default="body:L:45,angle:L:60")
     ap.add_argument("--out", default=None); ap.add_argument("--keep", action="store_true")
@@ -150,6 +195,10 @@ def main():
                 f"preview->server p50 {a_['p50']:.2f} p95 {a_['p95']:.2f} max {a_['max']:.2f}  server->preview p50 {b_['p50']:.2f} p95 {b_['p95']:.2f} max {b_['max']:.2f}  "
                 f"bodies {res['server']['bodies']} watertight {res['server']['watertight']} deterministic {res['server']['deterministic']} seat {res['preview']['seat']} / {res['server']['seat']}  "
                 f"server {sum(i['ms'] for i in res['pieces_info'])} ms, {res['server']['faces']} faces")
+        if "bar" in res and "error" not in res["bar"]:
+            b = res["bar"]
+            line += (f"  | bar {b['route']}: watertight {b['watertight']} bodies {b['bodies']} bone clearance server {b['bone_clear_mm']} / preview {b['preview_clear_mm']:.2f} mm, "
+                     f"in bone {b['in_bone']}, vol ratio {b['vol_ratio']:.3f}, p95 {b['p95']:.2f} max {b['hausdorff']:.2f}")
         print(("OK   " if not bad else "FAIL ") + line + ("" if not bad else "  <- " + "; ".join(bad)), flush=True)
         table.append(line)
         failed += bool(bad)

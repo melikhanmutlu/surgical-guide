@@ -256,6 +256,22 @@ def main():
         assert r9["stl_b64"] == J(call(base, "POST", "/guide", req))[1]["stl_b64"]
         print("adaptive body fields OK")
         st, r = J(call(base, "POST", "/guide", {"crop": crop})); assert st == 400 and "error" in r
+        # the connecting bar (kind "bar"): rod path + two pads with holes -> one closed body, the holes open, clearance
+        # from the bone the request carries (here a slab 10 mm below the rod)
+        bar = {"path": [[-20, 0, 0], [-20, 0, -8], [20, 0, -8], [20, 0, 0]], "r": 2.0,
+               "pads": [{"c": [-20, 0, 2], "axis": [0, 0, 1], "R": 3.5, "T": 4, "hole": 1.1}, {"c": [20, 0, 2], "axis": [0, 0, 1], "R": 3.5, "T": 4, "hole": 1.1}]}
+        bsp = 0.5; bn = (100, 30, 60)
+        bmask = np.zeros(bn[::-1], np.uint8)
+        bz = (np.arange(bn[2]) * bsp - 30.0); bmask[(bz < -20), :, :] = 1
+        bcrop = {"nx": bn[0], "ny": bn[1], "nz": bn[2], "sp": [bsp] * 3, "origin": [-25.0, -7.5, -30.0], "axes": [[1, 0, 0], [0, 1, 0], [0, 0, 1]]}
+        st, rb = J(call(base, "POST", "/guide", {"kind": "bar", "resolution": 0.2, "bar": bar, "crop": bcrop, "mask_b64": base64.b64encode(bmask.tobytes()).decode()}))
+        assert st == 200 and rb["watertight"] and rb["bodies"] == 1, (st, rb.get("error"))
+        tmb = trimesh.load(io.BytesIO(base64.b64decode(rb["stl_b64"])), file_type="stl")
+        hole, rod, pad = contains(tmb, np.array([[-20, 0, 2], [0, 0, -8], [-22.5, 0, 2]], float))
+        assert not bool(hole) and bool(rod) and bool(pad), (hole, rod, pad)
+        assert rb["in_bone_verts"] == 0 and 9.0 < rb["bone_clear_mm"] < 10.5, (rb["bone_clear_mm"], rb["in_bone_verts"])
+        st, r = J(call(base, "POST", "/guide", {"kind": "bar", "bar": dict(bar, r=-1)})); assert st == 400 and "error" in r
+        print("connecting bar OK")
     finally:
         srv.shutdown(); srv.server_close()
         os.remove(db)

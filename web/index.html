@@ -599,6 +599,7 @@ button.ghost.danger { color: var(--crit); }
               <div class="btns"><button class="accent" id="pickAnchor"><svg class="i"><use href="#i-target"/></svg>Bölgeyi modelde seç</button></div>
               <div class="ctl"><label for="resType" class="lbl2">Rezeksiyon tipi</label><select id="resType"><option value="">Segment (iki kesi arası)</option><option value="R">Kondil dahil, sağ (tek kesi)</option><option value="L">Kondil dahil, sol (tek kesi)</option></select></div>
               <p class="hint" id="resTypeHint" hidden>Ramus ve kondil, kondile en uzak kesiden itibaren çıkarılır. Diğer kesiler yalnız guide yuvası olarak kalır. Kondil konumu Anatomi adımındaki referanstan gelir.</p>
+              <div id="neoBox" class="col" hidden></div>
               <div class="el-row"><div class="el-list" id="plList" role="group" aria-label="Kesiler"></div><button id="addPlane" class="ghost sm" title="Kesi ekle"><svg class="i"><use href="#i-plus"/></svg>Kesi</button></div>
               <div id="plProps" class="col"></div>
               <details class="sub-d" id="secLes"><summary>Lezyonu boya (isteğe bağlı)</summary><div id="lesPaint" class="col"></div></details>
@@ -685,6 +686,8 @@ button.ghost.danger { color: var(--crit); }
           <div class="btns end" id="guideDel2Box" hidden><button id="guideDel2" class="sm" title="Guide ve vidaları kaldırır; kesiler yerinde kalır"><svg class="i"><use href="#i-trash"/></svg>Guide'ı sil</button></div>
           <h3 class="sub">Yerleşim</h3>
           <div class="ctl"><label for="g_split" class="lbl2">Düzen</label><select id="g_split" data-seg><option value="0" data-short="Tek parça">Tek parça (köprülü)</option><option value="1">İki parça</option><option value="2" data-short="İki eksen">İki parça, her kesi kendi ekseninde</option></select></div>
+          <label class="chk"><input type="checkbox" id="g_bar"> Bağlantı köprüsü</label>
+          <p class="hint more" data-for="g_bar">İki guide'ı rezeke bölgenin dışından, lingual ya da alt taraftan birbirine bağlayan çubuk. Ayrı bir parça olarak basılır, iki guide'daki kulaklara takılır ve kesilerden sonra çıkarılır. Lezyon 55 mm'den uzunsa ya da düz eksen kemiğin dışına çıkıyorsa kendiliğinden önerilir.</p>
           <div class="ctl"><label for="g_kerf" class="lbl2">Testere payı</label><select id="g_kerf" data-seg><option value="1" data-short="Rezeke tarafta">Rezeke tarafta (greft güdüğe tam oturur)</option><option value="0" data-short="Ortalı">Kesi düzlemine ortalı (her uçta yarım yuva aralık)</option></select></div>
           <p class="hint more">Uzunluk, genişlik ve sarma derinliği kemiğe göre kendiliğinden seçilir; bir kaydırıcıyı elle değiştirince o değer korunur.</p>
           <div class="btns end"><button id="gAutoReset" class="sm" type="button" title="Elle değiştirilen uzunluk, genişlik ve sarmayı yeniden kemiğe göre seçer">Otomatiğe dön</button></div>
@@ -694,6 +697,8 @@ button.ghost.danger { color: var(--crit); }
           <p class="hint more">Guide'ın üst ya da alt kenarından kemiğin kenarına (kret, alt kenar) inen bir dudak. Guide'ın yukarı aşağı kaymasını engeller. Kemiğin en geniş yerinin altına girmez, guide yine takılabilir. Kemiği kavraması gerekmiyorsa kapalı bırakın.</p>
           <label class="chk"><input type="checkbox" id="g_stopT"> Üst stop</label>
           <label class="chk"><input type="checkbox" id="g_stopB"> Alt stop</label>
+          <label class="chk"><input type="checkbox" id="g_stopP"> Arka kenar stopu (ramus)</label>
+          <p class="hint more" data-for="g_stopP">Ramusa çıkan guide'ın arka kenarı ramusun arka kenarına dayanır; guide sigmoid çentiğe göre konumlanır.</p>
           <div id="stopBox" class="col" hidden>
             <div class="ctl"><div class="ctl-row"><label for="g_stopL">Stop boyu</label><output id="go_stopL">6 mm</output></div><input type="range" id="g_stopL" min="2" max="15" step="0.5" value="6"><p class="hint more" data-for="g_stopL">Guide kenarından öteye uzanan kısım.</p></div>
             <div class="ctl"><div class="ctl-row"><label for="g_stopD">Stop sarma derinliği</label><output id="go_stopD">5 mm</output></div><input type="range" id="g_stopD" min="1" max="15" step="0.5" value="5"></div>
@@ -860,6 +865,8 @@ button.ghost.danger { color: var(--crit); }
 <script src="report.js"></script>
 <script src="segedit.js"></script>
 <script src="ref.js"></script>
+<script src="condyle.js"></script>
+<script src="bridge.js"></script>
 <script src="plate.js"></script>
 <script src="ves.js"></script>
 <script src="fguide.js"></script>

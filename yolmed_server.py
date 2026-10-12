@@ -18,6 +18,9 @@ Endpoints (JSON unless noted; CORS incl. Access-Control-Allow-Private-Network)
        preview's body (L, W, vc, uc, wrap, wrapU, wall, clear, bridge, side, skirt), planes the saw slots (already on
        the kerf side), wrap_profile the preview's wrap line and seat_dir its insertion direction; all optional fields
        may be left out (older clients), the server then derives them from the bone itself.
+  POST /guide {kind: "bar", bar: {path, r, pads}, crop?, mask_b64?}
+       -> {stl_b64, watertight, volume_mm3, faces, bodies, bone_clear_mm, in_bone_verts, ms}
+       The connecting bar between the two guides of a long resection (web/app.js barPlan), a separate part.
 
 The case store holds plan JSON only, never image data.
 Research prototype. Not a medical device; every guide must be reviewed by a qualified team.
@@ -308,11 +311,116 @@ def _pairs(val, name, nmax=2000):
     return arr
 
 
+BAR_SEGMENTS = 64                                       # facets around the bar's round solids
+
+
+def _frame_to(axis):
+    """3x3 rotation taking +z to the unit vector `axis`."""
+    a = _unit(axis)
+    t = np.array([1.0, 0, 0]) if abs(a[0]) < 0.9 else np.array([0.0, 1, 0])
+    x = np.cross(t, a)
+    x /= np.linalg.norm(x)
+    return np.column_stack([x, np.cross(a, x), a])
+
+
+def build_bar(req):
+    """The connecting bar between the two guides of a long resection (web/app.js barPlan / buildBarMesh), from the same
+    spec the preview builds it from: a rod of radius r along `path` (capsules between consecutive points) and a pad per
+    lug (cylinder of radius R and thickness T about `axis`, centred on `c`) with the pin hole (radius `hole`) through it.
+    Built with exact solids (Manifold), so the STL is closed by construction. When the request carries the bone mask
+    around the bar (crop + mask_b64, as a guide request), the bar's clearance from the full-resolution bone is measured:
+    bone_clear_mm = the smallest distance from the bar's surface to bone (mm, surface points against bone voxel centres less
+    half a voxel), in_bone_verts = surface points inside a bone voxel."""
+    import manifold3d as m3d
+    import trimesh
+
+    t0 = time.perf_counter()
+    bar = req.get("bar")
+    if not isinstance(bar, dict):
+        raise HttpError(400, "bar must be {path, r, pads}")
+    try:
+        path = np.asarray(bar["path"], float).reshape(-1, 3)
+        rad = float(bar["r"])
+        pads = [(np.asarray(p["c"], float).reshape(3), np.asarray(p["axis"], float).reshape(3), float(p["R"]), float(p["T"]), float(p["hole"])) for p in bar.get("pads") or []]
+    except (KeyError, TypeError, ValueError):
+        raise HttpError(400, "bar must be {path: [[x, y, z], ...], r, pads: [{c, axis, R, T, hole}]}")
+    if not 2 <= len(path) <= 16 or not np.all(np.isfinite(path)) or len(pads) > 4:
+        raise HttpError(400, "bar path must have 2..16 finite points, at most 4 pads")
+    _check_ranges({"bar r": (rad, 0.5, 6)})
+    for c, a, R_, T_, h_ in pads:
+        _check_ranges({"pad R": (R_, 1, 15), "pad T": (T_, 0.5, 25), "pad hole": (h_, 0.1, R_ - 0.3)})
+        if not (np.all(np.isfinite(c)) and np.all(np.isfinite(a))):
+            raise HttpError(400, "pad centre and axis must be finite")
+    if float(np.linalg.norm(path.max(0) - path.min(0))) > 300:
+        raise HttpError(422, "bar longer than 300 mm")
+    sph = m3d.Manifold.sphere(rad, BAR_SEGMENTS)
+    solids = []
+    for a, b in zip(path[:-1], path[1:]):
+        solids.append(m3d.Manifold.batch_hull([sph.translate(tuple(a)), sph.translate(tuple(b))]))
+    holes = []
+    for c, ax, R_, T_, h_ in pads:
+        M = np.column_stack([_frame_to(ax), c])
+        solids.append(m3d.Manifold.cylinder(T_, R_, R_, BAR_SEGMENTS, True).transform(M))
+        holes.append(m3d.Manifold.cylinder(T_ + 2, h_, h_, BAR_SEGMENTS, True).transform(M))
+    man = m3d.Manifold.batch_boolean(solids, m3d.OpType.Add)
+    if holes:
+        man = m3d.Manifold.batch_boolean([man] + holes, m3d.OpType.Subtract)
+    if man.status() != m3d.Error.NoError or man.is_empty():
+        raise HttpError(422, "bar solid could not be built")
+    mesh = man.to_mesh64() if hasattr(man, "to_mesh64") else man.to_mesh()
+    verts = np.asarray(mesh.vert_properties, dtype=np.float64)[:, :3]
+    faces = np.asarray(mesh.tri_verts, dtype=np.int64)
+    verts, faces, _ = _weld(verts, faces)
+    buf = io.BytesIO()
+    trimesh.Trimesh(verts, faces, process=False).export(buf, file_type="stl")
+    tm = trimesh.load(io.BytesIO(buf.getvalue()), file_type="stl")
+    edges_ok = bool(len(faces)) and np.all(np.unique(tm.edges_sorted, axis=0, return_counts=True)[1] == 2)
+    out = {
+        "stl_b64": base64.b64encode(buf.getvalue()).decode("ascii"),
+        "watertight": bool(tm.is_watertight and tm.is_winding_consistent and edges_ok and tm.volume > 0),
+        "manifold": True, "volume_mm3": float(tm.volume), "faces": int(len(tm.faces)), "bodies": int(tm.body_count), "pieces": int(tm.body_count),
+        "bone_clear_mm": None, "in_bone_verts": None,
+    }
+    # clearance from the bone the request carries (the crop's voxel centres; a vertex in a bone voxel counts as inside)
+    if req.get("crop") and req.get("mask_b64"):
+        crop = req["crop"]
+        cnx, cny, cnz = int(crop["nx"]), int(crop["ny"]), int(crop["nz"])
+        if cnx * cny * cnz > MAX_CROP:
+            raise HttpError(422, "crop too large")
+        raw = base64.b64decode(req["mask_b64"])
+        if len(raw) != cnx * cny * cnz:
+            raise HttpError(400, f"mask has {len(raw)} bytes, expected nx*ny*nz = {cnx * cny * cnz}")
+        mask = np.frombuffer(raw, np.uint8).reshape(cnz, cny, cnx) > 0
+        sp = np.asarray(crop["sp"], float)
+        axes = np.asarray(crop["axes"], float).reshape(3, 3)
+        A = (axes * sp[:, None]).T
+        # the bar's surface: its vertices plus uniform samples (a long rod has vertices only at its ends), deterministic
+        pts = np.vstack([np.asarray(tm.vertices), trimesh.sample.sample_surface(tm, int(min(200000, max(5000, tm.area * 8))), seed=0)[0]])
+        ijk = np.linalg.solve(A, (pts - np.asarray(crop["origin"], float)).T).T     # crop (i, j, k) per surface point
+        idx = np.floor(ijk + 0.5).astype(int)
+        inside = np.all((idx >= 0) & (idx < [cnx, cny, cnz]), axis=1)
+        if mask.any():
+            dist = ndi.distance_transform_edt(~mask, sampling=(sp[2], sp[1], sp[0]))
+            d = np.full(len(idx), np.inf)
+            d[inside] = dist[idx[inside, 2], idx[inside, 1], idx[inside, 0]]
+            inb = np.zeros(len(idx), bool)
+            inb[inside] = mask[idx[inside, 2], idx[inside, 1], idx[inside, 0]]
+            out["in_bone_verts"] = int(np.count_nonzero(inb))
+            fin = d[np.isfinite(d)]
+            out["bone_clear_mm"] = round(float(max(0.0, fin.min() - 0.5 * sp.max())), 2) if len(fin) else None
+        else:
+            out["in_bone_verts"] = 0
+    out["ms"] = int(round((time.perf_counter() - t0) * 1000))
+    return out
+
+
 def build_guide(req):
     import manifold3d as m3d
     import trimesh
     from skimage.measure import marching_cubes
 
+    if req.get("kind") == "bar":
+        return build_bar(req)
     t0 = time.perf_counter()
     T = {}
     crop, fr, g = req["crop"], req["frame"], req["g"]
