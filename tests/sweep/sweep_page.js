@@ -191,9 +191,10 @@ window.SW = (function () {
       const plan = S.fib.plan;
       out.fib = { label: F.label, FR: +F.c.FR.toFixed(2), smin: +F.c.smin.toFixed(1), smax: +F.c.smax.toFixed(1), ncands: F.cands.length, cands: F.cands.map(x => ({ len: +x.len.toFixed(0), rad: +x.rad.toFixed(1), tibia: !!x.tibia })), warn: F.warn || [],
         plan: { n: plan.n, knots: plan.knots, kerf: plan.kerf, distal: plan.distal, mirror: plan.mirror }, checks: Fibula.checks().map(x => x.slice(0, 3)), msg: $('fibMsg').textContent, guideFail: !!S.fib.guideFail };
-      if (c) out.fib.res = { L: +c.D.L.toFixed(1), nmid: c.D.nmid, dev: +c.dev.toFixed(2), proxLeft: +c.proxLeft.toFixed(1), used: +c.used.toFixed(1), segs: c.segs.map(g => ({ i: g.i, L: +g.L.toFixed(1), a0: +g.a0.toFixed(1), a1: +g.a1.toFixed(1), crest: +g.crest.toFixed(1), s0: +g.s0.toFixed(1) })) };
+      if (c) out.fib.res = { L: +c.D.L.toFixed(1), nmid: c.D.nmid, dev: +c.dev.toFixed(2), proxLeft: +c.proxLeft.toFixed(1), used: +c.used.toFixed(1), segs: c.segs.map(g => ({ i: g.i, L: +g.L.toFixed(1), a0: +g.a0.toFixed(1), a1: +g.a1.toFixed(1), crest: +g.crest.toFixed(1), s0: +g.s0.toFixed(1), n0: v3(g.n0), n1: v3(g.n1) })), pts: c.D.pts.map(v3) };
       const fg = S.fib.guide;
-      if (fg) out.fib.guide = { g: Object.assign({}, fg.ctx.g), result: resultJ(fg.result), nscrews: fg.ctx.scs.length, nullEntry: fg.ctx.scs.filter(s => !s.entry).length };
+      if (fg) out.fib.guide = { g: Object.assign({}, fg.ctx.g), result: resultJ(fg.result), nscrews: fg.ctx.scs.length, nullEntry: fg.ctx.scs.filter(s => !s.entry).length,
+        screws: (fg.ctx.fsc || []).map(f => ({ seg: f.seg, off: f.off, ang: f.ang })), pls: fg.ctx.pls.map(p => ({ p: v3(p.p), N: v3(p.N), w: p.w })), frame: { P: v3(fg.ctx.P), u: v3(fg.ctx.u), v: v3(fg.ctx.v), n: v3(fg.ctx.n) } };
     }
     out.fit = fitStats();
     if (window.Osteo && Osteo.get && Osteo.get()) { try { out.osteo = Osteo.summary(); } catch (e) { out.osteo = { error: String(e) }; } }

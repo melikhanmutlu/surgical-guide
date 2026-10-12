@@ -166,7 +166,7 @@ const VERI = process.env.VERI || '/mnt/project-files/surgical-guide-prototype/au
     const fc = await h.ev(() => [...document.querySelectorAll('#fibChecks li')].map(l => l.textContent.trim()));
     const appr = await page.$eval('#fibApprove', b => b.disabled).catch(() => null);
     const ev = await h.shot('C5_kisa_segment');
-    return { pass: fc.some(t => /en az 20 mm/.test(t)), actual: `segmentler ${JSON.stringify(segs)}; kontroller ${fc.join(' | ')}; fibApprove disabled=${appr}`, evidence: ev };
+    return { pass: fc.some(t => /en az 20 mm|15 mm altı segment/.test(t)) && appr === true, actual: `segmentler ${JSON.stringify(segs)}; kontroller ${fc.join(' | ')}; fibApprove disabled=${appr}`, evidence: ev };
   });
 
   // ---------- C9: re-check of earlier audit findings ----------

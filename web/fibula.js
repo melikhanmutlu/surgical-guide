@@ -7,6 +7,10 @@ window.Fibula = (function () {
   const St = window.Studio; if (!St) return null;
   const { S, V, G, fmt, bus } = St, $ = id => document.getElementById(id);
   const MIN_LEN = 20, MAX_N = 4, DEV_WARN = 3, ANGLE_WARN = 35, PROX_KEEP = 60, DISTAL_MIN = 60, THR = 250, DBL_GAP = 15;
+  // segment length bands (literature: >= 15 mm keeps the periosteal supply, ~20 mm is the usual floor; the segments at the
+  // stumps carry the fixation and heal less well, so >= 25 mm there): < SEG_ERR critical, SEG_ERR..MIN_LEN a warning,
+  // a stump segment of a multi-segment graft under STUMP_MIN a warning. DEV_TIE: deviations this close count as equal
+  const SEG_ERR = 15, STUMP_MIN = 25, DEV_TIE = 0.5;
   const FIB_R = [2.5, 12];                 // mm: slenderest / thickest radius a fibula can have (warning above)
   const FIB_LEN = [120, 500];              // mm: shortest / longest fibula (CT table rails are 800 mm and more)
   const FIB_RATIOS = [0.45, 0.5, 0.4, 0.55, 0.35, 0.6];   // neck / core thickness ratios tried by G.separator
@@ -27,20 +31,28 @@ window.Fibula = (function () {
   // vOff: graft shift towards the occlusal plane; dbl: double barrel (a second strut stacked dblH mm above);
   // fg / fsc: fibula guide body and screw edits (null = automatic)
   // nAuto: the segment count is still chosen from the defect (pressing a count button takes it over by hand)
-  const defaultPlan = () => ({ source: null, cand: null, mirror: 0, n: 2, nAuto: 1, knots: [0.5], yaw: [0, 0, 0], pitch: [0, 0, 0], roll: [0, 0], kerf: 1.0, distal: 70, vOff: 0, dbl: 0, dblH: null, fg: null, fsc: null, ok: false });
+  // kerf: the saw blade (bone taken by one cut); slotW: width of the guide's saw slot (null = the kerf, as it was before
+  // the two were separate). The slot lies outside each graft face, so the graft keeps its planned length.
+  const defaultPlan = () => ({ source: null, cand: null, mirror: 0, n: 2, nAuto: 1, knots: [0.5], yaw: [0, 0, 0], pitch: [0, 0, 0], roll: [0, 0], kerf: 1.0, slotW: null, distal: 70, vOff: 0, dbl: 0, dblH: null, fg: null, fsc: null, ok: false });
+  // A segment count is acceptable when every segment is >= minLen and, with two or more segments, the two at the stumps
+  // are >= stumpMin (a single segment touches both stumps and no other count makes it longer).
+  const lensOk = (lens, minLen = MIN_LEN, stumpMin = STUMP_MIN) => lens.every(x => x >= minLen - 1e-9) && (lens.length < 2 || (lens[0] >= stumpMin - 1e-9 && lens[lens.length - 1] >= stumpMin - 1e-9));
   // Segment count for a defect of length L from a table of candidates [{n, lens, dev}] (one row per count tried):
   // a defect shorter than one segment is one segment (nothing can make it longer); otherwise the fewest segments that
-  // keep every segment >= minLen and follow the defect within devWarn; if no count reaches the deviation target, the
-  // count with the smallest deviation among those that keep every segment >= minLen (fewer segments on a tie within
-  // 0.5 mm; a short segment is never traded for a smaller deviation).
-  function segmentChoice(table, L, minLen = MIN_LEN, devWarn = DEV_WARN) {
-    const rows = table.slice().sort((a, b) => a.n - b.n), okLen = r => r.lens.every(x => x >= minLen - 1e-9);
+  // are acceptable (lensOk) and follow the defect within devWarn, then the fewest with every segment >= minLen within
+  // devWarn (stump segments under stumpMin are then a warning, not a reason to follow the defect worse); if no count
+  // reaches the deviation target, the count with the smallest deviation among those with every segment >= minLen
+  // (deviations within DEV_TIE count as equal and the fewer segments win), a stump-acceptable count preferred when it is
+  // within DEV_TIE of that. A segment under minLen is never traded for a smaller deviation.
+  function segmentChoice(table, L, minLen = MIN_LEN, devWarn = DEV_WARN, stumpMin = STUMP_MIN) {
+    const rows = table.slice().sort((a, b) => a.n - b.n), okLen = r => lensOk(r.lens, minLen, stumpMin), okMin = r => lensOk(r.lens, minLen, 0);
+    const rej = r => ({ n: r.n, dev: r.dev, min: Math.min(...r.lens), stump: r.lens.length > 1 ? Math.min(r.lens[0], r.lens[r.lens.length - 1]) : null });
     if (L < minLen) { const r = rows.find(x => x.n === 1) || rows[0]; return { n: r.n, reason: 'short', dev: r.dev, lens: r.lens }; }
-    const good = rows.find(r => okLen(r) && r.dev <= devWarn);
-    if (good) return { n: good.n, reason: 'dev', dev: good.dev, lens: good.lens, rejected: rows.filter(r => r.n < good.n).map(r => ({ n: r.n, dev: r.dev, min: Math.min(...r.lens) })) };
-    let least = null;
-    for (const r of rows.filter(okLen)) if (!least || r.dev < least.dev - 0.5) least = r;
-    if (least) return { n: least.n, reason: 'len', dev: least.dev, lens: least.lens, rejected: rows.filter(r => !okLen(r)).map(r => ({ n: r.n, dev: r.dev, min: Math.min(...r.lens) })) };
+    const good = rows.find(r => okLen(r) && r.dev <= devWarn) || rows.find(r => okMin(r) && r.dev <= devWarn);
+    if (good) return { n: good.n, reason: 'dev', dev: good.dev, lens: good.lens, stumpOk: okLen(good), rejected: rows.filter(r => r.n < good.n).map(rej) };
+    const leastOf = f => { let m = null; for (const r of rows.filter(f)) if (!m || r.dev < m.dev - DEV_TIE) m = r; return m; };
+    const a = leastOf(okLen), b = leastOf(okMin), least = a && (!b || a.dev <= b.dev + DEV_TIE) ? a : b;
+    if (least) return { n: least.n, reason: 'len', dev: least.dev, lens: least.lens, stumpOk: okLen(least), rejected: rows.filter(r => !okMin(r)).map(rej) };
     const r = rows.find(x => x.n === 1) || rows[0];
     return { n: r.n, reason: 'short', dev: r.dev, lens: r.lens };
   }
@@ -326,7 +338,7 @@ window.Fibula = (function () {
     for (let i = 0; i < n; i++) {
       const x = d[i], b = D.up.clone().sub(x.clone().multiplyScalar(D.up.dot(x))).normalize().applyAxisAngle(x, deg(P0.roll[i] || 0)), z = V().crossVectors(x, b);
       const loc = v => V(v.dot(x), v.dot(b), v.dot(z)), n0 = loc(normals[i]), n1 = loc(normals[i + 1]);
-      if (prevEnd) cursor += P0.kerf + 1 + FR * (tilt(prevEnd) + tilt(n0));
+      if (prevEnd) cursor += slotOf(P0) + 1 + FR * (tilt(prevEnd) + tilt(n0));
       const L = P[i + 1].distanceTo(P[i]);
       segs.push({ i, L, s0: cursor, s1: cursor + L, x, b, z, n0, n1, P0: P[i], P1: P[i + 1], N0: normals[i], N1: normals[i + 1], barrel: 0,
         a0: r2d(Math.acos(Math.min(1, Math.abs(n0.x)))), a1: r2d(Math.acos(Math.min(1, Math.abs(n1.x)))) });
@@ -338,7 +350,7 @@ window.Fibula = (function () {
       const h = dblH(), U0 = P[0].clone().addScaledVector(D.inPlane(D.NA), h), U1 = P[n].clone().addScaledVector(D.inPlane(D.NB), h);
       const x = U1.clone().sub(U0).normalize(), b = D.up.clone().sub(x.clone().multiplyScalar(D.up.dot(x))).normalize(), z = V().crossVectors(x, b);
       const loc = v => V(v.dot(x), v.dot(b), v.dot(z)), n0 = loc(D.NA), n1 = loc(D.NB), L = U0.distanceTo(U1);
-      cursor += P0.kerf + 1 + FR * (tilt(prevEnd) + tilt(n0)) + DBL_GAP;
+      cursor += slotOf(P0) + 1 + FR * (tilt(prevEnd) + tilt(n0)) + DBL_GAP;
       segs.push({ i: n, L, s0: cursor, s1: cursor + L, x, b, z, n0, n1, P0: U0, P1: U1, N0: D.NA, N1: D.NB, barrel: 1,
         a0: r2d(Math.acos(Math.min(1, Math.abs(n0.x)))), a1: r2d(Math.acos(Math.min(1, Math.abs(n1.x)))) });
       cursor += L;
@@ -424,7 +436,7 @@ window.Fibula = (function () {
 
   // ---------- fibula guide ----------
   function guideCtx(c) {
-    const P0 = plan(), FR = F.c.FR, [u] = F.c.FA, kerf = P0.kerf;
+    const FR = F.c.FR, [u] = F.c.FA;
     const sA = c.segs[0].s0, sB = c.segs[c.segs.length - 1].s1, sm = (sA + sB) / 2, om = offAt(sm);
     const n = F.c.FA[1].clone();
     let Pg = null; const top = toFib(sm, om[0], om[1]).add(n.clone().multiplyScalar(FR + 15));
@@ -432,23 +444,120 @@ window.Fibula = (function () {
     if (!Pg) return null;
     const v = V().crossVectors(n, u).normalize();
     const g = guideBody(c);
-    const pls = [];
+    const pls = slotPlanes(c);
+    // screws: position along the segment and angle around the fibula axis are editable (fsc); without edits they are
+    // placed by autoScrews (two on a segment of STUMP_MIN mm or more, at least three on the guide, clear of every slot)
+    const fsc = guideScrews(c);
+    const scs = fsc.map(f => { const st = screwAt(c, f); return { sc: { d: f.d, D: f.D, sleeveH: f.sleeveH, len: f.len }, dir: st.dir, entry: st.entry }; });
+    return { g, P: Pg, u: u.clone(), v, n, pls, scs, fsc, bone: fibBone, field: q => St.fieldAt(F.red, F.c.Fm, [q.x, q.y, q.z]) };
+  }
+  // effective slot width: the plan's slot (never narrower than the blade), else the blade itself (the old single value)
+  const slotOf = P0 => Math.max(P0.kerf, P0.slotW == null ? P0.kerf : P0.slotW);
+  // saw slots of the fibula guide: one outside each graft face (p = the face, pSlot = the slot centre, w = slot width);
+  // the guide and the production STL open the slot at pSlot, the screw checks measure the distance to the cut at p
+  function slotPlanes(c) {
+    const u = F.c.FA[0], sw = slotOf(plan()), out = [];
     c.segs.forEach(sg => {
       const o = offAt((sg.s0 + sg.s1) / 2);
-      [[sg.s0, sg.n0, -1], [sg.s1, sg.n1, 1]].forEach(([s, nl, out]) => {
+      [[sg.s0, sg.n0, -1], [sg.s1, sg.n1, 1]].forEach(([s, nl, side]) => {
         const N = dirFib(nl); if (N.dot(u) < 0) N.negate();
-        pls.push({ p: toFib(s, o[0], o[1]).add(N.clone().multiplyScalar(out * kerf / 2)), N, w: kerf });
+        const p = toFib(s, o[0], o[1]);
+        out.push({ p, pSlot: p.clone().add(N.clone().multiplyScalar(side * sw / 2)), N, w: sw });
       });
     });
-    // screws: position along the segment and angle around the fibula axis are editable (fsc)
-    const scs = guideScrews(c).map(f => {
-      const sg = c.segs[f.seg], half = Math.max(0, sg.L / 2 - 3), s = (sg.s0 + sg.s1) / 2 + Math.max(-half, Math.min(half, f.off)), o = offAt(s);
-      const sc = { d: f.d, D: f.D, sleeveH: f.sleeveH, len: f.len }, out = n.clone().applyAxisAngle(u, deg(f.ang)), dir = out.clone().negate();
-      const t0 = toFib(s, o[0], o[1]).add(out.clone().multiplyScalar(FR + 15)); let entry = null;
-      for (let t = 0; t < FR + 30; t += 0.2) { const q = t0.clone().add(dir.clone().multiplyScalar(t)); if (fibBone(q)) { entry = q; break; } }
-      return { sc, dir, entry };
+    return out;
+  }
+  // a guide screw on the fibula: the point at `off` mm from the segment middle, the drill along -n turned `ang` degrees
+  // about the fibula axis, the bone entry found by a ray from above
+  function screwAt(c, f) {
+    const sg = c.segs[f.seg], FR = F.c.FR, [u] = F.c.FA, n = F.c.FA[1], half = Math.max(0, sg.L / 2 - 3);
+    const s = (sg.s0 + sg.s1) / 2 + Math.max(-half, Math.min(half, f.off)), o = offAt(s);
+    const out = n.clone().applyAxisAngle(u, deg(f.ang)), dir = out.clone().negate();
+    const t0 = toFib(s, o[0], o[1]).add(out.clone().multiplyScalar(FR + 15)); let entry = null;
+    for (let t = 0; t < FR + 30; t += 0.2) { const q = t0.clone().add(dir.clone().multiplyScalar(t)); if (fibBone(q)) { entry = q; break; } }
+    return { s, dir, entry, axis: toFib(s, o[0], o[1]) };
+  }
+  // The rules a fibula guide screw is placed by (the same as the mandible guide's): the sleeve stands on the guide
+  // body (entry inside the body width, no deeper below the bone's top than the wrap), the drill enters bone and stays
+  // in it for SCREW_MIN_DEPTH mm, the sleeve keeps SCREW_SLOT_GAP mm from every saw slot along the whole hole, and a
+  // hole SCREW_CUT_GAP mm or more from the cut scores better (bone bridge between the hole and the osteotomy).
+  const SCREW_MIN_DEPTH = 4, SCREW_SLOT_GAP = 2, SCREW_CUT_GAP = 5, SLOT_REACH = 45, SCREW_TIGHT_GAP = 0.5;
+  function screwSite(c, f, pls, body, minGap = SCREW_SLOT_GAP) {
+    const st = screwAt(c, f); if (!st.entry) return null;
+    const { entry, dir } = st, n = F.c.FA[1], v = V().crossVectors(n, F.c.FA[0]).normalize(), cw = body.clear + body.wall;
+    // the sleeve on the body: across the guide inside its width; below the top of the bone at most the wrap
+    const top = screwAt(c, Object.assign({}, f, { ang: 0 })).entry;
+    if (Math.abs(entry.clone().sub(st.axis).dot(v)) + f.D / 2 > body.W / 2 - 0.5) return null;
+    if (top && top.clone().sub(entry).dot(n) > body.wrap - 0.5) return null;
+    let inBone = 0, slotGap = Infinity, cutGap = Infinity; const q = V(), d = V();
+    for (let t = -(cw + f.sleeveH); t <= f.len + 1e-9; t += 0.25) {
+      q.copy(entry).addScaledVector(dir, t);
+      const bone = t >= 0 && fibBone(q); if (bone) inBone += 0.25;
+      for (const pw of pls) {
+        d.copy(q).sub(pw.pSlot); const a = d.dot(pw.N); if (d.lengthSq() - a * a > SLOT_REACH * SLOT_REACH) continue;
+        slotGap = Math.min(slotGap, Math.abs(a) - pw.w / 2 - f.D / 2);
+        if (bone) { const b = Math.abs(q.clone().sub(pw.p).dot(pw.N)) - f.d / 2; if (b < cutGap) cutGap = b; }
+      }
+    }
+    if (inBone < SCREW_MIN_DEPTH || slotGap < minGap) return null;
+    return { s: st.s, inBone, slotGap, cutGap, score: Math.min(slotGap, 6) + 0.6 * Math.min(cutGap, SCREW_CUT_GAP + 3) + 0.1 * Math.min(inBone, f.len) - 0.04 * Math.abs(f.ang) };
+  }
+  // Automatic guide screws: two on a segment of STUMP_MIN mm or more, one on a shorter one, at least three on the guide
+  // (extra ones on the longest segments); each placed on the best site that keeps the rules above, searched along the
+  // segment and around the fibula axis. A segment with no such site keeps a screw at its middle, which the checks report.
+  let autoKey = '', autoVal = null;
+  function autoScrews(c) {
+    const body = guideBody(c), pls = slotPlanes(c);
+    const key = JSON.stringify([F.c.i, body.W, body.wrap, body.wall, body.clear, pls.map(p => [p.pSlot.toArray(), p.N.toArray(), p.w].flat().map(x => Math.round(x * 100)))]);
+    if (key === autoKey && autoVal) return autoVal.map(f => Object.assign({}, f));
+    const lower = c.segs, want = lower.map(g => (g.L >= STUMP_MIN ? 2 : 1));
+    for (let tot = want.reduce((a, b) => a + b, 0); tot < 3; tot++) { const i = lower.map((g, k) => [g.L / (want[k] + 1), k]).sort((a, b) => b[0] - a[0])[0][1]; want[i]++; }
+    const out = [], segSites = [], picks = [];
+    // the next screw on segment i: best score, kept sep mm from the ones already there, a little bonus for spreading out
+    const next = (i, sep) => {
+      const sg = lower[i], pick = picks[i]; let best = null, bs = -Infinity;
+      for (const st of segSites[i]) {
+        if (pick.some(p => Math.abs(p.s - st.s) < sep)) continue;
+        const spread = pick.length ? Math.min(...pick.map(p => Math.abs(p.s - st.s))) : 0, sc = st.score + 0.08 * Math.min(spread, sg.L / 2);
+        if (sc > bs) { bs = sc; best = st; }
+      }
+      if (best) pick.push(best);
+      return !!best;
+    };
+    lower.forEach((sg, i) => {
+      const base = screwDefault(i), half = Math.max(0, sg.L / 2 - 3), sites = [];
+      for (let off = -half; off <= half + 1e-9; off += 1) for (const ang of [0, -10, 10, -20, 20, -30, 30]) {
+        const f = Object.assign({}, base, { off: +off.toFixed(1), ang }), r = screwSite(c, f, pls, body);
+        if (r) sites.push(Object.assign(r, { f }));
+      }
+      sites.sort((a, b) => b.score - a.score);
+      segSites.push(sites); picks.push([]);
+      for (let k = 0; k < want[i]; k++) if (!next(i, base.D + 3)) break;
     });
-    return { g, P: Pg, u: u.clone(), v, n, pls, scs, bone: fibBone, field: q => St.fieldAt(F.red, F.c.Fm, [q.x, q.y, q.z]) };
+    // fewer than three on the guide: add where a site is still free, first at the usual spacing, then sleeves 1 mm apart
+    for (const sep of [screwDefault(0).D + 3, screwDefault(0).D + 1]) {
+      let tot = picks.reduce((a, p) => a + p.length, 0);
+      for (const i of lower.map((g, k) => k).sort((a, b) => lower[b].L / (picks[b].length + 1) - lower[a].L / (picks[a].length + 1))) {
+        while (tot < 3 && next(i, sep)) tot++;
+      }
+    }
+    // a segment with no site gets no screw (a drill path through a slot would be worse than none); the checks name it.
+    // Only when no segment has a site at all, each segment keeps its best site that is at least on bone and clear of the
+    // slots by SCREW_TIGHT_GAP (closer than the rule, flagged for the surgeon to check or move by hand); none if not even that.
+    const anyPick = picks.some(p => p.length);
+    lower.forEach((sg, i) => {
+      if (!picks[i].length && !anyPick) {
+        const base = screwDefault(i), half = Math.max(0, sg.L / 2 - 3); let best = null;
+        for (let off = -half; off <= half + 1e-9; off += 1) for (const ang of [0, -10, 10, -20, 20, -30, 30]) {
+          const f = Object.assign({}, base, { off: +off.toFixed(1), ang }), r = screwSite(c, f, pls, body, SCREW_TIGHT_GAP);
+          if (r && (!best || r.slotGap > best.slotGap + 1e-9)) best = Object.assign(r, { f });
+        }
+        if (best) out.push(Object.assign({}, best.f, { auto: 1, none: 1 }));
+      }
+      picks[i].sort((a, b) => a.s - b.s).forEach(p => out.push(Object.assign({}, p.f, { auto: 1 })));
+    });
+    autoKey = key; autoVal = out;
+    return out.map(f => Object.assign({}, f));
   }
   // fibula guide body: automatic values unless the plan overrides them (fg); the material profile's fit and the
   // periosteum allowance follow the mandible guide
@@ -485,13 +594,36 @@ window.Fibula = (function () {
     const FR = F.c.FR, sA = c.segs[0].s0, sB = c.segs[c.segs.length - 1].s1, sec = localSection(sA, sB), Rl = sec ? Math.min(FR, sec.half) : FR, dp = sec ? Math.min(FR, sec.depth) : FR;
     return { span: sB - sA, Lm: 8, W: Math.round(2 * (Rl + 2.8) + 2), wrap: Math.max(2, Math.round(dp * 0.8 * 2) / 2), wall: 2.5, clear: S.g.clear };
   }
+  // The body runs Lm past the outer cuts, and further where a slot is oblique: a slot tilted across the guide runs
+  // diagonally over the body, (W/2 |N·v| + depth |N·n|) / |N·u| mm along it on each side of its centre. A body that
+  // ends before the slot leaves the corner past it held by nothing (the rib runs along one edge only): a loose piece
+  // and a slot open on one side. Each end is taken past the farthest point of every slot by SLOT_END mm; the body
+  // centre moves with it (uc, relative to the middle of the segments).
+  const SLOT_END = 3, SLOT_END_MAX = 30;
   function guideBody(c) {
     const a = guideAuto(c), e = Object.assign({}, a, plan().fg || {});
-    return { rot: 0, L: Math.round(a.span + 2 * e.Lm), W: e.W, wrap: e.wrap, wall: e.wall, clear: e.clear, bridge: 4, side: 1, peri: S.g.peri || 0, fit: S.g.fit || 0 };
+    const sA = c.segs[0].s0, sB = c.segs[c.segs.length - 1].s1, sm = (sA + sB) / 2, FR = F.c.FR, [ax, n] = F.c.FA, v = V().crossVectors(n, ax).normalize();
+    const cw = e.clear + (S.g.peri || 0) + e.wall, dn = [FR - e.wrap - 1, FR + cw + 0.5], dv = e.W / 2 + 0.5;
+    let lo = sA - e.Lm, hi = sB + e.Lm;
+    slotPlanes(c).forEach(pw => {
+      const nu = pw.N.dot(ax), nv = pw.N.dot(v), nn = pw.N.dot(n); if (Math.abs(nu) < 0.1) return;
+      // the slot centre lies on the bone axis; the body's cross-section corners around it (across: +-W/2, along n: from
+      // the wrap line to the top of the shell)
+      const sc = pw.pSlot.clone().sub(F.c.FC).dot(ax), half = pw.w / 2 / Math.abs(nu);
+      for (const dV of [-dv, dv]) for (const dN of dn) {
+        const s = sc - (nv * dV + nn * dN) / nu;
+        lo = Math.min(lo, s - half - SLOT_END); hi = Math.max(hi, s + half + SLOT_END);
+      }
+    });
+    // at most SLOT_END_MAX past the outer cut (a nearly lengthwise slot would need the whole leg; buildFibGuide then puts
+    // the rib on the edge the slot cuts off) and never past the ends of the bone
+    lo = Math.max(lo, sA - Math.max(e.Lm, SLOT_END_MAX), F.c.smin - 4); hi = Math.min(hi, sB + Math.max(e.Lm, SLOT_END_MAX), F.c.smax + 4);
+    const L = Math.round(hi - lo), uc = +((lo + hi) / 2 - sm).toFixed(2);
+    return { rot: 0, L, uc, W: e.W, wrap: e.wrap, wall: e.wall, clear: e.clear, bridge: 4, side: 1, peri: S.g.peri || 0, fit: S.g.fit || 0 };
   }
   const screwDefault = (seg) => ({ seg, off: 0, ang: 0, d: 2.0, D: 5, sleeveH: 5, len: Math.round(2 * F.c.FR) });
   function guideScrews(c) {
-    const list = plan().fsc || c.segs.map((_, i) => screwDefault(i));
+    const list = plan().fsc || autoScrews(c);
     return list.map(f => Object.assign(screwDefault(0), f, { seg: Math.min(c.segs.length - 1, Math.max(0, f.seg | 0)) }));
   }
   function scheduleGuide() {
@@ -506,17 +638,21 @@ window.Fibula = (function () {
     building = true;
     St.busy(true, 'Fibula guide\'ı üretiliyor…'); await St.sleep();
     try {
-      let out = await St.buildGuide(ctx), adapt = null;
-      // automatic wrap that still cannot be put on (the section is not round, the bone bends under the guide) or splits the
-      // guide: try shallower wraps, half a mm at a time; a wrap set by hand (fg.wrap) is left alone
+      let out = await St.buildGuide(ctx), adapt = null, flip = false;
+      // a guide that splits or cannot be put on: the rib (bridge) on the other edge first (a corner cut off by an oblique
+      // slot on one edge is held by a rib on that edge), then shallower wraps half a mm at a time (the section is not
+      // round, the bone bends under the guide); a wrap set by hand (fg.wrap) is left alone. The best build is kept:
+      // fewest pieces, then one that can be put on.
       const bad = R => R.pieces > 1 || (R.seat && R.seat.ok && !R.seat.free), w0 = ctx.g.wrap;
+      const rank = R => R.pieces * 2 + (R.seat && R.seat.ok && !R.seat.free ? 1 : 0);
+      const tryG = async g => { const o2 = await St.buildGuide(Object.assign({}, ctx, { g })); if (rank(o2.result) < rank(out.result)) { out.mesh.geometry.dispose(); out = o2; ctx.g = g; return true; } o2.mesh.geometry.dispose(); return false; };
+      if (bad(out.result)) flip = await tryG(Object.assign({}, ctx.g, { side: -ctx.g.side }));
       if (bad(out.result) && !(plan().fg && plan().fg.wrap != null)) {
-        for (let w = w0 - 0.5; w >= 2 && bad(out.result); w -= 0.5) {
-          const o2 = await St.buildGuide(Object.assign({}, ctx, { g: Object.assign({}, ctx.g, { wrap: w }) }));
-          out.mesh.geometry.dispose(); out = o2; adapt = w;
-        }
-        if (adapt !== null) { ctx.g = Object.assign({}, ctx.g, { wrap: adapt }); out.result.adapt = { from: w0, to: adapt, ok: !bad(out.result) }; }
+        const g0 = ctx.g; let lowest = null;
+        for (let w = w0 - 0.5; w >= 2 && bad(out.result); w -= 0.5) { lowest = w; if (await tryG(Object.assign({}, g0, { wrap: w }))) adapt = w; }
+        if (lowest !== null) out.result.adapt = { from: w0, to: adapt == null ? lowest : adapt, ok: !bad(out.result) };
       }
+      if (flip) out.result.sideFlip = true;
       leg.children.filter(o => o.userData.guide).forEach(o => { leg.remove(o); St.mat && o.material.dispose(); o.geometry.dispose(); });
       out.mesh.material = mat(FGUIDE); out.mesh.userData.guide = true; onLeg(out.mesh); St.simplifyMesh(out.mesh);
       S.fib.guide = { mesh: out.mesh, result: out.result, ctx, key, grid: out.grid }; guideKey = key;
@@ -539,13 +675,21 @@ window.Fibula = (function () {
     // a defect shorter than one segment: one segment, reported once as a warning (no count can make it longer)
     const shortDefect = c.D.L < MIN_LEN && c.segs.filter(g => !g.barrel).length === 1;
     if (shortDefect) out.push(['warn', 'Uyarı', `Defekt ${fmt(c.D.L)} mm, tek segment ${MIN_LEN} mm'nin altında kalıyor (kısa rezeksiyon); segment bölünmedi. Kanlanma için greft boyunu cerrahla değerlendirin.`]);
-    else c.segs.forEach(g => { if (g.L < MIN_LEN) out.push(['crit', 'Kritik', `Fibula segmenti ${g.i + 1} ${fmt(g.L)} mm; en az ${MIN_LEN} mm olmalı (kanlanma riski).`]); });
+    else {
+      // length bands: < SEG_ERR critical, SEG_ERR..MIN_LEN a warning; with two or more segments the ones at the stumps >= STUMP_MIN
+      const lower = c.segs.filter(g => !g.barrel), ends = lower.length > 1 ? [lower[0], lower[lower.length - 1]] : [];
+      c.segs.forEach(g => {
+        if (g.L < SEG_ERR) out.push(['crit', 'Kritik', `Fibula segmenti ${g.i + 1} ${fmt(g.L)} mm; ${SEG_ERR} mm altı segment kanlanmasını ve tespitini kaybeder. Segment sayısını azaltın ya da kesileri kaydırın.`]);
+        else if (g.L < MIN_LEN) out.push(['warn', 'Uyarı', `Fibula segmenti ${g.i + 1} ${fmt(g.L)} mm; ${MIN_LEN} mm altı (${SEG_ERR}–${MIN_LEN} mm) kanlanma açısından sınırda.`]);
+        else if (ends.includes(g) && g.L < STUMP_MIN) out.push(['warn', 'Uyarı', `Fibula segmenti ${g.i + 1} güdüğe komşu ve ${fmt(g.L)} mm; güdük segmentlerinde en az ${STUMP_MIN} mm önerilir (tespit ve kaynama).`]);
+      });
+    }
     const ch = S.fib.choice;
     if (ch && ch.table && ch.table.length && P0.nAuto && Math.abs(ch.L - c.D.L) < 0.5) {
       const tbl = ch.table.map(r => `${r.n}: ${fmt(r.min)}/${fmt(r.dev)}`).join('; ');
       out.push(['info', 'Bilgi', ch.reason === 'short' ? `Segment sayısı otomatik seçildi: ${ch.n} (defekt bir segmentten kısa). Denenen sayılar (en kısa segment mm / sapma mm): ${tbl}.`
         : ch.reason === 'dev' ? `Segment sayısı otomatik seçildi: ${ch.n} (en az segmentle sapma ≤ ${DEV_WARN} mm). Denenen sayılar (en kısa segment mm / sapma mm): ${tbl}.`
-          : `Segment sayısı otomatik seçildi: ${ch.n} (sapma hedefi tutmuyor; ${MIN_LEN} mm altı segment vermeyen sayılar içinde en küçük sapma). Denenen sayılar (en kısa segment mm / sapma mm): ${tbl}.`]);
+          : `Segment sayısı otomatik seçildi: ${ch.n} (sapma hedefi tutmuyor; ${MIN_LEN} mm altı segment vermeyen sayılar içinde en küçük sapma, ${fmt(DEV_TIE)} mm içindeki sapmalarda az segment ve güdük segmentleri ${STUMP_MIN} mm üstü olan sayı). Denenen sayılar (en kısa segment mm / sapma mm): ${tbl}.`]);
     }
     c.segs.forEach(g => [['başlangıç', g.a0], ['bitiş', g.a1]].forEach(([w, a]) => { if (a > ANGLE_WARN) out.push(['warn', 'Uyarı', `Fibula segmenti ${g.i + 1} ${w} kesisi ${fmt(a)}°; ${ANGLE_WARN}° üstü temas yüzeyini azaltır.`]); }));
     if (c.dev > DEV_WARN) out.push(['warn', 'Uyarı', `Greftler defekt hattından ${fmt(c.dev)} mm sapıyor (eşik ${DEV_WARN} mm). Segment ekleyin ya da "Kesileri öner"i kullanın.`]);
@@ -563,8 +707,23 @@ window.Fibula = (function () {
         if (!si.ok) out.push(['crit', 'Kritik', si.noBody ? `Fibula vidası ${i + 1} altında guide gövdesi yok; kovan boşlukta kalırdı.` : `Fibula vidası ${i + 1} kemiğe ulaşmıyor.`]);
         else if (si.crossesPlane) out.push(['crit', 'Kritik', `Fibula vidası ${i + 1} matkap yolu kesi yuvasıyla kesişiyor.`]);
         else if (si.slotGap < 0.5) out.push(['warn', 'Uyarı', `Fibula vidası ${i + 1} kovanı kesi yuvasına ${fmt(Math.max(0, si.slotGap))} mm yaklaşıyor (en az 0,5 mm); testere yoluna değebilir.`]);
+        // hole checks: bone along the hole, bone bridge to the cut (>= SCREW_CUT_GAP mm, our own inference)
+        if (si.ok && si.inBone < SCREW_MIN_DEPTH) out.push(['warn', 'Uyarı', `Fibula vidası ${i + 1} deliği boyunca yalnız ${fmt(si.inBone)} mm kemik var (en az ${SCREW_MIN_DEPTH} mm); vida tutmayabilir.`]);
+        if (si.ok && !si.crossesPlane && Number.isFinite(si.cutGap) && si.cutGap < SCREW_CUT_GAP) out.push(['warn', 'Uyarı', `Fibula vidası ${i + 1} deliği kesiye ${fmt(Math.max(0, si.cutGap))} mm (en az ${SCREW_CUT_GAP} mm önerilir); delik ile kesi arasındaki kemik köprüsü kırılabilir.`]);
       });
+      // fixation: two screws on a segment of STUMP_MIN mm or more, at least three on the guide (screws that hold: on bone, clear of the slots)
+      const fsc = S.fib.guide.ctx.fsc || [], held = R.screwInfo.map(si => si.ok && !si.crossesPlane);
+      const nHeld = held.filter(Boolean).length;
+      if (!nHeld) out.push(['crit', 'Kritik', 'Fibula guide\'ını kemiğe tutturan vida yok; vida kurallarına uyan yer bulunamadı. Kesileri fibulaya daha dik planlayın ya da vidaları elle yerleştirin.']);
+      else if (nHeld < 3) out.push(['warn', 'Uyarı', `Fibula guide'ı ${nHeld} vidayla sabitleniyor; en az 3 vida önerilir (guide eğilip dönmesin).`]);
+      c.segs.forEach((g, k) => { const m = fsc.filter((f, i) => f.seg === k && held[i]).length; if (g.L >= STUMP_MIN && m < 2) out.push(['warn', 'Uyarı', `Fibula segmenti ${g.i + 1} ${fmt(g.L)} mm ve üzerinde ${m} vida var; ${STUMP_MIN} mm ve üstü segmentte 2 vida önerilir.`]); });
+      if (!P0.fsc) c.segs.map((g, k) => k).filter(k => !fsc.some(f => f.seg === k)).forEach(k => out.push(['warn', 'Uyarı', `Fibula segmenti ${k + 1} üzerinde vida kurallarına (kemikte en az ${SCREW_MIN_DEPTH} mm, yuvadan en az ${SCREW_SLOT_GAP} mm, kovan gövdede) uyan yer yok; bu segmente vida konmadı. Kesileri dikleştirin ya da vidayı elle yerleştirin.`]));
+      if (fsc.some(f => f.none)) out.push(['warn', 'Uyarı', `Fibula guide'ında bazı segmentlerde vida kurallarına (kemikte en az ${SCREW_MIN_DEPTH} mm, yuvadan en az ${SCREW_SLOT_GAP} mm, kovan gövdede) uyan yer bulunamadı; vidalar yuvaya ${fmt(SCREW_TIGHT_GAP)}–${SCREW_SLOT_GAP} mm yakın en iyi yere kondu. Vidaları kontrol edin ya da elle yerleştirin.`]);
+      if (R.sideFlip) out.push(['info', 'Bilgi', 'Fibula guide\'ının köprüsü diğer kenara alındı; eğik bir yuva guide\'ın bir köşesini ayırıyordu.']);
     }
+    // saw slot against the blade: slot = blade + 0.1-0.3 mm (a wider slot lets the blade tilt and angle errors add up)
+    const sw = slotOf(P0);
+    if (sw - P0.kerf > 0.3 + 1e-9) out.push(['warn', 'Uyarı', `Fibula guide yuvası (${fmt(sw, 2)} mm) testere payından (${fmt(P0.kerf, 2)} mm) ${fmt(sw - P0.kerf, 2)} mm geniş; bıçaktan en çok 0,3 mm geniş yuva önerilir, daha genişi açı hatası biriktirir.`]);
     return out;
   }
   const active = () => !!(F && F.c && S.fib && S.fib.plan);
@@ -581,6 +740,7 @@ window.Fibula = (function () {
     $('fibYaw').value = P0.yaw[jv] || 0; $('fibPitch').value = P0.pitch[jv] || 0;
     $('fibYawO').textContent = fmt(P0.yaw[jv] || 0, 0) + '°'; $('fibPitchO').textContent = fmt(P0.pitch[jv] || 0, 0) + '°';
     $('fibKerf').value = P0.kerf; $('fibKerfO').textContent = fmt(P0.kerf) + ' mm';
+    $('fibSlot').value = slotOf(P0); $('fibSlotO').textContent = fmt(slotOf(P0), 2) + ' mm';
     $('fibDistal').value = P0.distal; $('fibDistalO').textContent = fmt(P0.distal, 0) + ' mm';
     $('fibVOff').value = P0.vOff || 0; $('fibVOffO').textContent = fmt(P0.vOff || 0) + ' mm';
     $('fibMirror').checked = !!P0.mirror;
@@ -631,7 +791,8 @@ window.Fibula = (function () {
   }
   function optimizeKnots() {
     const P0 = plan(); if (P0.n < 2 || !last) return;
-    const D = last.D, cost = k => { const full = [0, ...k.map(f => f * D.L), D.L]; let pen = 0; for (let i = 0; i < full.length - 1; i++) pen += Math.max(0, MIN_LEN + 1 - (full[i + 1] - full[i])) * 2; return deviation(D, full) + pen; };
+    // short segments are penalised: every segment under MIN_LEN + 1, the two at the stumps under STUMP_MIN + 1
+    const D = last.D, ns = P0.n, cost = k => { const full = [0, ...k.map(f => f * D.L), D.L]; let pen = 0; for (let i = 0; i < full.length - 1; i++) pen += Math.max(0, (i === 0 || i === ns - 1 ? STUMP_MIN : MIN_LEN) + 1 - (full[i + 1] - full[i])) * 2; return deviation(D, full) + pen; };
     let k = P0.knots.slice(), best = cost(k);
     for (let step = 0.08; step >= 0.004; step /= 2) for (let pass = 0; pass < 12; pass++) {
       let moved = false;
@@ -661,6 +822,8 @@ window.Fibula = (function () {
     const D0 = defaultPlan();
     if (!(num(q.kerf, 0) > 0)) warn.push('Testere payı (kerf) sıfır ya da geçersiz; ' + D0.kerf + ' mm kullanıldı. Testere yuvaları için değeri kontrol edin.');
     q.kerf = num(q.kerf, 0) > 0 ? cl(q.kerf, 0.5, 2, D0.kerf) : D0.kerf;
+    // slot width: null (plans saved before it existed) = the kerf; never narrower than the blade
+    q.slotW = q.slotW == null || !Number.isFinite(Number(q.slotW)) ? null : Math.max(q.kerf, cl(q.slotW, 0.5, 2.5, q.kerf));
     q.distal = cl(q.distal, 40, 140, D0.distal); q.vOff = cl(q.vOff, -12, 12, 0);
     q.dblH = q.dblH == null ? null : cl(q.dblH, 8, 30, 8); q.dbl = q.dbl ? 1 : 0;
     q.n = Math.round(cl(q.n, 1, MAX_N, 2)); q.nAuto = q.nAuto ? 1 : 0;      // a stored count is a decision unless it says it was automatic
@@ -706,7 +869,7 @@ window.Fibula = (function () {
   }
   function summary() {
     const P0 = plan(), c = last;
-    return { fibula_serisi: F.label, segment_sayisi: P0.n, testere_payi_mm: P0.kerf, distal_korunan_mm: P0.distal,
+    return { fibula_serisi: F.label, segment_sayisi: P0.n, testere_payi_mm: P0.kerf, yuva_genisligi_mm: slotOf(P0), distal_korunan_mm: P0.distal,
       segmentler: c ? c.segs.map(g => ({ no: g.i + 1, kat: g.barrel ? 'üst' : 'alt', boy_mm: +g.L.toFixed(1), distal_uctan_mm: +(g.s0 - F.c.smin).toFixed(1), kesi_acilari_deg: [+g.a0.toFixed(1), +g.a1.toFixed(1)], rotasyon_deg: P0.roll[g.i] || 0, kret_farki_mm: +g.crest.toFixed(1) })) : [],
       dikey_kayma_mm: P0.vOff || 0, cift_namlu: P0.dbl ? { namlu_arasi_mm: dblH() } : null,
       sapma_mm: c ? +c.dev.toFixed(2) : null, proksimalde_kalan_mm: c ? +c.proxLeft.toFixed(0) : null, onay: approved() ? { cerrah: P0.by, zaman: P0.at } : null };
@@ -882,9 +1045,12 @@ window.Fibula = (function () {
   });
   $('fibDbl').addEventListener('change', e => { if (!active()) return; plan().dbl = e.target.checked ? 1 : 0; edited(false, true); });
   [['fibKerf', 'kerf', v => fmt(v) + ' mm'], ['fibDistal', 'distal', v => fmt(v, 0) + ' mm'], ['fibVOff', 'vOff', v => fmt(v) + ' mm'], ['fibDblH', 'dblH', v => fmt(v) + ' mm']].forEach(([id, key, f]) => {
-    $(id).addEventListener('input', e => { plan()[key] = +e.target.value; $(id + 'O').textContent = f(+e.target.value); edited(true); });
+    $(id).addEventListener('input', e => { plan()[key] = +e.target.value; $(id + 'O').textContent = f(+e.target.value); if (key === 'kerf') { $('fibSlot').value = slotOf(plan()); $('fibSlotO').textContent = fmt(slotOf(plan()), 2) + ' mm'; } edited(true); });
     $(id).addEventListener('change', () => edited(false, true));
   });
+  // slot width: set on its own, never below the blade (the kerf)
+  $('fibSlot').addEventListener('input', e => { if (!active()) return; const P0 = plan(); P0.slotW = Math.max(P0.kerf, +e.target.value); $('fibSlotO').textContent = fmt(slotOf(P0), 2) + ' mm'; edited(true); });
+  $('fibSlot').addEventListener('change', () => { if (active()) { syncUI(); edited(false, true); } });
   $('fibApprove').addEventListener('click', () => {
     const P0 = plan();
     if (approved()) { St.unapprove(P0); delete P0.sig; } else { St.stamp(P0); P0.sig = sig(); }
@@ -903,5 +1069,5 @@ window.Fibula = (function () {
   function guideEdited() { guideKey = ''; scheduleGuide(); renderStep(); St.emit('changed'); }
   const guideInfo = () => (active() && last ? { auto: guideAuto(last), body: guideBody(last), screws: guideScrews(last), segs: last.segs, FR: F.c.FR } : null);
   return { setActive, activePane: () => activePane, summary: () => (active() ? summary() : null), view: () => view, active, approved, checks, apply, exportFiles, reportHTML, production, setView, state: () => ({ F, last, view }),
-    graftBone, fibBone: q => (F && F.c ? fibBone(q) : false), guideInfo, guideEdited, plan: () => (active() ? plan() : null), building: () => building, segmentChoice, choice: () => (S.fib && S.fib.choice) || null, defect, MIN_LEN, MAX_N, DEV_WARN };
+    graftBone, fibBone: q => (F && F.c ? fibBone(q) : false), guideInfo, guideEdited, plan: () => (active() ? plan() : null), building: () => building, segmentChoice, lensOk, choice: () => (S.fib && S.fib.choice) || null, defect, MIN_LEN, MAX_N, DEV_WARN, SEG_ERR, STUMP_MIN, DEV_TIE, slotOf: () => (active() ? slotOf(plan()) : null) };
 })();

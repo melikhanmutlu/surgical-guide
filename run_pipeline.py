@@ -68,7 +68,9 @@ def main():
     ap.add_argument("--resect-to", type=float, default=40.0)
     ap.add_argument("--segments", type=int, default=None, help="number of fibula segments (default: auto)")
     ap.add_argument("--side", choices=["right", "left"], default="right", help="donor leg")
-    ap.add_argument("--kerf", type=float, default=1.0, help="saw blade thickness + tolerance, mm")
+    ap.add_argument("--kerf", type=float, default=1.0, help="saw blade thickness (bone one cut takes), mm")
+    ap.add_argument("--slot-width", type=float, default=None,
+                    help="guide saw slot width, mm (default: the kerf, as before; never narrower than the blade; blade + 0.1-0.3 mm is advised)")
     ap.add_argument("--kerf-side", choices=["resected", "centre"], default="resected",
                     help="mandible saw slot relative to the planned cut plane: 'resected' = the slot lies on the resected side and the graft meets "
                          "the stump flush (gap 0, default, the browser's default too); 'centre' = centred on the plane, kerf/2 lost from each stump")
@@ -95,12 +97,12 @@ def main():
     log("planning")
     arch = planning.Arch(vm, mm)
     fib = planning.Fibula(vf, fm, side=a.side)
-    p = planning.make_plan(arch, fib, a.resect_from, a.resect_to, n_segments=a.segments, kerf=a.kerf, kerf_side=a.kerf_side)
+    p = planning.make_plan(arch, fib, a.resect_from, a.resect_to, n_segments=a.segments, kerf=a.kerf, kerf_side=a.kerf_side, slot_w=a.slot_width)
     summary = planning.plan_summary(p, fib)
     print(json.dumps(summary, indent=2))
     for w in p.get("warnings", []):
         warn("plan: " + w)
-    log(f"graft-to-stump gap: {p['stump_gap_mm'][0]:.2f} mm at each end (kerf {p['kerf']:.2f} mm on the {p['kerf_side']} side of the cut plane)")
+    log(f"graft-to-stump gap: {p['stump_gap_mm'][0]:.2f} mm at each end (slot {p['slot_w']:.2f} mm, blade {p['kerf']:.2f} mm, on the {p['kerf_side']} side of the cut plane)")
     if p.get("segment_decision"):
         d = p["segment_decision"]
         why = {"short": "defect shorter than one segment", "dev": "fewest segments within the deviation tolerance",
@@ -120,6 +122,8 @@ def main():
             st = r["seat"]
             log(f"{r['name']}: seat check {st['free_directions']}/{st['directions']} directions free, best tilt {st['best_tilt_deg']:.0f} deg, "
                 f"{st['blocked_mm2_along_normal']:.0f} mm2 of bone over the guide along the buccal normal")
+        if r.get("slot_note"):
+            warn(r["slot_note"])
         if r.get("note"):
             log(r["note"])
         if r.get("warning"):

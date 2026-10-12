@@ -136,7 +136,27 @@ test('osteo: straight bar -> graft axis within 5° of the stump axis, contact �
 test('fibula guide: built on the fibula, slots of kerf width, one piece', async () => {
   await until(() => S.fib.guide && S.fib.guide.result, 60000);
   const R = S.fib.guide.result; assert.equal(R.pieces, 1);
+  // no slot width set: the slot is the blade, as before the two were separate
+  assert.equal(W.Fibula.plan().slotW, null); near(W.Fibula.slotOf(), W.Fibula.plan().kerf, 1e-12);
   S.fib.guide.ctx.pls.forEach(p => near(p.w, W.Fibula.plan().kerf, 1e-12));
+  // automatic screws keep every rule: on bone, clear of the slots (no drill path through a slot)
+  assert.ok(R.screwInfo.length >= 1);
+  R.screwInfo.forEach((si, i) => { assert.ok(si.ok, 'screw ' + i + ' on bone'); assert.ok(!si.crossesPlane, 'screw ' + i + ' clear of the slots'); });
+});
+test('fibula: slot width separate from the blade; slots open at slotW outside each face, segments spaced by slot + 1 mm', async () => {
+  const keep = St.clone(W.Fibula.plan()), p = St.clone(keep);
+  p.kerf = 0.6; p.slotW = 0.8; await W.Fibula.apply(p);
+  await until(() => S.fib.guide && S.fib.guide.ctx && Math.abs(S.fib.guide.ctx.pls[0].w - 0.8) < 1e-9, 60000);
+  near(W.Fibula.slotOf(), 0.8, 1e-12);
+  S.fib.guide.ctx.pls.forEach(q => { near(q.w, 0.8, 1e-12); near(q.pSlot.distanceTo(q.p), 0.4, 1e-9, 'slot centre w/2 outside the face'); });
+  const st = W.Fibula.state(); st.last.segs.forEach((g, i, a) => { if (i) assert.ok(g.s0 >= a[i - 1].s1 + 0.8 + 1 - 1e-6, 'segments spaced by slot + 1 mm'); });
+  assert.ok(!W.Fibula.checks().some(c => /yuvası .* geniş/.test(c[2])), 'slot 0.2 mm over the blade: no warning');
+  p.slotW = 1.2; await W.Fibula.apply(p); await sleep(30);
+  assert.ok(W.Fibula.checks().some(c => c[0] === 'warn' && /yuvası .* geniş/.test(c[2])), 'slot 0.6 mm over the blade is warned');
+  p.slotW = 0.3; await W.Fibula.apply(p); near(W.Fibula.plan().slotW, 0.6, 1e-9, 'never narrower than the blade');
+  p.slotW = 9; await W.Fibula.apply(p); near(W.Fibula.plan().slotW, 2.5, 1e-9, 'clamped to the slider range');
+  await W.Fibula.apply(keep);
+  await until(() => S.fib.guide && S.fib.guide.result && Math.abs(S.fib.guide.ctx.pls[0].w - keep.kerf) < 1e-9, 60000);
 });
 test('fguide: editing the body wall writes plan.fg, unapproves the fibula plan and rebuilds', async () => {
   const p = W.Fibula.plan(); p.ok = true; p.by = 'x';

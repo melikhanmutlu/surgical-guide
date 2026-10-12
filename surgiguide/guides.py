@@ -58,21 +58,72 @@ def fibula_guide(vol, mask, fib, plan, h=0.3, clearance=0.3, wall=2.5, rail=3.0,
     shell = span & (dout > clearance) & (dout <= clearance + wall) & (r2 >= -0.5)
     top = span & (dout > clearance + wall - 0.5) & (dout <= clearance + wall + rail) & (np.abs(r3) <= 3) & (r2 > 0)
     guide = shell | top
-    k = plan["kerf"]
-    planes = []
+    k = plan.get("slot_w", plan["kerf"])                                  # slot width (the blade when not set apart)
+    sw = _slot_width(k, h)
+    planes, faces = [], []
     for g in segs:
         for sp, n, sign in ((g["fib_start"], g["n_start_fib"], -1), (g["fib_end"], g["n_end_fib"], +1)):
             n = n / np.linalg.norm(n) * np.sign(n[0])
             p = np.array([sp, 0, 0]) + sign * (k / 2) * n                  # kerf falls outside the graft
             d = sign * ((L - [sp, 0, 0]) @ n)                              # distance from the graft face, > 0 outside the graft
-            slot = (d >= 0) & (d <= _slot_width(k, h)) & (dout <= clearance + wall + 0.05)
+            slot = (d >= 0) & (d <= sw) & (dout <= clearance + wall + 0.05)
             guide &= ~slot
-            planes.append((p, n))
-        mid = (g["fib_start"] + g["fib_end"]) / 2
-        d = np.array([0, np.cos(np.radians(45)), np.sin(np.radians(45))])
-        guide &= ~_hole(L, np.array([mid, 0, 0]), d, screw_d / 2)
+            planes.append((p, n)); faces.append((np.array([sp, 0, 0]), n, sign))
+    # screw holes (web/fibula.js autoScrews): two on a segment of STUMP_MIN mm or more, one on a shorter one, at least
+    # three in all; each hole (45 deg about the axis) is kept SCREW_SLOT_GAP mm clear of every slot over the bone,
+    # moved towards the segment middle when it is not, and dropped (reported) when no position is clear
+    holes, dropped = fibula_screw_sites(segs, faces, sw, screw_d, fib.radius)
+    d45 = np.array([0, np.cos(np.radians(45)), np.sin(np.radians(45))])
+    for s in holes:
+        guide &= ~_hole(L, np.array([s, 0, 0]), d45, screw_d / 2)
     guide, rep = _largest("fibula_guide", guide, h)
+    rep["slot_mm"] = round(sw, 2); rep["screws"] = len(holes)
+    if sw - plan["kerf"] > 0.3 + 1e-9:
+        rep["slot_note"] = f"fibula_guide: the slot is {sw:.2f} mm on the {h} mm grid, {sw - plan['kerf']:.2f} mm wider than the {plan['kerf']:.2f} mm blade (at most 0.3 mm advised)"
+    if dropped:
+        rep["warning"] = (rep.get("warning", "") + (" " if rep.get("warning") else "")
+                          + f"fibula_guide: no screw position clear of the slots on segment(s) {', '.join(str(i + 1) for i in dropped)}; place those screws by hand")
     return grid.mesh(guide), planes, rep
+
+
+SCREW_SLOT_GAP = 2.0           # mm between a screw hole and a saw slot (web/app.js, web/fibula.js)
+STUMP_MIN = 25.0               # mm: a segment this long gets two screws (surgiguide.plan.STUMP_MIN)
+
+
+def fibula_screw_sites(segs, faces, slot_w, screw_d, radius):
+    """Positions along the fibula axis of the guide screw holes: per segment 2 (length >= STUMP_MIN) or 1, at least 3
+    in all (extra ones on the longest segments). A hole along the 45 deg direction through the axis point s is clear
+    when, over the bone (|t| <= radius), it keeps slot/2 + screw_d/2 + SCREW_SLOT_GAP from every slot plane (centred
+    slot_w/2 outside its graft face). Returns (positions, indices of segments with a screw that found no clear spot)."""
+    want = [2 if g["length_mm"] >= STUMP_MIN else 1 for g in segs]
+    while sum(want) < 3 and segs:
+        i = max(range(len(segs)), key=lambda k: segs[k]["length_mm"] / (want[k] + 1))
+        want[i] += 1
+    d45 = np.array([0, np.cos(np.radians(45)), np.sin(np.radians(45))])
+    ts = np.linspace(-radius, radius, 25)
+
+    def clear(s):
+        pts = np.array([s, 0, 0]) + ts[:, None] * d45
+        for p0, n, sign in faces:
+            c = p0 + sign * (slot_w / 2) * n
+            if np.min(np.abs((pts - c) @ n)) < slot_w / 2 + screw_d / 2 + SCREW_SLOT_GAP:
+                return False
+        return True
+
+    out, dropped = [], []
+    for i, g in enumerate(segs):
+        a, b = g["fib_start"], g["fib_end"]
+        mid, L = (a + b) / 2, b - a
+        goals = [mid] if want[i] == 1 else [a + L * (j + 0.5) / want[i] for j in range(want[i])]
+        for s0 in goals:
+            # nearest clear position to the goal, searched outwards in 0.5 mm steps inside the segment
+            cand = sorted(np.arange(a + 2, b - 2 + 1e-9, 0.5), key=lambda s: abs(s - s0))
+            got = next((s for s in cand if clear(s) and all(abs(s - q) >= screw_d + 4 for q in out)), None)
+            if got is None:
+                dropped.append(i)
+            else:
+                out.append(float(got))
+    return out, sorted(set(dropped))
 
 
 def mandible_guide(vol, mask, arch, plan, which, h=0.3, clearance=0.3, wall=2.5,
@@ -97,7 +148,8 @@ def mandible_guide(vol, mask, arch, plan, which, h=0.3, clearance=0.3, wall=2.5,
     outer = np.flip(np.cumsum(np.flip(bone, axis=1), axis=1), axis=1) > 0
     over = np.zeros_like(bone); over[:, :-1, :] = outer[:, 1:, :]
     shell = span & (dout > clearance) & (dout <= clearance + wall) & (v >= -0.5) & ~over
-    k, sw = plan["kerf"], _slot_width(plan["kerf"], h)
+    k = plan.get("slot_w", plan["kerf"])                               # slot width (the blade when not set apart)
+    sw = _slot_width(k, h)
     # where the slot lies relative to the planned plane (u = 0, the stump face): on the resected side (u in [-sw, 0], the
     # graft meets the stump flush) or centred on the plane (u in [-sw/2, sw/2], half the kerf lost from the stump);
     # the same setting as web/app.js kerfSide (plan["kerf_side"], default "resected")

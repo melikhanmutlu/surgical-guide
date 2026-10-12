@@ -112,7 +112,7 @@ class Plans(unittest.TestCase):
         cls.F = P.Fibula(fv, fm)
 
     def test_clean_plan_has_no_warnings(self):
-        p = P.make_plan(self.A, self.F, -25, 25, n_segments=2)
+        p = P.make_plan(self.A, self.F, -27, 27, n_segments=2)            # two segments over 25 mm (stump rule)
         self.assertEqual(p["warnings"], [], p["warnings"])
         self.assertEqual(P.plan_summary(p, self.F)["plan_warnings"], [])
 

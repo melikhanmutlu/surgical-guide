@@ -854,6 +854,8 @@
   // samples ±W/2 + 6 mm across and 45 mm down)
   const SLOT_REACH = 45, CUT_OFF_MAX = 80, PIECE_RUN = 24, CUT_ALONG_DEG = 60;
   const SCREW_CREST_TOL = 6, SCREW_SLOT_GAP = 2, SCREW_MIN_DEPTH = 4, SCREW_GAP_MIN = 5, SCREW_GAP_MAX = 15, SCREW_GAP_FAR = 22, SCREW_CORE_R = 1.5, L_MAX = 160;
+  // a screw hole closer than this to the osteotomy plane leaves a thin bone bridge that can break (checks only, a warning)
+  const SCREW_CUT_GAP = 5;
   // wrap depth at uu from a per-position profile ([[uu, depth], ...]) capped by the global value, as buildGuide's wrapOf
   function wrapAtU(wrap, pr, uu) {
     if (!pr || !pr.length) return wrap;
@@ -1580,13 +1582,19 @@
       // screw path through bone; distance to every saw slot is measured from the slot edge (half width w/2 around pSlot)
       // to the screw surface: the drill (radius d/2) inside the slot is critical, the sleeve (radius D/2) within
       // 0.5 mm is a warning
-      let inBone = 0, crossesPlane = false, exitAt = null, slotGap = Infinity;
+      // cutGap: bone between the hole (radius d/2) and the planned cut plane p (the osteotomy face), over the part of the
+      // hole that runs in bone
+      let inBone = 0, crossesPlane = false, exitAt = null, slotGap = Infinity, cutGap = Infinity;
       for (let t = 0; t <= s.sc.len; t += 0.25) {
-        const q = s.entry.clone().add(s.dir.clone().multiplyScalar(t));
-        if (boneAt(q)) inBone += 0.25; else if (exitAt === null && t > 1) exitAt = t;
-        for (const pw of pls) { const dq = q.clone().sub(pw.pSlot || pw.p), a = dq.dot(pw.N); if (dq.lengthSq() - a * a > SLOT_REACH * SLOT_REACH) continue; const dist = Math.abs(a); if (dist < pw.w / 2 + s.sc.d / 2) crossesPlane = true; slotGap = Math.min(slotGap, dist - pw.w / 2 - s.sc.D / 2); }
+        const q = s.entry.clone().add(s.dir.clone().multiplyScalar(t)), bone = boneAt(q);
+        if (bone) inBone += 0.25; else if (exitAt === null && t > 1) exitAt = t;
+        for (const pw of pls) {
+          const dq = q.clone().sub(pw.pSlot || pw.p), a = dq.dot(pw.N); if (dq.lengthSq() - a * a > SLOT_REACH * SLOT_REACH) continue;
+          const dist = Math.abs(a); if (dist < pw.w / 2 + s.sc.d / 2) crossesPlane = true; slotGap = Math.min(slotGap, dist - pw.w / 2 - s.sc.D / 2);
+          if (bone) cutGap = Math.min(cutGap, Math.abs(q.clone().sub(pw.p).dot(pw.N)) - s.sc.d / 2);
+        }
       }
-      screwInfo.push(Object.assign(info, { inBone: Math.min(inBone, s.sc.len), crossesPlane, slotGap, exitAt }));
+      screwInfo.push(Object.assign(info, { inBone: Math.min(inBone, s.sc.len), crossesPlane, slotGap, exitAt, cutGap }));
     }
     const radialAt = (A, i, j, k) => {
       const qa = lo[0] + i * h - A.el[0], qb = lo[1] + j * h - A.el[1], qc = lo[2] + k * h - A.el[2], t = qa * A.ol[0] + qb * A.ol[1] + qc * A.ol[2];
@@ -2001,7 +2009,9 @@
       const E = resEnds();
       if (E) {
         const ends = [E.A].concat(E.B && !E.B.virtual ? [E.B] : []), g1 = fmt(stumpGap(ends[0])), g2 = ends[1] ? fmt(stumpGap(ends[1])) : null, mx = Math.max(...ends.map(stumpGap));
-        if (mx > 1.0) out.push(['warn', 'Uyarı', g2 == null ? `Greft ile güdük arasında planlı aralık ${g1} mm (eşik 1,0 mm). Kesi yuvasını daraltın ya da testere payını rezeke tarafa alın.` : `Greft ile güdük arasında planlı aralık: kesi 1 ucunda ${g1} mm, kesi 2 ucunda ${g2} mm (eşik 1,0 mm). Kesi yuvasını daraltın ya da testere payını rezeke tarafa alın.`, 'guide']);
+        // literature: gaps of ~2.5 mm went with non-union (1.3 mm healed); > 1 mm a warning, >= 2.5 mm critical
+        if (mx >= 2.5) out.push(['crit', 'Kritik', g2 == null ? `Greft ile güdük arasında planlı aralık ${g1} mm (hata eşiği 2,5 mm); kaynamama riski. Kesi yuvasını daraltın ya da testere payını rezeke tarafa alın.` : `Greft ile güdük arasında planlı aralık: kesi 1 ucunda ${g1} mm, kesi 2 ucunda ${g2} mm (hata eşiği 2,5 mm); kaynamama riski. Kesi yuvasını daraltın ya da testere payını rezeke tarafa alın.`, 'guide']);
+        else if (mx > 1.0) out.push(['warn', 'Uyarı', g2 == null ? `Greft ile güdük arasında planlı aralık ${g1} mm (eşik 1,0 mm). Kesi yuvasını daraltın ya da testere payını rezeke tarafa alın.` : `Greft ile güdük arasında planlı aralık: kesi 1 ucunda ${g1} mm, kesi 2 ucunda ${g2} mm (eşik 1,0 mm). Kesi yuvasını daraltın ya da testere payını rezeke tarafa alın.`, 'guide']);
         else if (S.g.kerfSide) out.push(['info', 'Bilgi', g2 == null ? `Greft ile güdük arasında planlı aralık: kesi ucunda ${g1} mm (testere payı rezeke tarafta).` : `Greft ile güdük arasında planlı aralık: kesi 1 ucunda ${g1} mm, kesi 2 ucunda ${g2} mm (testere payı rezeke tarafta).`, 'guide']);
         else out.push(['info', 'Bilgi', g2 == null ? `Greft ile güdük arasında planlı aralık: kesi ucunda ${g1} mm (testere payı kesi düzlemine ortalı).` : `Greft ile güdük arasında planlı aralık: kesi 1 ucunda ${g1} mm, kesi 2 ucunda ${g2} mm (testere payı kesi düzlemine ortalı).`, 'guide']);
       }
@@ -2069,6 +2079,9 @@
         if (si.crossesPlane) out.push(['crit', 'Kritik', `Vida ${i + 1} matkap yolu (Ø${fmt(si.s.sc.d)}) kesi yuvasıyla kesişiyor.`, 's' + i]);
         else if (si.slotGap < 0.5) out.push(['warn', 'Uyarı', `Vida ${i + 1} kovanı (Ø${fmt(si.s.sc.D)}) kesi yuvasına ${fmt(Math.max(0, si.slotGap))} mm yaklaşıyor (en az 0,5 mm); testere yoluna değebilir.`, 's' + i]);
         if (si.exitAt !== null && si.exitAt < si.s.sc.len) out.push(['warn', 'Uyarı', `Vida ${i + 1} ${fmt(si.exitAt)} mm'de kemikten çıkıyor (bikortikal mi?).`, 's' + i]);
+        // hole checks: bone along the hole, and the bone bridge between the hole and the cut (>= SCREW_CUT_GAP, our own inference)
+        if (si.inBone < SCREW_MIN_DEPTH) out.push(['warn', 'Uyarı', `Vida ${i + 1} deliği boyunca yalnız ${fmt(si.inBone)} mm kemik var (en az ${SCREW_MIN_DEPTH} mm); vida tutmayabilir.`, 's' + i]);
+        if (!si.crossesPlane && Number.isFinite(si.cutGap) && si.cutGap < SCREW_CUT_GAP) out.push(['warn', 'Uyarı', `Vida ${i + 1} deliği kesiye ${fmt(Math.max(0, si.cutGap))} mm (en az ${SCREW_CUT_GAP} mm önerilir); delik ile kesi arasındaki kemik köprüsü kırılabilir.`, 's' + i]);
         if (si.shadowed) out.push(['warn', 'Uyarı', `Vida ${i + 1} kovanının %${fmt(si.shadowed * 100, 0)}'i takma yönünde kemiğin gölgesine girer; o kısım bırakıldı. Vidayı kaydırın ya da eğimini azaltın.`, 's' + i]);
       }
     });

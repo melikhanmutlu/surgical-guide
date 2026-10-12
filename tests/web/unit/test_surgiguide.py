@@ -267,7 +267,7 @@ class TestSegmentChoiceAndKerf(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.vol, cls.m, cls.A = arch()
-        _, _, cls.F = (None, None, P.Fibula(*cylinder(length=320.0)[:2]))
+        cls.vol_f, cls.m_f, _ = cylinder(length=320.0); cls.F = P.Fibula(cls.vol_f, cls.m_f)
 
     def test_short_defect_is_one_segment_with_a_warning_not_a_critical(self):
         knots, dev, n, d = P.choose_segments(self.A, -8, 8, 2.5, 20.0)
@@ -297,6 +297,77 @@ class TestSegmentChoiceAndKerf(unittest.TestCase):
         tol = ok[0]["deviation_mm"] + 0.05
         _, dev2, n2, d2 = P.choose_segments(self.A, -30, 30, tol, 20.0)
         self.assertEqual(d2["reason"], "dev"); self.assertLessEqual(dev2, tol); self.assertEqual(n2, ok[0]["n"])
+
+    def test_pick_segments_mirrors_the_web_rule_stump_preference_and_tie(self):
+        row = lambda n, lens, dev: dict(n=n, lens=lens, dev=dev, min_len=min(lens))
+        self.assertEqual((P.SEG_ERR, P.STUMP_MIN, P.DEV_TIE), (15, 25.0, 0.5))
+        self.assertTrue(P.lens_ok([25, 20, 25]) and P.lens_ok([22]) and not P.lens_ok([24, 30, 25]) and not P.lens_ok([30, 19, 30]))
+        # the same tables as tests/web/unit/test_adaptive.mjs (segmentChoice)
+        r, why = P.pick_segments([row(1, [70], 6), row(2, [22, 48], 2), row(3, [26, 20, 26], 1)], 70, 3.0)
+        self.assertEqual((r["n"], why), (3, "dev"))
+        r, why = P.pick_segments([row(1, [50], 6), row(2, [22, 28], 2)], 50, 3.0)
+        self.assertEqual((r["n"], why), (2, "dev"))
+        r, why = P.pick_segments([row(1, [141.5], 26.3), row(2, [13.3, 128], 27.7), row(3, [24.7, 60, 55], 7.8), row(4, [17.9, 40, 40, 40], 4.9)], 141.5, 3.0)
+        self.assertEqual((r["n"], why), (3, "len"), "a 24.7 mm stump segment is not traded for a 26 mm deviation")
+        r, _ = P.pick_segments([row(1, [80], 9), row(2, [22, 58], 4.0), row(3, [26, 28, 26], 4.3)], 80, 3.0)
+        self.assertEqual(r["n"], 3, "stump-acceptable within 0.5 mm preferred")
+        r, _ = P.pick_segments([row(1, [80], 9), row(2, [22, 58], 4.0), row(3, [26, 28, 26], 4.6)], 80, 3.0)
+        self.assertEqual(r["n"], 2)
+        r, _ = P.pick_segments([row(1, [60], 5), row(2, [30, 30], 4.7), row(3, [20, 20, 20], 4.6)], 60, 3.0)
+        self.assertEqual(r["n"], 1, "deviations within 0.5 mm: fewer segments")
+
+    def test_length_bands_and_gap_error(self):
+        def pw(lens, gap=0.0, joints=()):
+            segs = [dict(index=i, length_mm=x, angle_start_deg=0.0, angle_end_deg=0.0) for i, x in enumerate(lens)]
+            return P.plan_warnings(segs, 0.0, len(lens), 3.0, 20.0, -1.0, sum(lens), None, gap, "centre", joints)
+        w = pw([14.0, 40.0])
+        self.assertTrue(any(x.startswith("ERROR") and "15 mm" in x for x in w), w)
+        w = pw([18.0, 40.0])
+        self.assertFalse(any(x.startswith("ERROR") for x in w), w); self.assertTrue(any("15-20 mm" in x for x in w), w)
+        w = pw([22.0, 30.0, 40.0])
+        self.assertTrue(any("meets a stump" in x for x in w), w); self.assertFalse(any(x.startswith("ERROR") for x in w))
+        self.assertFalse(any("meets a stump" in x for x in pw([22.0])), "a single segment touches both stumps: no stump rule")
+        self.assertTrue(any(x.startswith("ERROR") and "gap" in x for x in pw([30.0, 30.0], 2.5)))
+        self.assertFalse(any(x.startswith("ERROR") for x in pw([30.0, 30.0], 1.2)))
+        self.assertTrue(any("above 1.0 mm" in x for x in pw([30.0, 30.0], 1.2)))
+        self.assertTrue(any(x.startswith("ERROR") and "between segments 1 and 2" in x for x in pw([30.0, 30.0], 0.0, [2.6])))
+
+    def test_slot_width_separate_from_the_blade(self):
+        p = P.make_plan(self.A, self.F, -25, 25, n_segments=2, kerf=1.0)
+        self.assertEqual(p["slot_w"], 1.0, "default: the slot is the blade, as before")
+        q = P.make_plan(self.A, self.F, -25, 25, n_segments=2, kerf=0.6, slot_w=0.8, kerf_side="centre")
+        self.assertAlmostEqual(q["slot_w"], 0.8); self.assertEqual(q["stump_gap_mm"], [0.4, 0.4])
+        a, b = q["segments"][0], q["segments"][1]
+        self.assertGreaterEqual(b["fib_start"] - a["fib_end"], 0.8 + 1.0 - 1e-6, "segments spaced by the slot + 1 mm")
+        self.assertFalse(any("wider than the" in x for x in q["warnings"]), q["warnings"])
+        wide = P.make_plan(self.A, self.F, -25, 25, n_segments=2, kerf=0.6, slot_w=1.2)
+        self.assertTrue(any("wider than the" in x for x in wide["warnings"]), wide["warnings"])
+        self.assertAlmostEqual(P.make_plan(self.A, self.F, -25, 25, n_segments=2, kerf=1.0, slot_w=0.5)["slot_w"], 1.0, msg="never narrower than the blade")
+        fg, planes, rep = Gd.fibula_guide(self.vol_f, self.m_f, self.F, q, h=0.5)
+        self.assertAlmostEqual(rep["slot_mm"], Gd._slot_width(0.8, 0.5)); self.assertGreater(rep["slot_mm"], Gd._slot_width(0.6, 0.5) - 1e-9)
+        self.assertGreaterEqual(rep["screws"], 3, "at least three guide screws")
+
+    def test_fibula_screw_sites_two_per_long_segment_three_in_all_clear_of_slots(self):
+        def segs_faces(lens, gap=2.0, tilt=0.0):
+            segs, faces, s = [], [], 0.0
+            n = np.array([np.cos(tilt), np.sin(tilt), 0.0])
+            for i, L in enumerate(lens):
+                segs.append(dict(index=i, length_mm=L, fib_start=s, fib_end=s + L))
+                faces += [(np.array([s, 0, 0]), n, -1), (np.array([s + L, 0, 0]), n, +1)]
+                s += L + gap
+            return segs, faces
+        segs, faces = segs_faces([30.0, 22.0])
+        pos, dropped = Gd.fibula_screw_sites(segs, faces, 1.0, 2.2, 7.0)
+        self.assertEqual(dropped, []); self.assertEqual(len(pos), 3, pos)
+        self.assertEqual(sum(1 for s in pos if 0 <= s <= 30), 2, "two on the 30 mm segment")
+        for s in pos:
+            self.assertTrue(all(abs(s - f[0][0] - f[2] * 0.5) >= 0.5 + 1.1 + 2.0 - 1e-9 for f in faces), "hole clear of every slot")
+        segs, faces = segs_faces([40.0])
+        self.assertEqual(len(Gd.fibula_screw_sites(segs, faces, 1.0, 2.2, 7.0)[0]), 3, "a single segment still gets three")
+        # a segment fully under oblique slots: no clear position, reported instead of drilled through a slot
+        segs, faces = segs_faces([12.0, 40.0], tilt=np.radians(70))
+        pos, dropped = Gd.fibula_screw_sites(segs, faces, 1.0, 2.2, 7.0)
+        self.assertIn(0, dropped)
 
     def test_kerf_side_sets_the_stump_gap_and_the_slot_position(self):
         p = P.make_plan(self.A, self.F, -25, 25, n_segments=2, kerf=1.0)

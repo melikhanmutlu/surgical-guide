@@ -25,7 +25,8 @@ window.Mfg = (function () {
     S.planes.forEach(p => { if (Math.abs(p.w - w) > 1e-6) { p.w = w; St.unapprove(p); } });
     const fp = window.Fibula && Fibula.plan();
     if (fp) {
-      fp.kerf = Math.min(2, Math.max(0.5, w));
+      // the fibula plan keeps the two apart: the blade is the bone a cut takes, the slot is the guide's opening
+      fp.kerf = Math.min(2, Math.max(0.5, M.blade)); fp.slotW = Math.max(fp.kerf, Math.min(2.5, w));
       if (fp.fg) { if (fp.fg.clear != null) fp.fg.clear = M.clear; if (fp.fg.wall != null && fp.fg.wall < M.minWall) fp.fg.wall = M.minWall; }
       St.unapprove(fp); Fibula.guideEdited();
     }
@@ -41,7 +42,11 @@ window.Mfg = (function () {
     if (S.g.wall < M.minWall - 1e-6) out.push(['crit', 'Kritik', `Guide duvarı ${fmt(S.g.wall)} mm; ${nm} için en az ${fmt(M.minWall)} mm.`, 'guide']);
     const fg = window.Fibula && Fibula.guideInfo && Fibula.guideInfo();
     if (fg && fg.body.wall < M.minWall - 1e-6) out.push(['crit', 'Kritik', `Fibula guide'ı duvarı ${fmt(fg.body.wall)} mm; ${nm} için en az ${fmt(M.minWall)} mm.`, 'fib']);
-    S.planes.forEach((p, i) => { if (p.w < w - 1e-6) out.push(['warn', 'Uyarı', `Kesi ${i + 1} yuvası ${fmt(p.w)} mm; testere ${fmt(M.blade, 2)} mm ve tolerans ${fmt(M.slotTol, 2)} mm için en az ${fmt(w, 2)} mm.`, 'p' + i]); });
+    S.planes.forEach((p, i) => {
+      if (p.w < w - 1e-6) out.push(['warn', 'Uyarı', `Kesi ${i + 1} yuvası ${fmt(p.w)} mm; testere ${fmt(M.blade, 2)} mm ve tolerans ${fmt(M.slotTol, 2)} mm için en az ${fmt(w, 2)} mm.`, 'p' + i]);
+      // a slot much wider than the blade lets it tilt: angle errors add up unnoticed (blade + 0.1-0.3 mm guides best)
+      else if (p.w - M.blade > 0.3 + 1e-6) out.push(['warn', 'Uyarı', `Kesi ${i + 1} yuvası ${fmt(p.w, 2)} mm, testereden ${fmt(p.w - M.blade, 2)} mm geniş; en çok 0,3 mm önerilir, daha geniş yuva açı hatası biriktirir.`, 'p' + i]);
+    });
     if (Math.abs(S.g.clear - M.clear) > 1e-6) out.push(['info', 'Bilgi', `Kemik boşluğu ${fmt(S.g.clear, 2)} mm, profil ${fmt(M.clear, 2)} mm öneriyor.`, 'guide']);
     if (Math.abs((S.g.fit || 0) - M.fit) > 1e-6) out.push(['info', 'Bilgi', `Kovan geçme payı ${fmt(S.g.fit || 0, 2)} mm, profil ${fmt(M.fit, 2)} mm öneriyor.`, 'guide']);
     return out;

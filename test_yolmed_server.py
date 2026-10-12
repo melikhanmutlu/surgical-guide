@@ -188,6 +188,14 @@ def main():
         for (name, (_, want)), got in zip(probes.items(), inside):
             assert bool(got) == want, f"probe '{name}': expected {want}, got {got}"
         print("guide geometry probes OK")
+        # slot width follows the request's w (the fibula plan sends its slot width apart from the blade)
+        for w, open_at_07 in ((0.8, False), (1.8, True)):
+            rq = dict(req, planes=[dict(req["planes"][0], w=w), req["planes"][1]])
+            st, rw = J(call(base, "POST", "/guide", rq)); assert st == 200 and rw["bodies"] == 1, (st, rw.get("bodies"))
+            tw = trimesh.load(io.BytesIO(base64.b64decode(rw["stl_b64"])), file_type="stl")
+            c0, cm, cp = contains(tw, np.array([[-6, 0, R0 + 1.8], [-6 - 0.7, 0, R0 + 1.8], [-6 + 0.7, 0, R0 + 1.8]], float))
+            assert not bool(c0) and bool(cm) != open_at_07 and bool(cp) != open_at_07, (w, c0, cm, cp)
+        print("slot width OK (0.8 / 1.8 mm)")
         # two separate guides: nothing between the cuts beyond a 3 mm flange, one body per side
         req2 = dict(req, gap={"A": req["planes"][0], "B": req["planes"][1], "flange": 3.0})
         st, r2 = J(call(base, "POST", "/guide", req2))

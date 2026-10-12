@@ -220,4 +220,21 @@ test('segmentChoice: a defect shorter than one segment is one segment ("short");
   assert.equal(W.Fibula.MIN_LEN, 20); assert.equal(W.Fibula.DEV_WARN, 3);
 });
 
+test('segmentChoice: stump segments >= 25 mm preferred, never at the cost of a far worse deviation; deviations within 0.5 mm count as equal and the fewer segments win', () => {
+  const sc = W.Fibula.segmentChoice, row = (n, lens, dev) => ({ n, lens, dev });
+  assert.equal(W.Fibula.SEG_ERR, 15); assert.equal(W.Fibula.STUMP_MIN, 25); assert.equal(W.Fibula.DEV_TIE, 0.5);
+  assert.ok(W.Fibula.lensOk([25, 20, 25]) && !W.Fibula.lensOk([24, 30, 25]) && W.Fibula.lensOk([22]) && !W.Fibula.lensOk([30, 19, 30]));
+  // within the target: the fewest with stumps >= 25 first, else the fewest with every segment >= 20 (stump then only a warning)
+  let r = sc([row(1, [70], 6), row(2, [22, 48], 2), row(3, [26, 20, 26], 1)], 70); assert.equal(r.n, 3, 'stump-acceptable count within the target wins'); assert.equal(r.reason, 'dev'); assert.equal(r.stumpOk, true);
+  r = sc([row(1, [50], 6), row(2, [22, 28], 2)], 50); assert.equal(r.n, 2); assert.equal(r.reason, 'dev'); assert.equal(r.stumpOk, false);
+  // the real-CT case (symphysis L 45): one segment 26 mm off, three segments with a 24.7 mm stump segment 7.8 mm off -> three
+  r = sc([row(1, [141.5], 26.3), row(2, [13.3, 128], 27.7), row(3, [24.7, 60, 55], 7.8), row(4, [17.9, 40, 40, 40], 4.9)], 141.5);
+  assert.equal(r.n, 3, 'a stump under 25 mm is not traded for a 26 mm deviation'); assert.equal(r.reason, 'len'); assert.deepEqual(r.rejected.map(x => x.n), [2, 4]);
+  // a stump-acceptable count within DEV_TIE of the best deviation is preferred
+  r = sc([row(1, [80], 9), row(2, [22, 58], 4.0), row(3, [26, 28, 26], 4.3)], 80); assert.equal(r.n, 3, 'within 0.5 mm: the stump-acceptable count'); assert.equal(r.stumpOk, true);
+  r = sc([row(1, [80], 9), row(2, [22, 58], 4.0), row(3, [26, 28, 26], 4.6)], 80); assert.equal(r.n, 2, 'more than 0.5 mm worse: the better deviation, stump warned'); assert.equal(r.stumpOk, false);
+  // equal deviations (within 0.5 mm): fewer segments
+  r = sc([row(1, [60], 5), row(2, [30, 30], 4.7), row(3, [20, 20, 20], 4.6)], 60); assert.equal(r.n, 1);
+});
+
 await run('adaptive guide sizing, fit ladder, kerf side, segment choice');
