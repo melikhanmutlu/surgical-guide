@@ -811,7 +811,7 @@
   // for at least SCREW_MIN_DEPTH mm (the whole screw length preferred), at least SCREW_SLOT_GAP mm between the sleeve
   // and every saw slot and no bone of the resected region on the path. Returns null when the position is unusable
   // (the reason counted in `why`), else { score, inBone, slotGap }: more bone scores higher, tilt lower.
-  const SCREW_SLOT_GAP = 2, SCREW_MIN_DEPTH = 4, SCREW_GAP_MIN = 5, SCREW_GAP_MAX = 15, SCREW_GAP_FAR = 22, SCREW_CORE_R = 1.5, L_MAX = 160;
+  const SCREW_CREST_TOL = 6, SCREW_SLOT_GAP = 2, SCREW_MIN_DEPTH = 4, SCREW_GAP_MIN = 5, SCREW_GAP_MAX = 15, SCREW_GAP_FAR = 22, SCREW_CORE_R = 1.5, L_MAX = 160;
   // wrap depth at uu from a per-position profile ([[uu, depth], ...]) capped by the global value, as buildGuide's wrapOf
   function wrapAtU(wrap, pr, uu) {
     if (!pr || !pr.length) return wrap;
@@ -828,11 +828,13 @@
     if (!secs || !secs.length) return null;
     const live = secs.filter(s => !s.empty); if (!live.length) return null;
     const near = uu => { let b = live[0]; for (const s of live) if (Math.abs(s.uu - uu) < Math.abs(b.uu - uu)) b = s; return b; };
-    return { frame, W, vc, cap, top: uu => { const s = near(uu); return Math.abs(s.uu - uu) > 4 ? -Infinity : Math.min(cap, s.top); }, wrap: uu => wrapAtU(wrap, wrapU, uu), cache: new Map() };
+    return { frame, W, vc, cap, top: uu => { const s = near(uu); return Math.abs(s.uu - uu) > 4 ? -Infinity : Math.min(cap, s.top); }, rawTop: uu => { const s = near(uu); return Math.abs(s.uu - uu) > 4 ? -Infinity : s.top; }, wrap: uu => wrapAtU(wrap, wrapU, uu), cache: new Map() };
   }
   function onBody(body, uu, vv, depth) {
     const key = uu + '|' + vv + '|' + depth.toFixed(1); if (body.cache.has(key)) return body.cache.get(key);
-    const ok = Math.abs(vv - body.vc) <= body.W / 2 - 0.5 && depth >= body.top(uu) - body.wrap(uu) + 0.3;
+    // the entry lies within the body's depth range: not under the wrap limit, and not above the bone's crest there (a
+    // column that meets other bone high above the frame, as on a guide turned round the jaw, is not a surface the sleeve stands on)
+    const ok = Math.abs(vv - body.vc) <= body.W / 2 - 0.5 && depth >= body.top(uu) - body.wrap(uu) + 0.3 && (!body.rawTop || depth <= Math.max(body.rawTop(uu), body.top(uu)) + SCREW_CREST_TOL);
     body.cache.set(key, ok);
     return ok;
   }
@@ -2085,9 +2087,11 @@
       if (S.refit) {
         S.refit = false;
         const R = S.result, want = S.g.split && S.planes.length >= 2 ? 2 : 1;
-        if (S.guideOn && R && (R.pieces !== want || (R.seat && R.seat.ok && !R.seat.free))) {
+        if (S.guideOn && R && (R.pieces !== want || (R.seat && R.seat.ok && !R.seat.free) || floatingScrews(R).length)) {
           busy(true, 'Guide yeni açıda kemiğe oturtuluyor…'); await sleep();
           const f = await fitWrap(); if (f) S.fitReport = f;
+          // what the fit could not mend: a placed screw the built guide has no body under is removed and reported
+          if (dropFloating()) await regenerate();
         } else if (S.guideOn && R && $('guideStat')) $('guideStat').textContent = 'Guide yeni konumda kemiğe oturuyor.';
       }
     } finally { if (timer === t) rebuildPending = false; } }, liveEdit ? 400 : 120);
@@ -2211,6 +2215,19 @@
     S.lesion.from += sh; S.lesion.to += sh;
     S.cutsTurned = turned;
     return turned;
+  }
+  // automatic screws whose sleeve the built guide has no body under (hand-set screws are the surgeon's and stay)
+  function floatingScrews(R) { return R && R.screwInfo ? R.screwInfo.filter(si => !si.ok && si.noBody && si.s && si.s.sc && !si.s.sc.hand) : []; }
+  function dropFloating() {
+    const bad = new Set(floatingScrews(S.result).map(si => si.s.sc)); if (!bad.size) return false;
+    const pls = planesWorld(); S.screwDrops = S.screwDrops || [];
+    S.screws.forEach(sc => {
+      if (!bad.has(sc)) return;
+      const pw = pls.reduce((b, x) => (!b || Math.abs(x.off - sc.u) < Math.abs(b.off - sc.u) ? x : b), null);
+      S.screwDrops.push({ cut: pw ? Math.max(0, S.planes.indexOf(pw.pl)) : 0, side: Math.sign(sc.u - (pw ? pw.off : 0)) || 1, why: 'noBody' });
+    });
+    S.screws = S.screws.filter(sc => !bad.has(sc));
+    return true;
   }
   function afterGuideMove() {
     unapproveAll(); updateLesionPart();
