@@ -116,7 +116,10 @@ const VERI = process.env.VERI || '/mnt/project-files/surgical-guide-prototype/au
     const scr = await h.ev(() => Studio.S.screws.map(x => x ? [x.u, x.v] : null));
     const warn = await h.ev(() => [...document.querySelectorAll('#checks li')].map(l => l.className.replace('checks', '').trim().slice(0, 5) + ': ' + l.textContent.trim().slice(0, 100)));
     const ev = await h.shot('C3_ramus_46mm');
-    const ok = s.crit ? true : s.pieces === 1;
+    // the fit ladder may choose two guides, one per cut on its own axis, near the angle: with no critical check that
+    // layout is as valid as one piece, provided each guide carries a screw
+    const lay = await h.ev(() => ({ split: Studio.S.g.split, parts: [...new Set(Studio.S.screws.filter(Boolean).map(x => x.part))].length }));
+    const ok = s.crit ? true : lay.split === 2 ? s.pieces === 2 && lay.parts === 2 : s.pieces === 1;
     return { pass: ok && !s.nullScrews, actual: `anchor ${JSON.stringify(p.p.map(x => +x.toFixed(1)))}; kesiler ${JSON.stringify(s.planes.map(x => x.off))}, L=${s.L}, parça ${s.pieces}, vidalar ${JSON.stringify(scr)}, kritik ${s.crit}; "${stat}"; kontroller: ${warn.join(' | ')}`, evidence: ev };
   });
   await h.run('C3b', '3 · Rezeksiyon', 'Aynı geniş rezeksiyonda (46 mm) iki parça guide', 'İki parça; kalan kritik varsa açıkça listelenir', async () => {
