@@ -7,21 +7,53 @@
   const KEY = 'gs.lang', ATTRS = ['title', 'aria-label', 'placeholder'];
   const D = window.I18N_EN || {};
   const NUM = /(?<![A-Za-z0-9ÇĞİÖŞÜçğıöşü])[-−+]?\d+(?:[.,]\d+)*(?![A-Za-zÇĞİÖŞÜçğıöşü])/g;
+  // also lifted out like numbers: plan hashes ("plan 5dda4e9c"), version and end labels ("S3", "M1–S4ü") and the letter of a default bone label ("Kemik C")
+  const TOK = new RegExp(`(?<![A-Za-z0-9])(?=[0-9a-f]*\\d)(?=[0-9a-f]*[a-f])[0-9a-f]{6,64}(?![A-Za-z0-9])|(?<=(?<![A-Za-z])[MS])\\d+(?![0-9A-Za-z])|(?<=(?<![A-Za-z])[MS])\\d+(?=ü)|(?<=\\bKemik )[A-Z](?![A-Za-z0-9ÇĞİÖŞÜçğıöşü])|${NUM.source}`, 'g');
+  // Turkish case endings after a number ("%8'i", "20 mm'ye") carry no meaning in English
+  const SUF = /([\d#](?: ?mm)?)['’](?:[a-zçğıöşü]{1,4})(?![A-Za-zÇĞİÖŞÜçğıöşü])/g;
   // "1 screws" → "1 screw": the dictionary holds the plural, a lone 1 takes the singular
   const ONE = /((?:^|[^\d.,])1 )(screw|segment|implant|position|cut|hole|file|item|version|warning|structure|approval|step|graft|plate|slice|series|piece|check|note|guide|vessel|point)s\b/g;
   let lang = 'tr';
+  const miss = new Set();
+  for (const k of Object.keys(D)) { const n = k.replace(SUF, '$1'); if (n !== k && D[n] == null) D[n] = D[k]; }   // Turkish keys with no English yet, for I18N.miss in the console
   try { lang = localStorage.getItem(KEY) === 'en' ? 'en' : 'tr'; } catch (e) { /* storage blocked */ }
 
+  // a key not in the dictionary as a whole is often several known phrases joined by the code ("Kesi 1 · onaylı",
+  // "onay bekleyen: Kesi 1, Vida 2"), or one with a closing period or bracket; those parts are looked up one by one
+  const SEP = /( · | — | – |; |: |, | \/ | \| |\. (?=[A-ZÇĞİÖŞÜ]))/;
+  function look(k, deep) {
+    if (D[k] != null) return D[k];
+    const end = /^(.*?)([.:…!?)]+)$/.exec(k);
+    if (end && D[end[1]] != null) return D[end[1]] + end[2];
+    const wrap = /^([(“"'«]+)(.*?)([)”"'».:…!?]*)$/.exec(k);
+    if (wrap && D[wrap[2]] != null) return wrap[1] + D[wrap[2]] + wrap[3];
+    const par = /^(.+?) \(([^()]+)\)([.:]?)$/.exec(k);
+    if (par) { const a = look(par[1], deep), b = look(par[2], true); if (a != null || b != null) return (a ?? par[1]) + ' (' + (b ?? par[2]) + ')' + par[3]; }
+    if (deep) return null;
+    const parts = k.split(SEP);
+    if (parts.length < 3) return null;
+    // longest run of parts that translates as one, from left to right ("A: b. C" may be known as "b. C")
+    let hit = 0, outp = '';
+    for (let i = 0; i < parts.length; i += 2) {
+      let j = parts.length - 1, v = null;
+      for (; j > i; j -= 2) if ((v = look(parts.slice(i, j + 1).join(''), true)) != null) break;
+      if (v == null && parts[i]) v = look(parts[i], true);
+      if (v != null) hit++;
+      outp += (v ?? parts[i]) + (parts[j + 1] ?? '');
+      i = j;
+    }
+    return hit ? outp : null;
+  }
   // one string: keeps the surrounding whitespace, puts the numbers back in order
   function t(s) {
     if (lang !== 'en' || !s) return s;
     const m = /^(\s*)([\s\S]*?)(\s*)$/.exec(s), core = m[2].replace(/\s+/g, ' ');
     if (!core || !/[A-Za-zÇĞİÖŞÜçğıöşü%]/.test(core)) return s;
-    const nums = [], k = core.replace(NUM, x => { nums.push(x); return '#'; });
-    const v = D[k];
-    if (v == null) return s;
+    const nums = [], k = core.replace(SUF, '$1').replace(TOK, x => { nums.push(x); return '#'; });
+    const v = look(k);
+    if (v == null) { if (/[çğıöşüÇĞİÖŞÜ]|\b(ve|ile|için|seç|yok|kesi|vida|onay|göster|ekle|sil|hazır|parça|kemik|açı|uzunluk)\b/i.test(k)) miss.add(k); return s; }
     let i = 0;
-    const en = v.replace(/#/g, () => (i < nums.length ? nums[i++] : '#')).replace(ONE, '$1$2');
+    const en = v.replace(/#/g, () => (i < nums.length ? nums[i++].replace(/^([-−+]?\d+),(\d+)$/, '$1.$2') : '#')).replace(ONE, '$1$2');
     return m[1] + en + m[3];
   }
   // a multi-line message (alerts, confirms) falls back to line by line
@@ -90,7 +122,7 @@
   window.confirm = m => C(tMsg(m));
   window.prompt = (m, d) => P(tMsg(m), d);
 
-  window.I18N = { t, set, get lang() { return lang; } };
+  window.I18N = { t, set, miss, get lang() { return lang; } };
   const start = () => {
     const sel = document.getElementById('langSel');
     if (sel) { sel.value = lang; sel.addEventListener('change', () => set(sel.value)); }
