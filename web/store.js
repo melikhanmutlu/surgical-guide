@@ -85,7 +85,12 @@
   let autosave = true, dirty = false;
   try { autosave = localStorage.getItem('yolmed.autosave') !== '0'; } catch (e) {}
   const H = { list: [], idx: -1 };   // entries: {plan, label, at, cp}
-  ['pointerdown', 'keydown', 'input', 'change'].forEach(t => document.addEventListener(t, e => { if (e.isTrusted) userAt = performance.now(); }, true));
+  // a trusted gesture marks "the person did something": the next plan change becomes an undo step. Asking for an
+  // undo / redo (Ctrl+Z, Ctrl+Y, the arrows, a history row) is not such a gesture: the rebuilds that follow a restore
+  // are derived updates of the restored entry, and counting the key press would let them truncate the redo list.
+  const isHistGesture = e => (e.type === 'keydown' && (e.ctrlKey || e.metaKey) && /^[zy]$/i.test(e.key))
+    || (e.type === 'pointerdown' && e.target && e.target.closest && e.target.closest('#undo, #redo, #histList'));
+  ['pointerdown', 'keydown', 'input', 'change'].forEach(t => document.addEventListener(t, e => { if (e.isTrusted && !isHistGesture(e)) userAt = performance.now(); }, true));
   const setSave = (text, cls) => { $('saveState').textContent = text; $('stSave').textContent = text; $('saveState').style.color = cls === 'err' ? 'var(--crit)' : ''; };
   function renderCaseHead() {
     $('caseName').disabled = !!caseId;
@@ -142,7 +147,9 @@
     const plan = St.planOf(), js = JSON.stringify(plan);
     if (js === lastJSON) return;
     // a user step: the person did something since the last snapshot (slow rebuilds can finish long after the click)
-    const user = forceUser || performance.now() - userAt < 5000 || userAt > lastSnap;
+    // after a restore (redo entries ahead) only a gesture made since the restore counts; the recency window would
+    // otherwise let a late derived rebuild swallow the redo list
+    const user = forceUser || userAt > lastSnap || (H.idx >= H.list.length - 1 && performance.now() - userAt < 5000);
     lastSnap = performance.now();
     lastJSON = js;
     if (H.idx < 0) { H.list = [entry(plan, 'Başlangıç')]; H.idx = 0; }
@@ -154,14 +161,29 @@
     updUndo();
     if (caseId || (user && H.list.length > 1)) changedPlan(plan);
   }
-  async function goTo(i) {
+  async function restoreAt(i) {
     if (i < 0 || i >= H.list.length || i === H.idx || S.restoring) return;
     H.idx = i; updUndo();
     await St.applyPlan(H.list[i].plan);
     lastJSON = JSON.stringify(St.planOf());
+    // the rebuilds that follow a restore (automatic body size from the built guide, a re-fit, the fibula guide) are
+    // derived updates of this entry, not new user steps: the key press that asked for the restore must not count as
+    // "the person did something since", or the first such update would truncate the redo list
+    userAt = -1e9; lastSnap = performance.now();
     if (caseId) changedPlan(H.list[i].plan);
   }
-  const step = d => goTo(H.idx + d);
+  // restores run one at a time; a step asked for while one is still rebuilding (a quick Ctrl+Z, Ctrl+Y) is kept and
+  // served right after it instead of being dropped
+  let going = null, want = null;
+  function goTo(i) {
+    i = +i;
+    if (going) { want = i; return going; }
+    return going = (async () => {
+      try { await restoreAt(i); while (want !== null) { const w = want; want = null; await restoreAt(w); } }
+      finally { going = null; want = null; }
+    })();
+  }
+  const step = d => goTo((want !== null ? want : H.idx) + d);
   const ago = t => { const s = (Date.now() - t) / 1000; return s < 50 ? 'şimdi' : s < 3600 ? `${Math.round(s / 60)} dk önce` : new Date(t).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }); };
   function renderHist() {
     const ul = $('histList'); if (!ul) return;

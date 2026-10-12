@@ -672,14 +672,17 @@ def build_guide(req):
         Rr, rr, top = float(s["D"]) / 2, float(s["d"]) / 2, cw + float(s["sleeveH"])
         # a sleeve is only added where the guide body is: the body must be present along the sleeve axis just above the
         # clearance, or the sleeve would float free of the shell; such a screw is reported instead
+        # (the shell may stand up to `skirt` off the bone where the envelope's shadow face carries it, so the body is
+        # looked for over the clearance band plus that allowance, as the preview does)
         pa, pb = _basis2(ol)
-        ts = np.arange(clear + 0.3, cw - 0.3 + 1e-9, max(0.2, r / 2))
-        hit, cnt = 0, 0
+        step_t = max(0.2, r / 2)
+        cnt = 5 * len(np.arange(clear + 0.3, cw - 0.3 + 1e-9, step_t))
+        ts = np.arange(clear + 0.3, cw - 0.3 + skirt + 1e-9, step_t)
+        hit = 0
         for t_ in ts:
             for sa, sb in ((0, 0), (0.6, 0), (-0.6, 0), (0, 0.6), (0, -0.6)):
                 q = el + ol * t_ + (pa * sa + pb * sb) * Rr
                 idx = np.floor((q - glo) / r + 0.5).astype(int)
-                cnt += 1
                 if np.all(idx >= 0) and idx[0] < nx and idx[1] < ny and idx[2] < nz:
                     i_, j_, k_ = idx
                     if F[i_, j_, k_] < 0:
