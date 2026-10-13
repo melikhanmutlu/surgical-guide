@@ -540,6 +540,10 @@ button.ghost.danger { color: var(--crit); }
       <details class="step" id="st1" name="flow" open>
         <summary><span class="n">1</span>Vaka ve görüntüler<span class="tick" role="img" aria-label="Tamamlandı"></span><span class="tag" id="tag1"></span><svg class="chev"><use href="#i-chev"/></svg></summary>
         <div class="body">
+          <h3 class="sub">Vaka tipi</h3>
+          <p class="hint more">Adımlar ve paneller seçilen vaka tipine göre açılır; yeni tipler buraya eklenecek.</p>
+          <select id="caseType" aria-label="Vaka tipi"></select>
+          <div id="upMand" class="col">
           <h3 class="sub">Mandibula BT'si</h3>
           <p class="hint more">Dosyalar tarayıcıdan çıkmaz; mandibula serisini modele sürükleyip bırakabilirsiniz. Klasör, dosyalar ya da .zip seçebilirsiniz. Sıkıştırılmamış, RLE, JPEG, JPEG-LS ve JPEG 2000 BT okunur. <button class="link" id="sampleL">Bacak örneğini mandibula yerine aç</button></p>
           <div class="btns">
@@ -549,6 +553,8 @@ button.ghost.danger { color: var(--crit); }
           </div>
           <p class="err" id="caseMsg" hidden></p>
           <div class="ctl" id="serBox" hidden><label for="serSel" class="lbl2">Seri seç</label><select id="serSel"></select><p class="hint more" data-for="serSel">Bu yüklemede birden fazla seri var. Guide için ince kesitli (≤ 1 mm) kemik serisini seçin.</p></div>
+          </div>
+          <div id="upFib" class="col">
           <h3 class="sub">Fibula (bacak) BT'si</h3>
           <div class="btns">
             <label class="filebtn"><svg class="i"><use href="#i-folder"/></svg>DICOM klasörü<input type="file" id="fibDicom" webkitdirectory multiple></label>
@@ -556,6 +562,7 @@ button.ghost.danger { color: var(--crit); }
             <button id="fibSample" class="ghost"><svg class="i"><use href="#i-flask"/></svg>Örnek veri</button>
           </div>
           <p class="hint" id="fibMsg" hidden></p>
+          </div>
           <h3 class="sub">Vaka</h3>
           <div class="ctl"><label for="caseName" class="lbl2">Vaka adı</label><input id="caseName" type="text" placeholder="Kısa ad" autocomplete="off"></div>
           <div class="ctl"><label for="surgDate" class="lbl2">Ameliyat tarihi</label><input id="surgDate" type="date"></div>
@@ -865,6 +872,7 @@ button.ghost.danger { color: var(--crit); }
 <script src="store.js"></script>
 <script src="mpr.js"></script>
 <script src="fibula.js"></script>
+<script src="casetype.js"></script>
 <script src="layout.js"></script>
 <script src="ui.js"></script>
 <script src="measure.js"></script>
