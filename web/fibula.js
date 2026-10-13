@@ -12,6 +12,14 @@ window.Fibula = (function () {
   // stumps carry the fixation and heal less well, so >= 25 mm there): < SEG_ERR critical, SEG_ERR..MIN_LEN a warning,
   // a stump segment of a multi-segment graft under STUMP_MIN a warning. DEV_TIE: deviations this close count as equal
   const SEG_ERR = 15, STUMP_MIN = 25, DEV_TIE = 0.5;
+  // Clinical thresholds as one profile: the defaults below (most are our engineering assumptions where the literature has
+  // no single number), overridden per plan by plan.rules (only the keys that differ, so a plan without overrides keeps
+  // its approval signature). [min, max, step] is the range a stored or edited value is kept in.
+  const RULES = { segErr: SEG_ERR, segMin: MIN_LEN, stumpMin: STUMP_MIN, devWarn: DEV_WARN, angleWarn: ANGLE_WARN, distalMin: DISTAL_MIN, proxKeep: PROX_KEEP,
+    wedgeBridge: 2, screwMinDepth: 4, screwSlotGap: 2, screwCutGap: 5, screwCutWarn: 3, gapWarn: 1.0, gapErr: 2.5, wedgeWarn: 45, axisInfo: 30, overlap: 0.5, area: 40 };
+  const RULE_RANGE = { segErr: [8, 30, 1], segMin: [10, 40, 1], stumpMin: [10, 50, 1], devWarn: [0.5, 10, 0.5], angleWarn: [10, 80, 1], distalMin: [30, 120, 1], proxKeep: [30, 120, 1],
+    wedgeBridge: [0, 6, 0.5], screwMinDepth: [2, 10, 0.5], screwSlotGap: [0.5, 5, 0.5], screwCutGap: [2, 12, 0.5], screwCutWarn: [1, 10, 0.5], gapWarn: [0.2, 3, 0.1], gapErr: [0.5, 5, 0.1], wedgeWarn: [15, 90, 1], axisInfo: [5, 90, 1], overlap: [0.1, 1, 0.05], area: [5, 200, 5] };
+  const rules = () => Object.assign({}, RULES, (S.fib && S.fib.plan && S.fib.plan.rules) || {});
   const FIB_R = [2.5, 12];                 // mm: slenderest / thickest radius a fibula can have (warning above)
   const FIB_LEN = [120, 500];              // mm: shortest / longest fibula (CT table rails are 800 mm and more)
   const FIB_RATIOS = [0.45, 0.5, 0.4, 0.55, 0.35, 0.6];   // neck / core thickness ratios tried by G.separator
@@ -34,7 +42,7 @@ window.Fibula = (function () {
   // nAuto: the segment count is still chosen from the defect (pressing a count button takes it over by hand)
   // kerf: the saw blade (bone taken by one cut); slotW: width of the guide's saw slot (null = the kerf, as it was before
   // the two were separate). The slot lies outside each graft face, so the graft keeps its planned length.
-  const defaultPlan = () => ({ source: null, cand: null, mirror: 0, n: 2, nAuto: 1, knots: [0.5], yaw: [0, 0, 0], pitch: [0, 0, 0], roll: [0, 0], kerf: 1.0, slotW: null, distal: 70, vOff: 0, dbl: 0, dblH: null, fg: null, fsc: null, ok: false });
+  const defaultPlan = () => ({ source: null, cand: null, mirror: 0, n: 2, nAuto: 1, knots: [0.5], yaw: [0, 0, 0], pitch: [0, 0, 0], roll: [0, 0], rollAuto: 1, side: null, kerf: 1.0, slotW: null, distal: 70, vOff: 0, dbl: 0, dblH: null, fg: null, fsc: null, ok: false });
   // A segment count is acceptable when every segment is >= minLen and, with two or more segments, the two at the stumps
   // are >= stumpMin (a single segment touches both stumps and no other count makes it longer).
   const lensOk = (lens, minLen = MIN_LEN, stumpMin = STUMP_MIN) => lens.every(x => x >= minLen - 1e-9) && (lens.length < 2 || (lens[0] >= stumpMin - 1e-9 && lens[lens.length - 1] >= stumpMin - 1e-9));
@@ -59,13 +67,13 @@ window.Fibula = (function () {
   }
   // try 1..MAX_N segments on the defect D (knots optimised for each) and pick with segmentChoice; the plan's n / knots are set
   function chooseSegments(D) {
-    const P0 = plan(), table = [];
+    const P0 = plan(), table = [], R = rules();
     for (let n = 1; n <= MAX_N; n++) {
-      if (n > 1 && D.L / n < MIN_LEN - 1) break;                      // more segments can only be shorter
+      if (n > 1 && D.L / n < R.segMin - 1) break;                     // more segments can only be shorter
       setN(n); last = compute(D); optimizeKnots(); const c = compute(D);
       table.push({ n, lens: c.segs.filter(g => !g.barrel).map(g => g.L), dev: c.dev, knots: P0.knots.slice() });
     }
-    const pick = segmentChoice(table, D.L);
+    const pick = segmentChoice(table, D.L, R.segMin, R.devWarn, R.stumpMin);
     setN(pick.n); P0.knots = table.find(r => r.n === pick.n).knots;
     S.fib.choice = Object.assign(pick, { L: D.L, table: table.map(r => ({ n: r.n, dev: +r.dev.toFixed(2), min: +Math.min(...r.lens).toFixed(1) })) });
     return pick;
@@ -174,12 +182,14 @@ window.Fibula = (function () {
       return { label: c.label, C: V(...m), ax, elong: Math.sqrt(e[0].val / Math.max(e[1].val, 1e-6)), len: Math.sqrt(12 * e[0].val), rad: 2 * Math.sqrt(e[1].val) };
     });
   }
-  // detailed geometry of the chosen fibula: local frame, extent, radius, bending (centre offset per mm), meshes
-  function setCandidate(i) {
+  // detailed geometry of the chosen fibula: local frame, extent, radius, bending (centre offset per mm), meshes.
+  // e2 is the face the fibula guide sits on: away from the tibia (lateral); without a tibia the lateral side of the
+  // donor leg (`side`, else guessed from the scanner x, which the checks then ask the user to confirm). LPS +x = patient left.
+  function setCandidate(i, side) {
     const c = F.cands[i], red = F.red, { nx, ny, nz } = red, n = red.hu.length;
     const mask = new Uint8Array(n); for (let v = 0; v < n; v++) if (F.labels[v] === c.label) mask[v] = 1;
     const a = c.ax.clone();
-    let e2 = c.tibia ? c.C.clone().sub(c.tibia.C) : V(1, 0, 0);
+    let e2 = c.tibia ? c.C.clone().sub(c.tibia.C) : V((side || (c.C.x > 0 ? 'L' : 'R')) === 'L' ? 1 : -1, 0, 0);
     e2.sub(a.clone().multiplyScalar(e2.dot(a))); if (e2.lengthSq() < 1e-6) e2 = V(0, 1, 0).sub(a.clone().multiplyScalar(a.y)); e2.normalize();
     const e3 = V().crossVectors(a, e2);
     let smin = Infinity, smax = -Infinity; const pts = [];
@@ -208,6 +218,42 @@ window.Fibula = (function () {
   const onAxis = s => { const o = offAt(s); return toFib(s, o[0], o[1]); };
   const dirFib = v => { const [a, b, c] = F.c.FA; return a.clone().multiplyScalar(v.x).add(b.clone().multiplyScalar(v.y)).add(c.clone().multiplyScalar(v.z)).normalize(); };
   const fibBone = q => St.boneAtIn(F.red, F.c.Fm, q);
+
+  // ---------- donor side, anatomical directions and roll ----------
+  // Donor leg and how it is known: 'manual' (chosen in the plan), 'tibia' (the fibula lies lateral to the tibia),
+  // 'guess' (no tibia in the scan: the scanner x of the fibula, which is not reliable; the checks ask for the side).
+  function legSide() {
+    const cand = F && F.c ? F.cands[F.c.i] : null, P0 = S.fib && S.fib.plan;
+    const fromTibia = cand && cand.tibia ? (cand.C.x > cand.tibia.C.x ? 'L' : 'R') : null;
+    if (P0 && (P0.side === 'L' || P0.side === 'R')) return { side: P0.side, how: 'manual', tibia: fromTibia };
+    if (fromTibia) return { side: fromTibia, how: 'tibia', tibia: fromTibia };
+    return { side: F && F.c && F.c.FC.x > 0 ? 'L' : 'R', how: 'guess', tibia: null };
+  }
+  // world directions across the fibula axis: lateral (the face the plate and the guide go on) and the pedicle side
+  // (posteromedial, where the peroneal vessels run; as in web/ves.js). LPS: +x patient left, +y posterior.
+  function anatDirs() {
+    const a = F.c.FA[0], perp = v => v.sub(a.clone().multiplyScalar(v.dot(a))).normalize();
+    const lat = perp(V(legSide().side === 'L' ? 1 : -1, 0, 0)), post = perp(V(0, 1, 0));
+    return { lat, ped: post.sub(lat).normalize() };
+  }
+  // centre of the mandible (planning bone + resected piece), cached per bone mask; the neo-mandible's outer (buccal)
+  // side at a segment is horizontally away from it
+  let arcKey = null, arcC = null;
+  function archCentre() {
+    if (!S.mask || !S.red) return null;
+    if (arcKey === S.mask) return arcC;
+    const r = S.red; let sx = 0, sy = 0, sz = 0, cnt = 0;
+    for (let k = 0; k < r.nz; k += 2) for (let j = 0; j < r.ny; j += 2) for (let i = 0; i < r.nx; i += 2) { const v = i + r.nx * (j + r.ny * k); if (S.mask[v] || (S.resMask && S.resMask[v])) { const w = G.worldOf(r, i, j, k); sx += w[0]; sy += w[1]; sz += w[2]; cnt++; } }
+    arcKey = S.mask; arcC = cnt ? V(sx / cnt, sy / cnt, sz / cnt) : null;
+    return arcC;
+  }
+  // buccal direction across a segment from p0 to p1 along x; null when the segment passes over the centre (a straight
+  // bar) and no side is outer
+  function buccal(x, p0, p1) {
+    const C = archCentre(); if (!C) return null;
+    const o = p0.clone().lerp(p1, 0.5).sub(C); o.z = 0; o.sub(x.clone().multiplyScalar(o.dot(x)));
+    return o.length() > 3 ? o.normalize() : null;
+  }
 
   // ---------- defect between the first and last mandible cut ----------
   function defect() {
@@ -335,14 +381,27 @@ window.Fibula = (function () {
       normals.push(nrm.normalize());
     }
     const segs = [], FR = F.c.FR, tilt = v => Math.hypot(v.y, v.z) / Math.max(Math.abs(v.x), 1e-3);
+    // Space between two segments on the fibula: both saw slots (each slot lies outside its graft face) and a bone bridge
+    // of at least wedgeBridge mm between them over the whole section (radius FR), so the two cuts never meet in the
+    // bone and the guide keeps a wall between its two slots. Tilted cuts close in by FR·tan(angle) at the section edge.
+    const R = rules(), between = (pe, n0) => 2 * slotOf(P0) + R.wedgeBridge + FR * (tilt(pe) + tilt(n0));
+    // Roll: with rollAuto each segment is turned about its axis so the fibula's lateral face (plate and guide side) faces
+    // buccally on the neo-mandible, which puts the posteromedial pedicle lingually. In the graft basis (x, b, z) a fibula
+    // vector v lands on (v·a) x + (v·e2) b + (v·e3) z, and rolling by φ turns its (b, z) part by φ.
+    const [, fe2, fe3] = F.c.FA, an = anatDirs();
     let cursor = F.c.smin + P0.distal, prevEnd = null;
     for (let i = 0; i < n; i++) {
-      const x = d[i], b = D.up.clone().sub(x.clone().multiplyScalar(D.up.dot(x))).normalize().applyAxisAngle(x, deg(P0.roll[i] || 0)), z = V().crossVectors(x, b);
-      const loc = v => V(v.dot(x), v.dot(b), v.dot(z)), n0 = loc(normals[i]), n1 = loc(normals[i + 1]);
-      if (prevEnd) cursor += slotOf(P0) + 1 + FR * (tilt(prevEnd) + tilt(n0));
+      const x = d[i], b0 = D.up.clone().sub(x.clone().multiplyScalar(D.up.dot(x))).normalize(), out = buccal(x, P[i], P[i + 1]);
+      if (P0.rollAuto && out) {
+        const z0 = V().crossVectors(x, b0), ph = r2d(Math.atan2(out.dot(z0), out.dot(b0)) - Math.atan2(an.lat.dot(fe3), an.lat.dot(fe2)));
+        P0.roll[i] = Math.round(((ph % 360) + 540) % 360 - 180);
+      }
+      const b = b0.applyAxisAngle(x, deg(P0.roll[i] || 0)), z = V().crossVectors(x, b);
+      const loc = v => V(v.dot(x), v.dot(b), v.dot(z)), n0 = loc(normals[i]), n1 = loc(normals[i + 1]), img = v => b.clone().multiplyScalar(v.dot(fe2)).addScaledVector(z, v.dot(fe3)).normalize();
+      if (prevEnd) cursor += between(prevEnd, n0);
       const L = P[i + 1].distanceTo(P[i]);
       segs.push({ i, L, s0: cursor, s1: cursor + L, x, b, z, n0, n1, P0: P[i], P1: P[i + 1], N0: normals[i], N1: normals[i + 1], barrel: 0,
-        a0: r2d(Math.acos(Math.min(1, Math.abs(n0.x)))), a1: r2d(Math.acos(Math.min(1, Math.abs(n1.x)))) });
+        a0: r2d(Math.acos(Math.min(1, Math.abs(n0.x)))), a1: r2d(Math.acos(Math.min(1, Math.abs(n1.x)))), out, lat: img(an.lat), ped: img(an.ped) });
       cursor += L; prevEnd = n1;
     }
     // double barrel: one straight strut dblH above the lower one, cut to the same mandible planes; a short piece
@@ -351,13 +410,13 @@ window.Fibula = (function () {
       const h = dblH(), U0 = P[0].clone().addScaledVector(D.inPlane(D.NA), h), U1 = P[n].clone().addScaledVector(D.inPlane(D.NB), h);
       const x = U1.clone().sub(U0).normalize(), b = D.up.clone().sub(x.clone().multiplyScalar(D.up.dot(x))).normalize(), z = V().crossVectors(x, b);
       const loc = v => V(v.dot(x), v.dot(b), v.dot(z)), n0 = loc(D.NA), n1 = loc(D.NB), L = U0.distanceTo(U1);
-      cursor += slotOf(P0) + 1 + FR * (tilt(prevEnd) + tilt(n0)) + DBL_GAP;
+      cursor += between(prevEnd, n0) + DBL_GAP;
       segs.push({ i: n, L, s0: cursor, s1: cursor + L, x, b, z, n0, n1, P0: U0, P1: U1, N0: D.NA, N1: D.NB, barrel: 1,
         a0: r2d(Math.acos(Math.min(1, Math.abs(n0.x)))), a1: r2d(Math.acos(Math.min(1, Math.abs(n1.x)))) });
       cursor += L;
     }
     // fibula -> mandible transform of each segment (the graft meshes and graftBone use it)
-    const [fa, fe2, fe3] = F.c.FA, FT = new THREE.Matrix4().makeBasis(fa, fe2, fe3).transpose(), FC = F.c.FC;
+    const [fa] = F.c.FA, FT = new THREE.Matrix4().makeBasis(fa, fe2, fe3).transpose(), FC = F.c.FC;
     segs.forEach(g => {
       const o = offAt((g.s0 + g.s1) / 2);
       g.M = new THREE.Matrix4().makeTranslation(g.P0.x, g.P0.y, g.P0.z).multiply(new THREE.Matrix4().makeBasis(g.x, g.b, g.z))
@@ -369,6 +428,7 @@ window.Fibula = (function () {
     return { k, P, normals, segs, dev: deviation(D, k), proxLeft: F.c.smax - cursor, used: cursor - (F.c.smin + P0.distal), D };
   }
   const plan = () => S.fib.plan;
+  const planSide = () => (S.fib && S.fib.plan && S.fib.plan.side) || null;
   const dblH = () => plan().dblH || Math.round((2 * F.c.FR + 1) * 2) / 2;
   // is world point q (mandible side) inside graft segment i?
   function graftBone(i, q) {
@@ -487,8 +547,10 @@ window.Fibula = (function () {
   // body (entry inside the body width, no deeper below the bone's top than the wrap), the drill enters bone and stays
   // in it for SCREW_MIN_DEPTH mm, the sleeve keeps SCREW_SLOT_GAP mm from every saw slot along the whole hole, and a
   // hole SCREW_CUT_GAP mm or more from the cut scores better (bone bridge between the hole and the osteotomy).
-  const SCREW_MIN_DEPTH = 4, SCREW_SLOT_GAP = 2, SCREW_CUT_GAP = 5, SCREW_CUT_WARN = 3, SLOT_REACH = 45, SCREW_TIGHT_GAP = 0.5;
-  function screwSite(c, f, pls, body, minGap = SCREW_SLOT_GAP) {
+  // (SCREW_MIN_DEPTH, SCREW_SLOT_GAP, SCREW_CUT_GAP: the clinical profile's screwMinDepth, screwSlotGap, screwCutGap)
+  const SLOT_REACH = 45, SCREW_TIGHT_GAP = 0.5;
+  function screwSite(c, f, pls, body, minGap = rules().screwSlotGap) {
+    const { screwMinDepth: SCREW_MIN_DEPTH, screwCutGap: SCREW_CUT_GAP } = rules();
     const st = screwAt(c, f); if (!st.entry) return null;
     const { entry, dir } = st, n = F.c.FA[1], v = V().crossVectors(n, F.c.FA[0]).normalize(), cw = body.clear + body.wall;
     // the sleeve on the body: across the guide inside its width; below the top of the bone at most the wrap
@@ -514,9 +576,9 @@ window.Fibula = (function () {
   let autoKey = '', autoVal = null;
   function autoScrews(c) {
     const body = guideBody(c), pls = slotPlanes(c);
-    const key = JSON.stringify([F.c.i, body.W, body.wrap, body.wall, body.clear, pls.map(p => [p.pSlot.toArray(), p.N.toArray(), p.w].flat().map(x => Math.round(x * 100)))]);
+    const key = JSON.stringify([F.c.i, rules(), body.W, body.wrap, body.wall, body.clear, pls.map(p => [p.pSlot.toArray(), p.N.toArray(), p.w].flat().map(x => Math.round(x * 100)))]);
     if (key === autoKey && autoVal) return autoVal.map(f => Object.assign({}, f));
-    const lower = c.segs, want = lower.map(g => (g.L >= STUMP_MIN ? 2 : 1));
+    const lower = c.segs, STUMP_MIN = rules().stumpMin, want = lower.map(g => (g.L >= STUMP_MIN ? 2 : 1));
     for (let tot = want.reduce((a, b) => a + b, 0); tot < 3; tot++) { const i = lower.map((g, k) => [g.L / (want[k] + 1), k]).sort((a, b) => b[0] - a[0])[0][1]; want[i]++; }
     const out = [], segSites = [], picks = [];
     // the next screw on segment i: best score, kept sep mm from the ones already there, a little bonus for spreading out
@@ -669,10 +731,17 @@ window.Fibula = (function () {
   // ---------- checks, UI ----------
   function checks() {
     if (!active()) return [];
-    const out = [], P0 = plan(), c = last;
+    const out = [], P0 = plan(), c = last, RL = rules();
+    const { segMin: MIN_LEN, segErr: SEG_ERR, stumpMin: STUMP_MIN, devWarn: DEV_WARN, angleWarn: ANGLE_WARN, distalMin: DISTAL_MIN, proxKeep: PROX_KEEP,
+      screwMinDepth: SCREW_MIN_DEPTH, screwSlotGap: SCREW_SLOT_GAP, screwCutGap: SCREW_CUT_GAP, screwCutWarn: SCREW_CUT_WARN } = RL;
     // the fibula itself: thick = tibia / whole lower leg, not a fibula
     if (F.c && F.c.FR > FIB_R[1]) out.push(['warn', 'Uyarı', `Seçili fibula yarıçapı ${fmt(F.c.FR, 1)} mm (en çok ${FIB_R[1]} mm beklenir); tibia ya da ayak kemikleri fibulaya karışmış olabilir. Başka bir aday seçin ya da BT'yi kontrol edin.`, 'fib']);
     if (F.warn) F.warn.forEach(t => out.push(['warn', 'Uyarı', t, 'fib']));
+    // donor side: the roll, the pedicle side and the face the guide sits on all follow it
+    const ls = legSide();
+    if (ls.how === 'guess') out.push(['crit', 'Kritik', xl(ls.side === 'L' ? 'Tibia bulunamadı; bacak tarafı BT konumundan tahmin edildi (sol). Fibulanın dönüşü, pedikül tarafı ve guide\'ın oturduğu yüz buna bağlı; Kaynak bölümünde bacak tarafını seçin.'
+      : 'Tibia bulunamadı; bacak tarafı BT konumundan tahmin edildi (sağ). Fibulanın dönüşü, pedikül tarafı ve guide\'ın oturduğu yüz buna bağlı; Kaynak bölümünde bacak tarafını seçin.'), 'fib']);
+    else if (ls.how === 'manual' && ls.tibia && ls.tibia !== ls.side) out.push(['warn', 'Uyarı', xl(ls.side === 'L' ? 'Bacak tarafı sol seçili, ama fibula tibianın sağında (sağ bacak). Seçimi kontrol edin.' : 'Bacak tarafı sağ seçili, ama fibula tibianın solunda (sol bacak). Seçimi kontrol edin.'), 'fib']);
     if (!c) {
       const miss = St.cutMisses ? St.cutMisses() : [];
       if (miss.length) return out.concat([['crit', 'Kritik', `Fibula: kesi ${miss.map(i => i + 1).join(' ve ')} kemiği kesmediği için defekt hattı kurulamıyor; kesiyi kemiğin üstüne taşıyın.`]]);
@@ -700,6 +769,13 @@ window.Fibula = (function () {
     c.segs.forEach(g => [['başlangıç', g.a0], ['bitiş', g.a1]].forEach(([w, a]) => { if (a > ANGLE_WARN) out.push(['warn', 'Uyarı', xl(`Fibula segmenti ${g.i + 1} ${w} kesisi ${fmt(a)}°; ${ANGLE_WARN}° üstü temas yüzeyini azaltır.`)]); }));
     if (c.dev > DEV_WARN) out.push(['warn', 'Uyarı', xl(`Greftler defekt hattından ${fmt(c.dev)} mm sapıyor (eşik ${DEV_WARN} mm). Segment ekleyin ya da "Kesileri öner"i kullanın.`)]);
     if (P0.distal < DISTAL_MIN) out.push(['crit', 'Kritik', xl(`Distal korunan fibula ${fmt(P0.distal, 0)} mm; ayak bileği stabilitesi için en az ${DISTAL_MIN} mm.`)]);
+    // pedicle side on the neo-mandible: lingual or inferior, never buccal (under the skin and the plate) and not towards
+    // the crest (implants, occlusion). Only where the segment has an outer side (a curved arch).
+    c.segs.filter(g => !g.barrel && g.out && g.ped).forEach(g => {
+      const bu = r2d(Math.acos(Math.max(-1, Math.min(1, g.ped.dot(g.out))))), upv = V(0, 0, 1).sub(g.x.clone().multiplyScalar(g.x.z)).normalize(), upA = r2d(Math.acos(Math.max(-1, Math.min(1, g.ped.dot(upv)))));
+      if (bu < 60) out.push(['warn', 'Uyarı', xl(`Fibula segmenti ${g.i + 1}: pedikül tarafı bukkala bakıyor (bukkal yönle ${fmt(bu, 0)}°). Pedikül lingual ya da alt tarafta olmalı; segment dönüşünü kontrol edin.`), 'fib']);
+      else if (upA < 60) out.push(['warn', 'Uyarı', xl(`Fibula segmenti ${g.i + 1}: pedikül kret tarafına (yukarı) bakıyor (${fmt(upA, 0)}°); implant ve oklüzyon tarafında kalır. Diğer bacağın fibulası ya da dönüşün değiştirilmesi düşünülebilir.`), 'fib']);
+    });
     if (c.proxLeft < PROX_KEEP) out.push(['crit', 'Kritik', xl(`Fibula yetmiyor: proksimalde ${fmt(Math.max(c.proxLeft, 0), 0)} mm kalıyor, en az ${PROX_KEEP} mm gerekli.`)]);
     const R = S.fib.guide && S.fib.guide.result;
     if (!R && !building && S.fib.guideFail) out.push(['warn', 'Uyarı', 'Fibula guide\'ı üretilemedi; fibula yüzeyi bulunamadı.']);
@@ -734,6 +810,31 @@ window.Fibula = (function () {
   }
   const active = () => !!(F && F.c && S.fib && S.fib.plan);
   const approved = () => active() && !!plan().ok && plan().sig === sig();
+  // clinical threshold profile: one number per rule; a value equal to the default is not stored
+  const RULE_UI = [['segErr', 'Segment boyu, kritik sınır', 'mm'], ['segMin', 'Segment boyu, önerilen en az', 'mm'], ['stumpMin', 'Güdük segmenti, önerilen en az', 'mm'],
+    ['devWarn', 'Defekt hattından sapma, uyarı', 'mm'], ['angleWarn', 'Segment uç kesisi açısı, uyarı', '°'], ['distalMin', 'Distal korunan fibula, en az', 'mm'], ['proxKeep', 'Proksimalde kalan fibula, en az', 'mm'],
+    ['wedgeBridge', 'Segmentler arası kemik köprüsü', 'mm'], ['screwMinDepth', 'Vida deliğinde en az kemik', 'mm'], ['screwSlotGap', 'Vida kovanı ile yuva arası, en az', 'mm'],
+    ['screwCutGap', 'Vida deliği ile kesi arası, önerilen', 'mm'], ['screwCutWarn', 'Vida deliği ile kesi arası, uyarı sınırı', 'mm'], ['gapWarn', 'Osteotomi aralığı, uyarı', 'mm'], ['gapErr', 'Osteotomi aralığı, kritik', 'mm'],
+    ['wedgeWarn', 'Kapama kaması, uyarı', '°'], ['axisInfo', 'Greft ile güdük ekseni arası açı, bilgi', '°'], ['overlap', 'Kemik teması, greft kesitine oranı en az', ''], ['area', 'Temas alanı, en az', 'mm²']];
+  function setRule(k, v) {
+    const P0 = plan(), r = Object.assign({}, P0.rules || {}); r[k] = v;
+    const c = cleanRules(r); if (c) P0.rules = c; else delete P0.rules;
+    guideKey = ''; edited(false, true);
+  }
+  let rulesBox = null;
+  function renderRules() {
+    const box = $('fibRulesBox'); if (!box) return;
+    if (rulesBox !== box) {
+      rulesBox = box;
+      box.innerHTML = RULE_UI.map(([k, t, u]) => `<div class="ctl"><div class="ctl-row"><label for="fru_${k}">${t}</label><span><input type="number" id="fru_${k}" min="${RULE_RANGE[k][0]}" max="${RULE_RANGE[k][1]}" step="${RULE_RANGE[k][2]}" style="width:5.5em"> ${u}</span></div></div>`).join('')
+        + `<div class="btns"><button id="fibRulesReset">Varsayılan eşiklere dön</button></div><p class="hint more">Eşiklerin çoğu literatürde kesin sayısı olmayan mühendislik varsayımlarıdır; klinik ekip kendi değerlerini girer. Değiştirilen eşikler planla kaydedilir ve onayı etkiler.</p>`;
+      RULE_UI.forEach(([k]) => $('fru_' + k).addEventListener('change', e => { if (active()) setRule(k, +e.target.value); }));
+      $('fibRulesReset').addEventListener('click', () => { if (!active() || !plan().rules) return; delete plan().rules; guideKey = ''; edited(false, true); });
+    }
+    const R = rules(), own = plan().rules || {};
+    RULE_UI.forEach(([k]) => { const el = $('fru_' + k); if (document.activeElement !== el) el.value = R[k]; el.classList.toggle('changed', k in own); });
+    $('fibRulesReset').disabled = !plan().rules;
+  }
   function syncUI() {
     if (!active()) return;
     const P0 = plan(), D = last && last.D, Ld = D ? D.L : 0;
@@ -750,13 +851,17 @@ window.Fibula = (function () {
     $('fibDistal').value = P0.distal; $('fibDistalO').textContent = fmt(P0.distal, 0) + ' mm';
     $('fibVOff').value = P0.vOff || 0; $('fibVOffO').textContent = fmt(P0.vOff || 0) + ' mm';
     $('fibMirror').checked = !!P0.mirror;
+    $('fibRollAuto').checked = !!P0.rollAuto;
+    const ls = legSide(); $('fibSide').value = P0.side || '';
+    $('fibSideMsg').textContent = ls.how === 'manual' ? '' : ls.how === 'tibia' ? (ls.side === 'L' ? 'Tibiaya göre sol bacak.' : 'Tibiaya göre sağ bacak.') : (ls.side === 'L' ? 'Tibia yok; sol bacak tahmini, doğrulayın.' : 'Tibia yok; sağ bacak tahmini, doğrulayın.');
+    renderRules();
     $('fibDbl').checked = !!P0.dbl; $('fibDblHBox').hidden = !P0.dbl; $('fibDblH').value = dblH(); $('fibDblHO').textContent = fmt(dblH()) + ' mm';
     P0.knots.forEach((_, i) => {
       const el = $('fk' + i);
       el.addEventListener('input', () => { const lo = (i ? P0.knots[i - 1] : 0) + 0.08, hi = (i < P0.knots.length - 1 ? P0.knots[i + 1] : 1) - 0.08; P0.knots[i] = Math.min(hi, Math.max(lo, +el.value)); edited(true); });
       el.addEventListener('change', () => edited(false, true));
     });
-    P0.roll.forEach((_, i) => { const el = $('fr' + i); el.addEventListener('input', () => { P0.roll[i] = +el.value; edited(true); }); el.addEventListener('change', () => edited(false, true)); });
+    P0.roll.forEach((_, i) => { const el = $('fr' + i); el.addEventListener('input', () => { P0.roll[i] = +el.value; if (P0.rollAuto) { P0.rollAuto = 0; $('fibRollAuto').checked = false; } edited(true); }); el.addEventListener('change', () => edited(false, true)); });
   }
   function renderStep() {
     if (!active()) { $('tag6').hidden = true; return; }
@@ -797,8 +902,8 @@ window.Fibula = (function () {
   }
   function optimizeKnots() {
     const P0 = plan(); if (P0.n < 2 || !last) return;
-    // short segments are penalised: every segment under MIN_LEN + 1, the two at the stumps under STUMP_MIN + 1
-    const D = last.D, ns = P0.n, cost = k => { const full = [0, ...k.map(f => f * D.L), D.L]; let pen = 0; for (let i = 0; i < full.length - 1; i++) pen += Math.max(0, (i === 0 || i === ns - 1 ? STUMP_MIN : MIN_LEN) + 1 - (full[i + 1] - full[i])) * 2; return deviation(D, full) + pen; };
+    // short segments are penalised: every segment under segMin + 1, the two at the stumps under stumpMin + 1
+    const { segMin: MIN_LEN, stumpMin: STUMP_MIN } = rules(), D = last.D, ns = P0.n, cost = k => { const full = [0, ...k.map(f => f * D.L), D.L]; let pen = 0; for (let i = 0; i < full.length - 1; i++) pen += Math.max(0, (i === 0 || i === ns - 1 ? STUMP_MIN : MIN_LEN) + 1 - (full[i + 1] - full[i])) * 2; return deviation(D, full) + pen; };
     let k = P0.knots.slice(), best = cost(k);
     for (let step = 0.08; step >= 0.004; step /= 2) for (let pass = 0; pass < 12; pass++) {
       let moved = false;
@@ -837,7 +942,19 @@ window.Fibula = (function () {
     q.yaw = ang(q.yaw, n + 1); q.pitch = ang(q.pitch, n + 1); q.roll = ang(q.roll, n);
     const kn = Array.isArray(q.knots) && q.knots.length === n - 1 ? q.knots.map(x => cl(x, 0.05, 0.95, 0.5)) : null;
     q.knots = kn && kn.every((x, i) => i === 0 || x > kn[i - 1]) ? kn : Array.from({ length: n - 1 }, (_, i) => (i + 1) / n);
+    // fields added later are normalised only when present: a plan saved without them keeps its approval signature
+    // (no side = from the tibia; no rollAuto = the stored rolls, as before)
+    if ('side' in q) q.side = q.side === 'L' || q.side === 'R' ? q.side : null;
+    if ('rollAuto' in q) q.rollAuto = q.rollAuto ? 1 : 0;
+    if ('rules' in q) { const r = cleanRules(q.rules); if (r) q.rules = r; else delete q.rules; }
     return { plan: q, warn };
+  }
+  // profile overrides: known keys inside their range, only those that differ from the default; null when none is left
+  function cleanRules(x) {
+    if (!x || typeof x !== 'object') return null;
+    const o = {};
+    for (const k in RULES) { if (!(k in x)) continue; const v = Number(x[k]), [a, b] = RULE_RANGE[k]; if (!Number.isFinite(v)) continue; const c = Math.max(a, Math.min(b, v)); if (Math.abs(c - RULES[k]) > 1e-9) o[k] = c; }
+    return Object.keys(o).length ? o : null;
   }
   async function apply(p) {
     if (!p) { if (S.fib) unload(); return; }
@@ -849,7 +966,7 @@ window.Fibula = (function () {
     }
     if (p.legSplit && !F.split && Array.isArray(p.legSplit.f) && Array.isArray(p.legSplit.t)) { const c = splitLeg(V(...p.legSplit.f), V(...p.legSplit.t)); if (c) F.cands.push(c); }
     let best = 0, bd = Infinity; F.cands.forEach((c, i) => { const d = c.C.distanceTo(V(...(p.cand || [0, 0, 0]))); if (d < bd) { bd = d; best = i; } });
-    if (!F.c || F.c.i !== best) setCandidate(best);
+    if (!F.c || F.c.i !== best || (!F.cands[best].tibia && p.side && F.c.FA[1].x * (p.side === 'L' ? 1 : -1) < 0)) setCandidate(best, p.side);
     $('fibCand').value = best;
     S.fib = { plan: St.clone(p), guide: S.fib && S.fib.plan && F.c ? S.fib.guide : null };
     // a stored plan keeps its segment count and cuts as saved; an automatic count is chosen again only when the defect changes
@@ -874,22 +991,28 @@ window.Fibula = (function () {
     files.push({ name: 'fibula_plani.json', data: JSON.stringify(summary(), null, 2) });
   }
   function summary() {
-    const P0 = plan(), c = last;
-    return { fibula_serisi: F.label, segment_sayisi: P0.n, testere_payi_mm: P0.kerf, yuva_genisligi_mm: slotOf(P0), distal_korunan_mm: P0.distal,
-      segmentler: c ? c.segs.map(g => ({ no: g.i + 1, kat: g.barrel ? 'üst' : 'alt', boy_mm: +g.L.toFixed(1), distal_uctan_mm: +(g.s0 - F.c.smin).toFixed(1), kesi_acilari_deg: [+g.a0.toFixed(1), +g.a1.toFixed(1)], rotasyon_deg: P0.roll[g.i] || 0, kret_farki_mm: +g.crest.toFixed(1) })) : [],
+    const P0 = plan(), c = last, ls = legSide();
+    return { fibula_serisi: F.label, bacak_tarafi: ls.side === 'L' ? 'sol' : 'sağ', bacak_tarafi_kaynagi: { manual: 'elle seçildi', tibia: 'tibiaya göre', guess: 'tahmin (doğrulanmadı)' }[ls.how],
+      donus: P0.rollAuto ? 'otomatik (lateral yüz bukkala, pedikül linguale)' : 'elle', segmentler_arasi_kemik_koprusu_mm: rules().wedgeBridge, klinik_esik_degisiklikleri: P0.rules || null, segment_sayisi: P0.n, testere_payi_mm: P0.kerf, yuva_genisligi_mm: slotOf(P0), distal_korunan_mm: P0.distal,
+      segmentler: c ? c.segs.map(g => ({ no: g.i + 1, kat: g.barrel ? 'üst' : 'alt', boy_mm: +g.L.toFixed(1), distal_uctan_mm: +(g.s0 - F.c.smin).toFixed(1), kesi_acilari_deg: [+g.a0.toFixed(1), +g.a1.toFixed(1)], rotasyon_deg: g.barrel ? 0 : P0.roll[g.i] || 0, pedikul_yonu: g.ped && g.out ? pedTx(g) : null, kret_farki_mm: +g.crest.toFixed(1) })) : [],
       dikey_kayma_mm: P0.vOff || 0, cift_namlu: P0.dbl ? { namlu_arasi_mm: dblH() } : null,
       sapma_mm: c ? +c.dev.toFixed(2) : null, proksimalde_kalan_mm: c ? +c.proxLeft.toFixed(0) : null, onay: approved() ? { cerrah: P0.by, zaman: P0.at } : null };
+  }
+  // pedicle side on the neo-mandible in words: the larger of its buccal-lingual and vertical parts
+  function pedTx(g) {
+    const upv = V(0, 0, 1).sub(g.x.clone().multiplyScalar(g.x.z)).normalize(), bl = g.ped.dot(g.out), ud = g.ped.dot(upv);
+    return Math.abs(bl) >= Math.abs(ud) ? (bl > 0 ? 'bukkal' : 'lingual') : (ud > 0 ? 'üst (kret)' : 'alt');
   }
   function reportHTML() {
     if (!active()) return '';
     const s = summary(), esc = t => String(t).replace(/[&<>]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[ch]);
-    return `<h2>Fibula rekonstrüksiyonu</h2><p>${esc(F.label)} · ${xl(`${s.segment_sayisi} segment · testere payı ${fmt(s.testere_payi_mm)} mm · distal korunan ${fmt(s.distal_korunan_mm, 0)} mm · proksimalde kalan ${s.proksimalde_kalan_mm ?? '–'} mm`)} · ${approved() ? `${xl('onaylı')} (${esc(plan().by || '')})` : xl('onay bekliyor')}</p>
-<table><tr><th>Segment</th><th>Boy</th><th>Distal uçtan</th><th>Uç açıları</th><th>Rotasyon</th></tr>${s.segmentler.map(g => `<tr><td>${g.no}</td><td>${fmt(g.boy_mm)} mm</td><td>${fmt(g.distal_uctan_mm)} mm</td><td>${fmt(g.kesi_acilari_deg[0])}° / ${fmt(g.kesi_acilari_deg[1])}°</td><td>${g.rotasyon_deg}°</td></tr>`).join('')}</table>`;
+    return `<h2>Fibula rekonstrüksiyonu</h2><p>${esc(F.label)} · ${xl(s.bacak_tarafi + ' bacak')} (${xl(s.bacak_tarafi_kaynagi)}) · ${xl(`${s.segment_sayisi} segment · testere payı ${fmt(s.testere_payi_mm)} mm · distal korunan ${fmt(s.distal_korunan_mm, 0)} mm · proksimalde kalan ${s.proksimalde_kalan_mm ?? '–'} mm`)} · ${approved() ? `${xl('onaylı')} (${esc(plan().by || '')})` : xl('onay bekliyor')}</p>
+<table><tr><th>Segment</th><th>Boy</th><th>Distal uçtan</th><th>Uç açıları</th><th>Rotasyon</th><th>Pedikül</th></tr>${s.segmentler.map(g => `<tr><td>${g.no}</td><td>${fmt(g.boy_mm)} mm</td><td>${fmt(g.distal_uctan_mm)} mm</td><td>${fmt(g.kesi_acilari_deg[0])}° / ${fmt(g.kesi_acilari_deg[1])}°</td><td>${g.rotasyon_deg}°</td><td>${g.pedikul_yonu ? xl(g.pedikul_yonu) : '–'}</td></tr>`).join('')}</table>`;
   }
   async function production(signal) {
     if (!active() || !S.fib.guide) return;
     const x = S.fib.guide.ctx;
-    const r = await St.serverGuide({ vol: F.vol, red: F.red, F: F.c.Fm, thr: THR, g: x.g, P: x.P, u: x.u, v: x.v, n: x.n, pls: x.pls, scs: x.scs, wrapProfile: S.fib.guide.result.wrapProfile }, signal);
+    const r = await St.serverGuide({ vol: F.vol, red: F.red, F: F.c.Fm, thr: THR, g: x.g, P: x.P, u: x.u, v: x.v, n: x.n, pls: x.pls, scs: x.scs, wrapProfile: S.fib.guide.result.wrapProfile, seatDir: S.fib.guide.result.seatDir }, signal);
     S.fib.prod = Object.assign(r, { key: S.fib.guide.key });
     $('prodMsg').textContent += ' ' + xl(`Fibula guide'ı: ${r.watertight ? 'su geçirmez' : 'SU GEÇİRMEZ DEĞİL'}, ${r.bodies} parça${r.bodies > 1 ? ' (BİRDEN FAZLA PARÇA)' : ''}.`);
   }
@@ -968,7 +1091,7 @@ window.Fibula = (function () {
   function useCandidate(c, extra) {
     let i = F.cands.indexOf(c); if (i < 0) { F.cands.push(c); i = F.cands.length - 1; }
     $('fibCand').innerHTML = F.cands.map((x, k) => `<option value="${k}" title="Taraf tahminidir">${x.picked ? 'Seçilen' : 'Aday ' + (k + 1)} · ${fmt(x.len, 0)} mm · Ø${fmt(2 * x.rad, 0)} · ${x.C.x > 0 ? 'sol' : 'sağ'}</option>`).join('');
-    setCandidate(i); $('fibCand').value = i;
+    setCandidate(i, planSide()); $('fibCand').value = i;
     if (active()) { const P0 = plan(); P0.cand = F.c.centroid.map(x => Math.round(x * 10) / 10); Object.assign(P0, extra || {}); guideKey = ''; edited(false, true); setView(view); }
   }
   function boneClick(q) {
@@ -1039,7 +1162,7 @@ window.Fibula = (function () {
   $('fibSample').addEventListener('click', () => start('sample'));
   $('fibDicom').addEventListener('change', e => { if (e.target.files.length) start('dicom', [...e.target.files]); e.target.value = ''; });
   $('fibFiles').addEventListener('change', e => { if (e.target.files.length) start('dicom', [...e.target.files]); e.target.value = ''; });
-  $('fibCand').addEventListener('change', e => { setCandidate(+e.target.value); plan().cand = F.c.centroid.map(x => Math.round(x * 10) / 10); guideKey = ''; edited(false, true); setView(view); });
+  $('fibCand').addEventListener('change', e => { setCandidate(+e.target.value, planSide()); plan().cand = F.c.centroid.map(x => Math.round(x * 10) / 10); guideKey = ''; edited(false, true); setView(view); });
   document.querySelectorAll('#fibN button').forEach(b => b.addEventListener('click', () => { if (!active()) return; plan().nAuto = 0; setN(+b.dataset.n); update(); optimizeKnots(); edited(false, true); }));
   $('fibOpt').addEventListener('click', () => { if (!active()) return; optimizeKnots(); edited(false, true); });
   $('fibPick').addEventListener('click', () => startMode('pick'));
@@ -1050,6 +1173,13 @@ window.Fibula = (function () {
     $(id).addEventListener('change', () => edited(false, true));
   });
   $('fibDbl').addEventListener('change', e => { if (!active()) return; plan().dbl = e.target.checked ? 1 : 0; edited(false, true); });
+  $('fibRollAuto').addEventListener('change', e => { if (!active()) return; plan().rollAuto = e.target.checked ? 1 : 0; edited(false, true); });
+  // donor side: without a tibia the guide's face (e2) follows it, so the candidate frame is rebuilt
+  $('fibSide').addEventListener('change', e => {
+    if (!active()) return; const P0 = plan(), v = e.target.value; P0.side = v === 'L' || v === 'R' ? v : null;
+    if (!F.cands[F.c.i].tibia) setCandidate(F.c.i, P0.side);
+    guideKey = ''; edited(false, true); setView(view);
+  });
   [['fibKerf', 'kerf', v => fmt(v) + ' mm'], ['fibDistal', 'distal', v => fmt(v, 0) + ' mm'], ['fibVOff', 'vOff', v => fmt(v) + ' mm'], ['fibDblH', 'dblH', v => fmt(v) + ' mm']].forEach(([id, key, f]) => {
     $(id).addEventListener('input', e => { plan()[key] = +e.target.value; $(id + 'O').textContent = f(+e.target.value); if (key === 'kerf') { $('fibSlot').value = slotOf(plan()); $('fibSlotO').textContent = fmt(slotOf(plan()), 2) + ' mm'; } edited(true); });
     $(id).addEventListener('change', () => edited(false, true));
@@ -1075,5 +1205,5 @@ window.Fibula = (function () {
   function guideEdited() { guideKey = ''; scheduleGuide(); renderStep(); St.emit('changed'); }
   const guideInfo = () => (active() && last ? { auto: guideAuto(last), body: guideBody(last), screws: guideScrews(last), segs: last.segs, FR: F.c.FR } : null);
   return { setActive, activePane: () => activePane, summary: () => (active() ? summary() : null), view: () => view, active, approved, checks, apply, exportFiles, reportHTML, production, setView, state: () => ({ F, last, view }),
-    graftBone, fibBone: q => (F && F.c ? fibBone(q) : false), guideInfo, guideEdited, plan: () => (active() ? plan() : null), building: () => building, segmentChoice, lensOk, choice: () => (S.fib && S.fib.choice) || null, defect, MIN_LEN, MAX_N, DEV_WARN, SEG_ERR, STUMP_MIN, DEV_TIE, slotOf: () => (active() ? slotOf(plan()) : null) };
+    graftBone, fibBone: q => (F && F.c ? fibBone(q) : false), guideInfo, guideEdited, plan: () => (active() ? plan() : null), rules, RULES, legSide: () => (F && F.c ? legSide() : null), building: () => building, segmentChoice, lensOk, choice: () => (S.fib && S.fib.choice) || null, defect, MIN_LEN, MAX_N, DEV_WARN, SEG_ERR, STUMP_MIN, DEV_TIE, slotOf: () => (active() ? slotOf(plan()) : null) };
 })();

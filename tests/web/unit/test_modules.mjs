@@ -171,6 +171,82 @@ test('fguide: adding a screw copies the selected one 8 mm further along (clamped
   assert.equal(p.fsc.length, n0 + 1); near(p.fsc.at(-1).off, Math.min(25, (p.fsc[0].off || 0) + 8), 1e-12);
 });
 
+// ---------- fibula: donor side, roll, pedicle, clinical profile, bone bridge between segments ----------
+test('fibula side: the synthetic leg (fibula at +x of the tibia) is a left leg, known from the tibia; a contradicting hand choice is warned', async () => {
+  const ls = W.Fibula.legSide(); assert.equal(ls.side, 'L'); assert.equal(ls.how, 'tibia');
+  assert.ok(!W.Fibula.checks().some(c => /bacak tarafı/i.test(c[2])), 'no side message when the tibia gives it');
+  fire('fibSide', 'change', 'R'); assert.equal(W.Fibula.plan().side, 'R'); assert.equal(W.Fibula.legSide().how, 'manual');
+  assert.ok(W.Fibula.checks().some(c => c[0] === 'warn' && /Bacak tarafı sağ seçili, ama fibula tibianın solunda/.test(c[2])));
+  fire('fibSide', 'change', ''); assert.equal(W.Fibula.plan().side, null); assert.equal(W.Fibula.legSide().how, 'tibia');
+});
+test('fibula side: without a tibia the side is a guess (critical until chosen) and the guide face e2 is the lateral side of the chosen leg', async () => {
+  const st = W.Fibula.state(), cand = st.F.cands[st.F.c.i], tib = cand.tibia;
+  cand.tibia = null;
+  try {
+    assert.equal(W.Fibula.legSide().how, 'guess');
+    assert.ok(W.Fibula.checks().some(c => c[0] === 'crit' && /Tibia bulunamadı/.test(c[2])), 'critical while the side is a guess');
+    fire('fibSide', 'change', 'R');
+    assert.ok(!W.Fibula.checks().some(c => /Tibia bulunamadı/.test(c[2])), 'chosen side clears it');
+    assert.ok(W.Fibula.state().F.c.FA[1].x < -0.9, 'right leg: guide face towards patient right (-x)');
+    fire('fibSide', 'change', 'L');
+    assert.ok(W.Fibula.state().F.c.FA[1].x > 0.9, 'left leg: towards +x');
+  } finally { cand.tibia = tib; fire('fibSide', 'change', ''); }
+});
+test('fibula roll: automatic roll turns the lateral face buccal (pedicle lingual); a hand roll that puts the pedicle buccal is warned', async () => {
+  // the straight bar has no outer side; a block added behind it moves the mandible centre so +y-side is lingual, -y buccal
+  const keepMask = S.mask, m = keepMask.slice(), r = S.red;
+  for (let k = 0; k < r.nz; k++) for (let j = 0; j < r.ny; j++) for (let i = 0; i < r.nx; i++) { const w = G.worldOf(r, i, j, k); if (w[1] > 10 && w[1] < 19 && Math.abs(w[0]) < 40 && w[2] < 0 && w[2] > -14) m[i + r.nx * (j + r.ny * k)] = 1; }
+  S.mask = m;
+  try {
+    const p = W.Fibula.plan(); $('fibRollAuto').checked = true; fire('fibRollAuto', 'change');
+    assert.equal(p.rollAuto, 1);
+    const segs = W.Fibula.state().last.segs.filter(g => !g.barrel);
+    segs.forEach(g => {
+      assert.ok(g.out && g.out.y < -0.9, 'buccal is -y: ' + (g.out && g.out.toArray()));
+      assert.ok(g.lat.dot(g.out) > 0.99, 'lateral face buccal: ' + g.lat.dot(g.out));
+      assert.ok(g.ped.dot(g.out) < -0.5, 'pedicle lingual: ' + g.ped.dot(g.out));
+    });
+    assert.ok(!W.Fibula.checks().some(c => /pedikül tarafı bukkala/.test(c[2])));
+    // a hand roll of 180° from the suggestion: the slider turns the suggestion off and the pedicle faces buccally
+    W.Fibula.syncUI && W.Fibula.syncUI();
+    const r0 = p.roll[0], el = $('fr0'); el.value = String(((r0 + 360) % 360) - 180);
+    (el.listeners.input || []).forEach(f => f({ target: el })); (el.listeners.change || []).forEach(f => f({ target: el }));
+    await sleep(60);
+    assert.equal(p.rollAuto, 0, 'hand roll turns the suggestion off');
+    assert.ok(W.Fibula.checks().some(c => c[0] === 'warn' && /Fibula segmenti 1: pedikül tarafı bukkala/.test(c[2])), 'buccal pedicle is warned');
+    $('fibRollAuto').checked = true; fire('fibRollAuto', 'change');
+    assert.ok(!W.Fibula.checks().some(c => /pedikül tarafı bukkala/.test(c[2])), 'back to the suggestion');
+  } finally { S.mask = keepMask; fire('fibRollAuto', 'change'); }
+});
+test('fibula rules: a changed threshold is stored in the plan (only if it differs), drives the checks, and resets', async () => {
+  const p = W.Fibula.plan(); assert.equal(p.rules, undefined);
+  fire('fru_segMin', 'change', '200');            // clamped to its range (max 40)
+  assert.equal(JSON.stringify(p.rules), '{"segMin":40}');
+  await sleep(30); assert.ok(W.Fibula.checks().some(c => /40 mm('nin)? altı/.test(c[2])), 'checks follow the profile');
+  fire('fru_gapWarn', 'change', '0.2'); assert.equal(p.rules.gapWarn, 0.2);
+  fire('fru_gapWarn', 'change', '1');              // back to the default: not stored
+  assert.ok(!('gapWarn' in p.rules));
+  (P.doc.getElementById('fibRulesReset').listeners.click || []).forEach(f => f({}));
+  assert.equal(p.rules, undefined);
+});
+test('fibula bridge: two segments leave both saw slots and the bone bridge between them over the whole section', async () => {
+  const keep = St.clone(W.Fibula.plan()), q = St.clone(keep); q.n = 2; q.nAuto = 0; q.knots = [0.5]; q.yaw = [0, 20, 0]; q.pitch = [0, 0, 0]; q.roll = [0, 0]; q.fsc = null;
+  await W.Fibula.apply(q); await sleep(30);
+  const st = W.Fibula.state(), [a, b] = st.last.segs, sw = W.Fibula.slotOf(), FR = st.F.c.FR, tilt = v => Math.hypot(v.y, v.z) / Math.abs(v.x);
+  near(b.s0 - a.s1, 2 * sw + W.Fibula.RULES.wedgeBridge + FR * (tilt(a.n1) + tilt(b.n0)), 1e-9);
+  // at the section edge the two cut planes are still apart by both slots and the bridge
+  assert.ok(b.s0 - a.s1 - FR * (tilt(a.n1) + tilt(b.n0)) - 2 * sw >= W.Fibula.RULES.wedgeBridge - 1e-9);
+  await W.Fibula.apply(keep);
+});
+test('fibula plan: a stored plan without side / rollAuto / rules keeps those keys absent (approval signature unchanged)', async () => {
+  const keep = St.clone(W.Fibula.plan()), q = St.clone(keep); delete q.side; delete q.rollAuto; delete q.rules;
+  await W.Fibula.apply(q); const p = W.Fibula.plan();
+  assert.ok(!('side' in p) && !('rollAuto' in p) && !('rules' in p));
+  q.rules = { segMin: 20, devWarn: 'x', bogus: 5, gapErr: 3 }; await W.Fibula.apply(q);
+  assert.equal(JSON.stringify(W.Fibula.plan().rules), '{"gapErr":3}', 'defaults, junk and unknown keys dropped');
+  await W.Fibula.apply(keep);
+});
+
 test('O-5: stored fibula plan with kerf <= 0 or out-of-range values is clamped to the control ranges and reported', async () => {
   const keep = St.clone(W.Fibula.plan()), p = St.clone(keep);
   p.kerf = 0; p.distal = 9999; p.vOff = NaN; p.yaw[0] = 1e9; p.knots = [NaN]; p.dblH = -4;

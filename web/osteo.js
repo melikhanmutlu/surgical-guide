@@ -11,9 +11,9 @@ window.Osteo = (function () {
   const St = window.Studio; if (!St || !window.Fibula) return null;
   const { S, V, fmt, bus } = St, $ = id => document.getElementById(id);
   const r2d = THREE.MathUtils.radToDeg;
-  // sample thresholds; the clinical team sets the final values
-  // gap: > 1 mm a warning, >= gapErr critical (healed junctions averaged ~1.3 mm, non-unions ~2.5 mm), at every junction
-  const LIM = { overlap: 0.5, area: 40, wedge: 45, gap: 1.0, gapErr: 2.5, axis: 30 };
+  // sample thresholds from the fibula plan's clinical profile (Fibula.rules); the clinical team sets the final values
+  // gap: > gapWarn a warning, >= gapErr critical (healed junctions averaged ~1.3 mm, non-unions ~2.5 mm), at every junction
+  const lim = () => { const r = Fibula.rules(); return { overlap: r.overlap, area: r.area, wedge: r.wedgeWarn, gap: r.gapWarn, gapErr: r.gapErr, axis: r.axisInfo }; };
   const STEP = 0.3;
   let last = null, key = '', timer = null;
 
@@ -95,6 +95,7 @@ window.Osteo = (function () {
   // ---------- checks, panel, report, export ----------
   function checks() {
     const out = []; if (!last) return out;
+    const LIM = lim();
     last.forEach(o => {
       if (o.graftArea > 0 && o.overlap < LIM.overlap) out.push(['warn', 'Uyarı', `${xl('Osteotomi')} ${xl(o.name)}: ${xl(`kemik teması greft kesitinin %${fmt(o.overlap * 100, 0)}'i (örnek eşik %${LIM.overlap * 100}). Kemik iyileşmesi için temas artırılmalı.`)}`, 'fib']);
       else if (o.contact < LIM.area) out.push(['warn', 'Uyarı', `${xl('Osteotomi')} ${xl(o.name)}: ${xl(`temas alanı ${fmt(o.contact, 0)} mm² (örnek eşik ${LIM.area} mm²).`)}`, 'fib']);
@@ -113,7 +114,7 @@ window.Osteo = (function () {
     if (!last || !last.length) { box.innerHTML = ''; return; }
     box.innerHTML = `<h3 class="sub">Osteotomi raporu</h3>
       <div class="tbl"><table><thead><tr><th>Bağlantı</th><th>Açı</th><th>Temas</th><th>Aralık (mm)</th></tr></thead><tbody>${last.map(o => `<tr title="${o.name}"><td>${o.short}</td><td>${angTxt(o)}</td><td>${fmt(o.contact, 0)} mm² %${fmt(o.overlap * 100, 0)}</td><td>${fmt(o.gap)}</td></tr>`).join('')}</tbody></table></div>
-      <p class="hint more">M: mandibula güdüğü, S: fibula segmenti (ü: üst namlu). Kama: segmentler arası fibuladan çıkarılan kapama kaması. Eksen: greft ile mandibula güdüğü arasındaki açı. Temas yüzdesi greft kesitine göredir. Aralık güdük uçlarında testere yuvasının güdükten aldığı paydır; segmentler arasında planlı aralık sıfırdır (testere payı fibulada ayrılır), tabloda iki segment arasında ölçülen değer yer alır. 1 mm üstü uyarı, 2,5 mm ve üstü kritiktir.</p>`;
+      <p class="hint more">M: mandibula güdüğü, S: fibula segmenti (ü: üst namlu). Kama: segmentler arası fibuladan çıkarılan kapama kaması. Eksen: greft ile mandibula güdüğü arasındaki açı. Temas yüzdesi greft kesitine göredir. Aralık güdük uçlarında testere yuvasının güdükten aldığı paydır; segmentler arasında planlı aralık sıfırdır (testere payı fibulada ayrılır), tabloda iki segment arasında ölçülen değer yer alır. ${xl(`${fmt(lim().gap)} mm üstü uyarı, ${fmt(lim().gapErr)} mm ve üstü kritiktir.`)}</p>`;
   }
   function summary() {
     return last ? last.map(o => ({ baglanti: o.name, aci_deg: o.angle == null ? null : +o.angle.toFixed(1), aci_turu: o.kind === 'J' ? 'kapama kaması' : 'greft-mandibula ekseni', bukme_deg: o.bend != null ? +o.bend.toFixed(1) : undefined,
