@@ -5,6 +5,8 @@
    Between segments the angle is the closing wedge taken out of the fibula (angle between the two cuts on the
    fibula); at the mandible ends it is the angle between the graft axis and the mandible stump axis. */
 'use strict';
+var xl = s => (window.I18N ? I18N.t(s) : s);
+const UP = () => (window.I18N && I18N.lang === 'en' ? 'u' : 'ü');   // 'upper barrel' marker in the short labels
 window.Osteo = (function () {
   const St = window.Studio; if (!St || !window.Fibula) return null;
   const { S, V, fmt, bus } = St, $ = id => document.getElementById(id);
@@ -70,7 +72,7 @@ window.Osteo = (function () {
       const ax = stumpAxis(p.clone().addScaledVector(N, sgn * gap), N.clone().multiplyScalar(sgn));
       // graft direction leaving the stump into the defect
       const into = g.x.clone().multiplyScalar(-sgn), axis = ax ? r2d(ax.angleTo(into)) : null;
-      return { kind: end, name: `Mandibula ${end === 'A' ? '1' : '2'} – segment ${g.i + 1}${g.barrel ? ' (üst)' : ''}`, short: end === 'A' ? `M1–S${g.i + 1}${g.barrel ? 'ü' : ''}` : `S${g.i + 1}${g.barrel ? 'ü' : ''}–M2`, seg: g.i, angle: axis, angleKind: 'eksen',
+      return { kind: end, name: `Mandibula ${end === 'A' ? '1' : '2'} – segment ${g.i + 1}${g.barrel ? ' (üst)' : ''}`, short: end === 'A' ? `M1–S${g.i + 1}${g.barrel ? UP() : ''}` : `S${g.i + 1}${g.barrel ? UP() : ''}–M2`, seg: g.i, angle: axis, angleKind: 'eksen',
         contact: sec.contact, graftArea: sec.areaB, otherArea: sec.areaA, gap };
     };
     lower.length && out.push(mand(lower[0], 'A'));
@@ -94,18 +96,18 @@ window.Osteo = (function () {
   function checks() {
     const out = []; if (!last) return out;
     last.forEach(o => {
-      if (o.graftArea > 0 && o.overlap < LIM.overlap) out.push(['warn', 'Uyarı', `Osteotomi ${o.name}: kemik teması greft kesitinin %${fmt(o.overlap * 100, 0)}'i (örnek eşik %${LIM.overlap * 100}). Kemik iyileşmesi için temas artırılmalı.`, 'fib']);
-      else if (o.contact < LIM.area) out.push(['warn', 'Uyarı', `Osteotomi ${o.name}: temas alanı ${fmt(o.contact, 0)} mm² (örnek eşik ${LIM.area} mm²).`, 'fib']);
-      if (o.kind === 'J' && o.angle > LIM.wedge) out.push(['warn', 'Uyarı', `Osteotomi ${o.name}: kapama kaması ${fmt(o.angle, 0)}° (örnek eşik ${LIM.wedge}°); kesi yüzeyleri uzar, temas zayıflar.`, 'fib']);
-      const fix = o.kind === 'J' ? 'Eklem açısını ya da segment dönüşünü kontrol edin.' : 'Kesi yuvasını daraltın ya da testere payını rezeke tarafa alın.';
-      if (o.gap >= LIM.gapErr) out.push(['crit', 'Kritik', `Osteotomi ${o.name}: ${o.kind === 'J' ? 'ölçülen' : 'planlanan'} aralık ${fmt(o.gap)} mm (hata eşiği ${fmt(LIM.gapErr)} mm); kaynamama riski. ${fix}`, 'fib']);
-      else if (o.gap > LIM.gap) out.push(['warn', 'Uyarı', o.kind === 'J' ? `Osteotomi ${o.name}: ölçülen aralık ${fmt(o.gap)} mm (örnek eşik ${fmt(LIM.gap)} mm). ${fix}` : `Osteotomi ${o.name}: planlanan aralık ${fmt(o.gap)} mm (örnek eşik ${fmt(LIM.gap)} mm). ${fix}`, 'fib']);
-      if (o.kind !== 'J' && o.angle != null && o.angle > LIM.axis) out.push(['info', 'Bilgi', `Osteotomi ${o.name}: greft ekseni mandibula ekseninden ${fmt(o.angle, 0)}° sapıyor.`, 'fib']);
+      if (o.graftArea > 0 && o.overlap < LIM.overlap) out.push(['warn', 'Uyarı', `${xl('Osteotomi')} ${xl(o.name)}: ${xl(`kemik teması greft kesitinin %${fmt(o.overlap * 100, 0)}'i (örnek eşik %${LIM.overlap * 100}). Kemik iyileşmesi için temas artırılmalı.`)}`, 'fib']);
+      else if (o.contact < LIM.area) out.push(['warn', 'Uyarı', `${xl('Osteotomi')} ${xl(o.name)}: ${xl(`temas alanı ${fmt(o.contact, 0)} mm² (örnek eşik ${LIM.area} mm²).`)}`, 'fib']);
+      if (o.kind === 'J' && o.angle > LIM.wedge) out.push(['warn', 'Uyarı', `${xl('Osteotomi')} ${xl(o.name)}: ${xl(`kapama kaması ${fmt(o.angle, 0)}° (örnek eşik ${LIM.wedge}°); kesi yüzeyleri uzar, temas zayıflar.`)}`, 'fib']);
+      const fix = xl(o.kind === 'J' ? 'Eklem açısını ya da segment dönüşünü kontrol edin.' : 'Kesi yuvasını daraltın ya da testere payını rezeke tarafa alın.');
+      if (o.gap >= LIM.gapErr) out.push(['crit', 'Kritik', `${xl('Osteotomi')} ${xl(o.name)}: ${xl(`${o.kind === 'J' ? 'ölçülen' : 'planlanan'} aralık ${fmt(o.gap)} mm (hata eşiği ${fmt(LIM.gapErr)} mm); kaynamama riski.`)} ${fix}`, 'fib']);
+      else if (o.gap > LIM.gap) out.push(['warn', 'Uyarı', o.kind === 'J' ? `${xl('Osteotomi')} ${xl(o.name)}: ${xl(`ölçülen aralık ${fmt(o.gap)} mm (örnek eşik ${fmt(LIM.gap)} mm).`)} ${fix}` : `${xl('Osteotomi')} ${xl(o.name)}: ${xl(`planlanan aralık ${fmt(o.gap)} mm (örnek eşik ${fmt(LIM.gap)} mm).`)} ${fix}`, 'fib']);
+      if (o.kind !== 'J' && o.angle != null && o.angle > LIM.axis) out.push(['info', 'Bilgi', `${xl('Osteotomi')} ${xl(o.name)}: ${xl(`greft ekseni mandibula ekseninden ${fmt(o.angle, 0)}° sapıyor.`)}`, 'fib']);
     });
     return out;
   }
   (window.ExtraChecks = window.ExtraChecks || []).push(checks);
-  const angTxt = o => o.angle == null ? '–' : `${fmt(o.angle, 0)}° ${o.kind === 'J' ? 'kama' : 'eksen'}`;
+  const angTxt = o => o.angle == null ? '–' : `${fmt(o.angle, 0)}° ${xl(o.kind === 'J' ? 'kama' : 'eksen')}`;
   function render() {
     const box = $('osteoBox'); if (!box) return;
     if (!last || !last.length) { box.innerHTML = ''; return; }

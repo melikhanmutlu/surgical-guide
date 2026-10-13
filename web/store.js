@@ -3,6 +3,7 @@
    hospital server (REST, /cases) > this page's own database (artifact db) > this browser (localStorage).
    Only plan JSON is stored, never image data. */
 'use strict';
+var xl = s => (window.I18N ? I18N.t(s) : s);
 (function () {
   const St = window.Studio; if (!St) return;
   const $ = id => document.getElementById(id), S = St.S;
@@ -111,7 +112,7 @@
   function diffObj(a, b, names, prefix, out) {
     const ch = Object.keys(names).filter(k => a[k] !== b[k]);
     ch.forEach(k => out.push(`${prefix}${prefix ? ' ' : ''}${names[k]} ${num(a[k], k)} → ${num(b[k], k)}`));
-    if (!ch.length && !!a.ok !== !!b.ok) out.push(`${prefix || 'Rezeksiyon sınırı'} ${b.ok ? 'onaylandı' : 'onayı kaldırıldı'}`);
+    if (!ch.length && !!a.ok !== !!b.ok) out.push(`${xl(prefix || 'Rezeksiyon sınırı')} ${xl(b.ok ? 'onaylandı' : 'onayı kaldırıldı')}`);
   }
   function describe(a, b) {
     if (!a || !b) return 'Başlangıç';
@@ -214,7 +215,7 @@
   async function ensureCase() {
     if (caseId) return caseId;
     const src = S.source || {};
-    caseName = $('caseName').value.trim() || `${src.type === 'sample' ? 'Örnek' : src.name || 'Vaka'} · ${new Date().toLocaleDateString('tr-TR')}`;
+    caseName = $('caseName').value.trim() || `${src.type === 'sample' ? 'Örnek' : src.name || 'Vaka'} · ${new Date().toLocaleDateString('tr-TR')}`; // i18n-skip: default case name is stored data
     const r = await backend.create({ name: caseName, kind: S.kind || '', fingerprint: src.fp || '' });
     caseId = r.id; remember(); renderCaseHead(); refreshList();
     return caseId;
@@ -252,7 +253,7 @@
     if (!backend) return;
     try {
       const list = await backend.list();
-      $('caseList').innerHTML = list.slice(0, 12).map(c => `<li data-id="${esc(c.id)}"><span class="meta"><span>${esc(c.name)}</span><small>${when(c.updated_at)} · ${c.n_versions || 0} sürüm</small></span><span class="act"><button data-open="${esc(c.id)}">Aç</button></span></li>`).join('') || '<li class="hint">Kayıtlı vaka yok.</li>';
+      $('caseList').innerHTML = list.slice(0, 12).map(c => `<li data-id="${esc(c.id)}"><span class="meta"><span>${esc(c.name)}</span><small>${when(c.updated_at)} · ${xl(`${c.n_versions || 0} sürüm`)}</small></span><span class="act"><button data-open="${esc(c.id)}">Aç</button></span></li>`).join('') || '<li class="hint">Kayıtlı vaka yok.</li>';
       $('caseList').querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => openCase(b.dataset.open)));
       markCurrent();
     } catch (e) { $('caseList').innerHTML = `<li class="err">Liste alınamadı: ${esc(e.message)}</li>`; }
@@ -278,7 +279,7 @@
 
   // ---------- versions ----------
   let lastVersionN = 0;
-  function versionLabel() { const e = H.list[H.idx]; if (e && e.cp) return 'Sürüm ' + e.cp; return lastVersionN ? `Taslak (son sürüm S${lastVersionN})` : 'Taslak'; }
+  function versionLabel() { const e = H.list[H.idx]; if (e && e.cp) return xl('Sürüm') + ' ' + e.cp; return lastVersionN ? `${xl('Taslak')} (${xl('son sürüm')} S${lastVersionN})` : xl('Taslak'); }
   function renderVersions(vs) {
     lastVersionN = vs.length ? vs[0].n : 0;
     $('verList').innerHTML = vs.map(v => `<li><span class="meta"><span>S${v.n}${v.note ? ' · ' + esc(v.note) : ''}</span><small>${esc(v.author || '–')} · ${when(v.created_at)}</small></span><span class="act"><button data-v="${v.n}">Yükle</button></span></li>`).join('') || (caseId ? '<li class="hint">Henüz sürüm yok.</li>' : '');
@@ -289,7 +290,7 @@
     try {
       await ensureCase(); await flush();
       const plan = St.planOf(), r = await backend.addVersion(caseId, { plan, note: note || '', author: plan.surgeon || '' });
-      $('verMsg').textContent = `Sürüm S${r.n} oluşturuldu.`; $('verNote').value = ''; dirty = false;
+      $('verMsg').textContent = `${xl('Sürüm')} S${r.n} ${xl('oluşturuldu.')}`; $('verNote').value = ''; dirty = false;
       if (H.idx >= 0) { H.list[H.idx].cp = `S${r.n}${note ? ' · ' + note : ''}`; renderHist(); }
       loadVersions(); refreshList();
     } catch (e) { $('verMsg').textContent = 'Sürüm oluşturulamadı: ' + e.message; }
@@ -299,8 +300,8 @@
       const v = await backend.getVersion(caseId, n);
       const ok = await St.openPlan(v.plan);
       if (!ok) return;
-      lastJSON = null; snapshot(`Sürüm S${n}${v.note ? ' · ' + v.note : ''} yüklendi`, true); changedPlan(St.planOf());
-      $('verMsg').textContent = `S${n} yüklendi ve taslak oldu. Geri almak için Ctrl+Z.`;
+      lastJSON = null; snapshot(`${xl('Sürüm')} S${n}${v.note ? ' · ' + v.note : ''} ${xl('yüklendi')}`, true); changedPlan(St.planOf());
+      $('verMsg').textContent = `S${n} ${xl('yüklendi ve taslak oldu. Geri almak için Ctrl+Z.')}`;
     } catch (e) { $('verMsg').textContent = 'Sürüm yüklenemedi: ' + e.message; }
   }
   $('verSave').addEventListener('click', () => saveVersion($('verNote').value.trim()));

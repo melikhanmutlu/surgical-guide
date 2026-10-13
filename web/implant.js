@@ -3,6 +3,7 @@
    in the transplanted graft and the remaining mandible, so dehiscence, thin walls, implants on an osteotomy line
    and crowded implants are flagged. The plan is saved with the case (PlanExt). */
 'use strict';
+var xl = s => (window.I18N ? I18N.t(s) : s);
 window.Implants = (function () {
   const St = window.Studio; if (!St || !window.Fibula) return null;
   const { S, V, fmt, bus } = St, $ = id => document.getElementById(id), deg = THREE.MathUtils.degToRad, r2d = THREE.MathUtils.radToDeg;
@@ -140,13 +141,13 @@ window.Implants = (function () {
     const out = [];
     last.forEach((r, i) => {
       const nm = `İmplant ${i + 1}`;
-      if (!r.ok) { out.push(['crit', 'Kritik', `${nm} greft kemiğine ulaşmıyor; konumunu ya da eğimini değiştirin.`, 'fib']); return; }
-      if (r.cov < LIM.covCrit) out.push(['crit', 'Kritik', `${nm} yüzeyinin yalnız %${fmt(r.cov * 100, 0)}'i kemikte; implant greftten taşıyor.`, 'fib']);
-      else if (r.cov < LIM.cov) out.push(['warn', 'Uyarı', `${nm} yüzeyinin %${fmt(r.cov * 100, 0)}'i kemikte (örnek eşik %${LIM.cov * 100}); dehisens ya da perforasyon olabilir.`, 'fib']);
-      if (r.wall < LIM.wall) out.push(['warn', 'Uyarı', `${nm} çevresinde 1 mm kemik duvarı yüzeyin yalnız %${fmt(r.wall * 100, 0)}'inde var; daha ince implant ya da eğim düşünün.`, 'fib']);
-      if (r.joint < LIM.joint) out.push(['warn', 'Uyarı', `${nm} osteotomi hattına ${fmt(Math.max(0, r.joint))} mm yakın (örnek eşik ${fmt(LIM.joint)} mm).`, 'fib']);
-      if (r.near < LIM.gap) out.push(['warn', 'Uyarı', `${nm} komşu implanta ${fmt(Math.max(0, r.near))} mm yakın; implantlar arası en az ${LIM.gap} mm önerilir.`, 'fib']);
-      if (r.tilt > LIM.tilt) out.push(['info', 'Bilgi', `${nm} oklüzal yönden ${fmt(r.tilt, 0)}° eğik; açılı abutment gerekebilir.`, 'fib']);
+      if (!r.ok) { out.push(['crit', 'Kritik', xl(`${nm} greft kemiğine ulaşmıyor; konumunu ya da eğimini değiştirin.`), 'fib']); return; }
+      if (r.cov < LIM.covCrit) out.push(['crit', 'Kritik', xl(`${nm} yüzeyinin yalnız %${fmt(r.cov * 100, 0)}'i kemikte; implant greftten taşıyor.`), 'fib']);
+      else if (r.cov < LIM.cov) out.push(['warn', 'Uyarı', xl(`${nm} yüzeyinin %${fmt(r.cov * 100, 0)}'i kemikte (örnek eşik %${LIM.cov * 100}); dehisens ya da perforasyon olabilir.`), 'fib']);
+      if (r.wall < LIM.wall) out.push(['warn', 'Uyarı', xl(`${nm} çevresinde 1 mm kemik duvarı yüzeyin yalnız %${fmt(r.wall * 100, 0)}'inde var; daha ince implant ya da eğim düşünün.`), 'fib']);
+      if (r.joint < LIM.joint) out.push(['warn', 'Uyarı', xl(`${nm} osteotomi hattına ${fmt(Math.max(0, r.joint))} mm yakın (örnek eşik ${fmt(LIM.joint)} mm).`), 'fib']);
+      if (r.near < LIM.gap) out.push(['warn', 'Uyarı', xl(`${nm} komşu implanta ${fmt(Math.max(0, r.near))} mm yakın; implantlar arası en az ${LIM.gap} mm önerilir.`), 'fib']);
+      if (r.tilt > LIM.tilt) out.push(['info', 'Bilgi', xl(`${nm} oklüzal yönden ${fmt(r.tilt, 0)}° eğik; açılı abutment gerekebilir.`), 'fib']);
     });
     return out;
   });
@@ -186,7 +187,7 @@ window.Implants = (function () {
     $('imAuto').addEventListener('click', () => {
       if (list.length && !confirm('Mevcut implantlar silinip otomatik yerleşimle değiştirilsin mi?')) return;
       St.busy(true, 'İmplantlar yerleştiriliyor…');
-      setTimeout(() => { try { const r = autoPlace(); msgText = r.placed ? `${r.placed} implant yerleştirildi${r.tried > r.placed ? ` · ${r.tried - r.placed} konum uygun değil` : ''}.` : 'Greft üzerinde kontrolleri geçen implant konumu bulunamadı.'; render(); } finally { St.busy(false); } }, 30);
+      setTimeout(() => { try { const r = autoPlace(); msgText = r.placed ? xl(`${r.placed} implant yerleştirildi${r.tried > r.placed ? ` · ${r.tried - r.placed} konum uygun değil` : ''}.`) : 'Greft üzerinde kontrolleri geçen implant konumu bulunamadı.'; render(); } finally { St.busy(false); } }, 30);
     });
     $('imPick').addEventListener('click', () => { picking = true; const mb = $('modeBadge'); mb.hidden = false; mb.textContent = 'İmplant yeri için mandibula görünümünde bir fibula greftine tıklayın. Vazgeçmek için Esc.'; if (Fibula.view() !== 'm') $('scM').click(); });
     box.querySelectorAll('#imList button').forEach(b => b.addEventListener('click', () => { sel = +b.dataset.i; render(); draw(); }));

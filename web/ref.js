@@ -2,6 +2,7 @@
    mirror image), a mirrored ghost of the healthy side over the defect side as the reconstruction target, and the
    condyles (found automatically, re-pickable by clicking) with their distances and asymmetry. */
 'use strict';
+var xl = s => (window.I18N ? I18N.t(s) : s);
 window.Ref = (function () {
   const St = window.Studio; if (!St) return null;
   const { S, V, fmt, bus } = St, $ = id => document.getElementById(id);
@@ -245,7 +246,7 @@ window.Ref = (function () {
   });
   (window.ExtraChecks = window.ExtraChecks || []).push(() => {
     const M = metrics(), out = [];
-    if (M && M.asym !== undefined && M.asym > 4) out.push(['info', 'Bilgi', `Kondiller ${fmt(M.asym)} mm asimetrik; ayna görüntüsünü hedef alırken bunu hesaba katın.`, 'anat']);
+    if (M && M.asym !== undefined && M.asym > 4) out.push(['info', 'Bilgi', xl(`Kondiller ${fmt(M.asym)} mm asimetrik; ayna görüntüsünü hedef alırken bunu hesaba katın.`), 'anat']);
     const E = M && ref && St.resEnds();
     if (E && !E.condyle) {
       // a segment resection must not take a condyle (the second cut would leave the bone and the defect has no stump
@@ -256,7 +257,7 @@ window.Ref = (function () {
       // (the ramus beside a cut at the angle), so the condyle counts only when it lies in the resected piece itself
       // (within 4 mm of it); the slab test stays as the fallback when no piece is known
       for (const k of ['R', 'L']) { const p = ref.cond[k]; if (!p) continue; const q = V(...p), inPiece = St.resectedNear ? St.resectedNear(q, 4) : null;
-        if (inPiece === null ? q.clone().sub(E.A.p).dot(NA) > 0 && q.clone().sub(E.B.p).dot(NB) < 0 && q.distanceTo(S.anchor.p) < 70 : inPiece) out.push(['crit', 'Kritik', `${k === 'R' ? 'Sağ' : 'Sol'} kondil rezeksiyon bölgesinde kalıyor; kondil dahil rezeksiyon tipini seçin ya da kesiyi kondilin altına alın.`, 'lesion']); }
+        if (inPiece === null ? q.clone().sub(E.A.p).dot(NA) > 0 && q.clone().sub(E.B.p).dot(NB) < 0 && q.distanceTo(S.anchor.p) < 70 : inPiece) out.push(['crit', 'Kritik', xl(`${k === 'R' ? 'Sağ' : 'Sol'} kondil rezeksiyon bölgesinde kalıyor; kondil dahil rezeksiyon tipini seçin ya da kesiyi kondilin altına alın.`), 'lesion']); }
     }
     return out;
   });

@@ -3,6 +3,7 @@
    marked unusable, guide screws placed on plate holes (pre-drilled holes then match the pre-bent plate), and a
    pre-bending model STL. */
 'use strict';
+var xl = s => (window.I18N ? I18N.t(s) : s);
 window.Plate = (function () {
   const St = window.Studio; if (!St) return null;
   const { S, V, fmt, bus } = St, $ = id => document.getElementById(id);
@@ -162,7 +163,7 @@ window.Plate = (function () {
       const m = new THREE.Mesh(new THREE.CylinderGeometry(P.d / 2 + 0.25, P.d / 2 + 0.25, P.t + 0.3, 20), new THREE.MeshStandardMaterial({ color: h.usable ? (h.matched ? 0x2a9d8f : 0x30363c) : 0xc0504d, roughness: 0.6 }));
       m.position.copy(h.p.clone().addScaledVector(h.n, 0.15 + P.t / 2)); m.quaternion.setFromUnitVectors(V(0, 1, 0), h.n); grp.add(m);
     });
-    St.setPart('plate', `Plak (${SYSTEMS[P.sys].name})`, grp, COLOR);
+    St.setPart('plate', `${xl('Plak')} (${SYSTEMS[P.sys].name})`, grp, COLOR);
     if (St.renderParts) St.renderParts();
     St.render();
   }
@@ -246,21 +247,21 @@ window.Plate = (function () {
     if (!P.on || !S.anchor) return [];
     if (!last) return [['warn', 'Uyarı', 'Plak hattı kemik yüzeyinde izlenemedi; plak yüksekliğini değiştirin.', 'guide']];
     const out = [], need = last.E.condyle ? ['A'] : ['A', 'B'];
-    need.forEach(r => { const c = last.holes.filter(h => h.region === r && h.usable).length; if (c < 3) out.push(['warn', 'Uyarı', `Plak ${r === 'A' ? 'birinci' : 'ikinci'} kalan segmentte ${c} vidaya yer bırakıyor; en az 3 önerilir (plak uzantısını artırın).`, 'guide']); });
+    need.forEach(r => { const c = last.holes.filter(h => h.region === r && h.usable).length; if (c < 3) out.push(['warn', 'Uyarı', xl(`Plak ${r === 'A' ? 'birinci' : 'ikinci'} kalan segmentte ${c} vidaya yer bırakıyor; en az 3 önerilir (plak uzantısını artırın).`), 'guide']); });
     if (!last.ok) out.push(['warn', 'Uyarı', 'Plak hattı istenen uzunluğa ulaşmadan kemik yüzeyinden çıktı.', 'guide']);
     const fl = graftPlan();
     if (fl) fl.segs.filter(g => !g.barrel).forEach(g => { const c = last.holes.filter(h => h.seg === g.i && h.usable).length; if (c < 2) out.push(['warn', 'Uyarı', `Plak greft segmenti ${g.i + 1} üzerinde ${c} vidaya yer bırakıyor; her segmente en az 2 vida önerilir (delik dizisini kaydırın ya da segment boyunu değiştirin).`, 'guide']); });
     const mono = last.holes.filter(h => h.usable && h.len && !h.bi).length, none = last.holes.filter(h => h.usable && !h.len).length;
-    if (mono) out.push(['info', 'Bilgi', `${mono} plak deliğinde karşı korteks 30 mm içinde bulunamadı ya da standart boydan uzun; bu vidalar monokortikal kalır.`, 'guide']);
+    if (mono) out.push(['info', 'Bilgi', xl(`${mono} plak deliğinde karşı korteks 30 mm içinde bulunamadı ya da standart boydan uzun; bu vidalar monokortikal kalır.`), 'guide']);
     if (none) out.push(['warn', 'Uyarı', `${none} kullanılabilir plak deliğinin altında kemik yok.`, 'guide']);
     const m = last.holes.filter(h => h.matched).length, gs = S.screws.length;
-    if (gs && m < gs && S.screws.some(s => s.plate)) out.push(['info', 'Bilgi', `${gs} guide vidasından ${m} tanesi plak deliğiyle çakışıyor.`, 'guide']);
+    if (gs && m < gs && S.screws.some(s => s.plate)) out.push(['info', 'Bilgi', xl(`${gs} guide vidasından ${m} tanesi plak deliğiyle çakışıyor.`), 'guide']);
     return out;
   });
   (window.ReportSections = window.ReportSections || []).push(d => {
     const s = summary(); if (!s) return;
     if (d.keep) d.keep(380); d.h2('Plak');
-    d.table(['Özellik', 'Değer'], [['Sistem', `${s.sistem} · ${fmt(s.genislik_mm)} × ${fmt(s.kalinlik_mm)} mm · ${fmt(s.delik_araligi_mm)} mm aralık`], ['Uzunluk / delik', `${s.uzunluk_mm} mm · ${s.holes} delik`], ['Kullanılabilir delik', `kalan 1: ${s.kullanilabilir.A} · defekt: ${s.kullanilabilir.defekt} · kalan 2: ${s.kullanilabilir.B}`], ['Kesiye yakın (boş bırakılacak)', `${s.kesiye_yakin}`], ['Toplam bükme', `kalınlık yönünde ${s.bukme_deg.kalinlik_yonunde}° · kenar yönünde ${s.bukme_deg.kenar_yonunde}°`], ['Guide vidalarıyla eşleşen delik', `${s.guide_ile_eslesen}`], ['Greft eklemine yakın (boş bırakılacak)', `${s.greft_eklemine_yakin}`], ['Vida boyları (bikortikal)', screwText(s)], ['Not', 'Vida boyları kemik modelinden ölçülür; sinir kanalı ve diş kökleri ayrıca kontrol edilmelidir.']], [0.34, 0.66]);
+    d.table(['Özellik', 'Değer'], [['Sistem', `${s.sistem} · ${fmt(s.genislik_mm)} × ${fmt(s.kalinlik_mm)} mm · ${xl(`${fmt(s.delik_araligi_mm)} mm aralık`)}`], ['Uzunluk / delik', `${s.uzunluk_mm} mm · ${s.holes} delik`], ['Kullanılabilir delik', `kalan 1: ${s.kullanilabilir.A} · defekt: ${s.kullanilabilir.defekt} · kalan 2: ${s.kullanilabilir.B}`], ['Kesiye yakın (boş bırakılacak)', `${s.kesiye_yakin}`], ['Toplam bükme', `kalınlık yönünde ${s.bukme_deg.kalinlik_yonunde}° · kenar yönünde ${s.bukme_deg.kenar_yonunde}°`], ['Guide vidalarıyla eşleşen delik', `${s.guide_ile_eslesen}`], ['Greft eklemine yakın (boş bırakılacak)', `${s.greft_eklemine_yakin}`], ['Vida boyları (bikortikal)', screwText(s)], ['Not', 'Vida boyları kemik modelinden ölçülür; sinir kanalı ve diş kökleri ayrıca kontrol edilmelidir.']], [0.34, 0.66]);
   });
 
   // ---------- slices: plate cross-section where it meets the slice ----------

@@ -12,6 +12,7 @@
      distance from the upper cut reported.
    Nothing here designs a prosthesis; the literature basis is audit/denetim3/literatur/RAPOR.md (3.3, 3.6). */
 'use strict';
+var xl = s => (window.I18N ? I18N.t(s) : s);
 window.Condyle = (function () {
   const St = window.Studio; if (!St) return null;
   const { S, V, fmt, bus } = St, $ = id => document.getElementById(id);
@@ -143,15 +144,15 @@ window.Condyle = (function () {
     if (!S.anchor) return out;
     if (S.lesion.condyle) {
       const E = St.resEnds(), d = E && E.condyle ? E.B.neo : neo, sn = sideName(S.lesion.condyle).toLocaleLowerCase('tr-TR');
-      out.push(['info', 'Bilgi', `Yeni kondil (${sn}): fibula ucu yuvarlatılır ve fossanın ${fmt(d)} mm altına, kesiye doğru yerleştirilir. Eklem diski korunur; ameliyattan sonra en az 2 hafta çene (maksillomandibüler) fiksasyonu planlanmalıdır.`, 'lesion']);
+      out.push(['info', 'Bilgi', xl(`Yeni kondil (${sn}): fibula ucu yuvarlatılır ve fossanın ${fmt(d)} mm altına, kesiye doğru yerleştirilir. Eklem diski korunur; ameliyattan sonra en az 2 hafta çene (maksillomandibüler) fiksasyonu planlanmalıdır.`), 'lesion']);
       if (d > NEO_WARN) out.push(['warn', 'Uyarı', `Yeni kondil fossadan ${fmt(d)} mm uzakta (10 mm üstü). 1 cm'den fazla aşağı ya da öne yer değiştirme yutma güçlüğü ve çene kaymasıyla ilişkili; mesafeyi azaltın.`, 'lesion']);
       out.push(['warn', 'Uyarı', 'Kondil rezeke ediliyor: en büyük konum sapması kondilde beklenir (3-4 mm). Yeni kondili oklüzal wafer ya da çene fiksasyonuyla konumlandırın; alternatif olarak kondil protezi değerlendirilebilir.', 'lesion']);
     } else {
       const sp = stumpPlaces();
       if (sp) {
         const sn = sideName(sp.side).toLocaleLowerCase('tr-TR');
-        if (sp.n < STUMP_MIN) out.push(['warn', 'Uyarı', `Korunan ${sn} kondilin güdüğünde yalnız ${sp.n} vida yeri var (en az ${STUMP_MIN}; kesiden en az ${STUMP_GAP} mm, aralık ${STUMP_STEP} mm). Kondilin korunması pratik olmayabilir; yeni kondil (kondil dahil rezeksiyon) ya da kondil protezi seçeneğini değerlendirin.`, 'lesion']);
-        else out.push(['info', 'Bilgi', `Korunan ${sn} kondilin güdüğünde ${sp.n} vida yeri var (en az ${STUMP_MIN}; kesiden en az ${STUMP_GAP} mm, aralık ${STUMP_STEP} mm; güdük ${fmt(sp.len, 0)} mm).`, 'lesion']);
+        if (sp.n < STUMP_MIN) out.push(['warn', 'Uyarı', xl(`Korunan ${sn} kondilin güdüğünde yalnız ${sp.n} vida yeri var (en az ${STUMP_MIN}; kesiden en az ${STUMP_GAP} mm, aralık ${STUMP_STEP} mm). Kondilin korunması pratik olmayabilir; yeni kondil (kondil dahil rezeksiyon) ya da kondil protezi seçeneğini değerlendirin.`), 'lesion']);
+        else out.push(['info', 'Bilgi', xl(`Korunan ${sn} kondilin güdüğünde ${sp.n} vida yeri var (en az ${STUMP_MIN}; kesiden en az ${STUMP_GAP} mm, aralık ${STUMP_STEP} mm; güdük ${fmt(sp.len, 0)} mm).`), 'lesion']);
       }
       const nt = notch();
       if (nt) out.push(['info', 'Bilgi', nt.dist >= 0 ? `Ramus guide'ı: sigmoid çentik, kesi ${nt.cut + 1} düzleminden ${fmt(nt.dist, 0)} mm yukarıda.` : `Ramus guide'ı: kesi ${nt.cut + 1} düzlemi sigmoid çentiğin ${fmt(-nt.dist, 0)} mm üstünden geçiyor; kondil ile koronoid ayrı kalır.`, 'guide']);

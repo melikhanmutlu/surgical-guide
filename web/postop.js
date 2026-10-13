@@ -6,6 +6,7 @@
    - a colour map of the post-op bone surface against the planned reconstruction (remaining bone + grafts).
    Only the volume is read; no patient name or ID is kept. Thresholds are sample values. */
 'use strict';
+var xl = s => (window.I18N ? I18N.t(s) : s);
 window.PostOp = (function () {
   const St = window.Studio; if (!St) return null;
   const { S, V, fmt, bus } = St, $ = id => document.getElementById(id);
@@ -365,9 +366,9 @@ window.PostOp = (function () {
   function issues() {
     if (!R || R.stale) return [];
     const out = [];
-    if (R.reg.inl < LIM.inl) out.push(['warn', 'Uyarı', `Ameliyat sonrası BT plana iyi hizalanmadı (yüzeyin %${fmt(R.reg.inl * 100, 0)}'i 1 mm içinde); sapmalar güvenilir değil.`]);
-    R.cuts.forEach(c => { if (c.ok && (Math.abs(c.pos) > LIM.pos || c.ang > LIM.ang)) out.push(['warn', 'Uyarı', `Ameliyat sonrası: ${c.name} plandan ${sgn(c.pos)} mm, ${fmt(c.ang)}° sapmış (sınır ${LIM.pos} mm, ${LIM.ang}°).`]); });
-    R.grafts.forEach(g => { if (g.ok && (g.disp > LIM.pos || g.ang > LIM.ang)) out.push(['warn', 'Uyarı', `Ameliyat sonrası: greft ${g.no} ${fmt(g.disp)} mm kaymış, ekseni ${fmt(g.ang)}° dönmüş (sınır ${LIM.pos} mm, ${LIM.ang}°).`]); });
+    if (R.reg.inl < LIM.inl) out.push(['warn', 'Uyarı', xl(`Ameliyat sonrası BT plana iyi hizalanmadı (yüzeyin %${fmt(R.reg.inl * 100, 0)}'i 1 mm içinde); sapmalar güvenilir değil.`)]);
+    R.cuts.forEach(c => { if (c.ok && (Math.abs(c.pos) > LIM.pos || c.ang > LIM.ang)) out.push(['warn', 'Uyarı', xl(`Ameliyat sonrası: ${c.name} plandan ${sgn(c.pos)} mm, ${fmt(c.ang)}° sapmış (sınır ${LIM.pos} mm, ${LIM.ang}°).`)]); });
+    R.grafts.forEach(g => { if (g.ok && (g.disp > LIM.pos || g.ang > LIM.ang)) out.push(['warn', 'Uyarı', xl(`Ameliyat sonrası: greft ${g.no} ${fmt(g.disp)} mm kaymış, ekseni ${fmt(g.ang)}° dönmüş (sınır ${LIM.pos} mm, ${LIM.ang}°).`)]); });
     if (!out.length) out.push(['info', 'Bilgi', 'Ameliyat sonrası kesi ve greft sapmaları sınırlar içinde.']);
     return out;
   }
@@ -386,9 +387,9 @@ window.PostOp = (function () {
   (window.ReportSections = window.ReportSections || []).push(d => {
     if (!R) return;
     if (d.keep) d.keep(300); d.h2('Ameliyat sonrası karşılaştırma');
-    const rows = [['Hizalama', `%${fmt(R.reg.inl * 100, 0)} yüzey 1 mm içinde, RMS ${fmt(R.reg.rms, 2)} mm`]];
+    const rows = [['Hizalama', xl(`%${fmt(R.reg.inl * 100, 0)} yüzey 1 mm içinde, RMS ${fmt(R.reg.rms, 2)} mm`)]];
     R.cuts.forEach(c => rows.push([c.name, c.ok ? `${sgn(c.pos)} mm, ${fmt(c.ang)}°` : c.why]));
-    R.grafts.forEach(g => rows.push([`Greft ${g.no}`, g.ok ? `kayma ${fmt(g.disp)} mm, eksen ${fmt(g.ang)}°, uçlar ${fmt(g.end0)} / ${fmt(g.end1)} mm` : 'ölçülemedi']));
+    R.grafts.forEach(g => rows.push([`Greft ${g.no}`, g.ok ? xl(`kayma ${fmt(g.disp)} mm, eksen ${fmt(g.ang)}°, uçlar ${fmt(g.end0)} / ${fmt(g.end1)} mm`) : 'ölçülemedi']));
     if (R.surf.all) rows.push(['Yüzey sapması', `%${fmt(R.surf.all.in1 * 100, 0)} ≤ 1 mm, %${fmt(R.surf.all.in2 * 100, 0)} ≤ 2 mm`]);
     if (R.stale) rows.push(['Not', 'Plan karşılaştırmadan sonra değişti.']);
     d.table(['Ölçü', 'Değer'], rows, [0.35, 0.65]);

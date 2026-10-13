@@ -2,6 +2,7 @@
    and bone thickness (1 point on the surface, measured inward along the surface normal through the bone mask).
    Measurements are part of the plan, so they are saved, versioned and undoable. */
 'use strict';
+var xl = s => (window.I18N ? I18N.t(s) : s);
 window.Measure = (function () {
   const St = window.Studio; if (!St) return null;
   const { S, V, fmt, bus, scene } = St, $ = id => document.getElementById(id);
@@ -37,19 +38,19 @@ window.Measure = (function () {
     if (type === 'thick') {
       if (!n) { hint('Kalınlık 3B görünümde kemik yüzeyine tıklanarak ölçülür.'); return true; }
       const r = thickness(p, n);
-      if (!r) { hint('Bu noktada kemik bulunamadı; kemik yüzeyine tıklayın.'); return true; }
+      if (!r) { hint(xl('Bu noktada kemik bulunamadı; kemik yüzeyine tıklayın.')); return true; }
       add({ type, pts: r.pts.map(q => q.toArray().map(x => Math.round(x * 100) / 100)), value: +r.value.toFixed(2) });
       return true;
     }
     pts.push(p.clone()); draw();
     if (pts.length === NEED[type]) { add({ type, pts: pts.map(q => q.toArray().map(x => Math.round(x * 100) / 100)), value: +compute(type, pts).value.toFixed(2) }); pts = []; }
-    else hint(`${NAMES[type]}: ${pts.length}/${NEED[type]} nokta. ${type === 'angle' && pts.length === 1 ? 'Sonraki nokta açının köşesi.' : ''}`);
+    else hint(`${xl(`${NAMES[type]}: ${pts.length}/${NEED[type]} nokta.`)} ${type === 'angle' && pts.length === 1 ? xl('Sonraki nokta açının köşesi.') : ''}`);
     return true;
   }
   function add(m) { S.measures.push(m); pts = []; hint(`${NAMES[m.type]} ${val(m)} eklendi. Yeni ölçüm için tıklamaya devam edin.`); render(); St.emit('changed'); }
   // the badge is shared with other tools: only hide it if it still shows our text
   let mine = '';
-  function hint(t) { const b = $('modeBadge'); if (on) { b.hidden = false; b.textContent = mine = t; } else if (b.textContent === mine) b.hidden = true; }
+  function hint(t) { const b = $('modeBadge'); if (on) { b.hidden = false; b.textContent = mine = t; } else if (b.textContent === mine || b.textContent === xl(mine)) b.hidden = true; }
   // 3D clicks come here first (Studio's picking hook)
   window.Tools = {
     click(e, ray) {
@@ -64,7 +65,7 @@ window.Measure = (function () {
   };
   function setOn(v) {
     on = v; pts = []; if (on && window.SegEdit) SegEdit.off(); if (on && window.Lesion) Lesion.off(); $('toolMeasure').setAttribute('aria-pressed', on);
-    hint(`${NAMES[type]}: ${type === 'thick' ? 'kemik yüzeyine tıklayın' : 'noktalara tıklayın (3B ya da kesit)'}. Bitirmek için Esc.`);
+    hint(xl(`${NAMES[type]}: ${type === 'thick' ? 'kemik yüzeyine tıklayın' : 'noktalara tıklayın (3B ya da kesit)'}. Bitirmek için Esc.`));
     if (on && window.UI) UI.openTab('pMes');
     draw();
   }

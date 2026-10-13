@@ -3,6 +3,7 @@
    Works on the voxel grid the guide was built on (S.grid for the mandible guide, S.fib.guide.grid for the fibula
    guide), so the numbers match the guide that is shown. */
 'use strict';
+var xl = s => (window.I18N ? I18N.t(s) : s);
 window.Fit = (function () {
   const St = window.Studio; if (!St) return null;
   const { S, V, fmt, bus } = St, $ = id => document.getElementById(id);
@@ -105,7 +106,7 @@ window.Fit = (function () {
   }
   function statTxt(s) {
     if (!s) return '–';
-    return s.mode === 'gap' ? `iç yüzeyin %${fmt(s.inBand * 100, 0)}'i plan aralığında, %${fmt(s.tight * 100, 0)}'i daha yakın` : `en ince ${fmt(s.minT)} mm, %${fmt(s.thin * 100, 0)}'i en ince duvarın altında`;
+    return s.mode === 'gap' ? xl(`iç yüzeyin %${fmt(s.inBand * 100, 0)}'i plan aralığında, %${fmt(s.tight * 100, 0)}'i daha yakın`) : xl(`en ince ${fmt(s.minT)} mm, %${fmt(s.thin * 100, 0)}'i en ince duvarın altında`);
   }
   function renderStats() { const el = $('fitStats'); if (!el) return; el.innerHTML = view.map === 'none' ? '' : `<dt>Mandibula guide'ı</dt><dd>${statTxt(stats.m)}</dd>${stats.f ? `<dt>Fibula guide'ı</dt><dd>${statTxt(stats.f)}</dd>` : ''}`; }
   function render() {
@@ -115,7 +116,7 @@ window.Fit = (function () {
       <div class="ctl"><label for="fitMap" class="lbl2">Renk haritası</label><select id="fitMap" data-seg><option value="none">Yok</option><option value="gap" data-short="Aralık">Kemiğe aralık</option><option value="wall" data-short="Duvar">Duvar kalınlığı</option></select></div>
       <label class="chk"><input type="checkbox" id="fitSeat" ${view.seat ? 'checked' : ''}> Takma yönünü göster</label>
       <dl class="kv" id="fitStats"></dl>
-      ${st && st.ok ? `<dl class="kv"><dt>Takma yönü</dt><dd>${st.free ? (st.best.tilt ? fmt(st.best.tilt, 0) + '° eğik' : 'dik') : 'yok'} · ${st.free}/${st.dirs.length} yön uygun</dd>${st.best.block > 0 ? `<dt>Engelleyen kemik</dt><dd>${fmt(st.best.block, 0)} mm²</dd>` : ''}</dl>` : ''}
+      ${st && st.ok ? `<dl class="kv"><dt>Takma yönü</dt><dd>${xl(`${st.free ? (st.best.tilt ? fmt(st.best.tilt, 0) + '° eğik' : 'dik') : 'yok'} · ${st.free}/${st.dirs.length} yön uygun`)}</dd>${st.best.block > 0 ? `<dt>Engelleyen kemik</dt><dd>${fmt(st.best.block, 0)} mm²</dd>` : ''}</dl>` : ''}
       <p class="hint more">Ok guide'ın takılacağı yönü gösterir (yeşil: takılabilir, kırmızı: takılamaz). Kırmızı noktalar bu yönde guide'ın üstünde kalan kemiktir.</p>`;
     $('fitMap').value = view.map;
     $('fitMap').addEventListener('change', e => { view.map = e.target.value; St.busy(true, 'Renk haritası hesaplanıyor…'); setTimeout(() => { try { refresh(); } finally { St.busy(false); St.render(); } }, 20); });
