@@ -1012,7 +1012,7 @@ window.Fibula = (function () {
   async function production(signal) {
     if (!active() || !S.fib.guide) return;
     const x = S.fib.guide.ctx;
-    const r = await St.serverGuide({ vol: F.vol, red: F.red, F: F.c.Fm, thr: THR, g: x.g, P: x.P, u: x.u, v: x.v, n: x.n, pls: x.pls, scs: x.scs, wrapProfile: S.fib.guide.result.wrapProfile }, signal);
+    const r = await St.serverGuide({ vol: F.vol, red: F.red, F: F.c.Fm, thr: THR, g: x.g, P: x.P, u: x.u, v: x.v, n: x.n, pls: x.pls, scs: x.scs, wrapProfile: S.fib.guide.result.wrapProfile, seatDir: S.fib.guide.result.seatDir }, signal);
     S.fib.prod = Object.assign(r, { key: S.fib.guide.key });
     $('prodMsg').textContent += ' ' + xl(`Fibula guide'ı: ${r.watertight ? 'su geçirmez' : 'SU GEÇİRMEZ DEĞİL'}, ${r.bodies} parça${r.bodies > 1 ? ' (BİRDEN FAZLA PARÇA)' : ''}.`);
   }
