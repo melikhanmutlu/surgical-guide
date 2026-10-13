@@ -50,7 +50,7 @@ window.Vessels = (function () {
     last = null;
     const st = fib(); if (!st || !st.F || !st.F.c || !st.last || !st.last.segs.length) return null;
     const F = st.F, L = legFrame(F), segs = st.last.segs;
-    if (!P.donor) P.donor = F.c.FC.x > 0 ? 'L' : 'R';
+    if (!P.donor) P.donor = Fibula.legSide().side;
     if (!P.recip) { const E = St.resEnds(); P.recip = E && E.B.p.x > (E.A.p.x) ? 'L' : 'R'; }
     const rp = P.rp || defaultRecipient(P.recip);
     const sProx = segs[segs.length - 1].s1, sDist = segs[0].s0, sOrigin = L.smax - P.origin;
@@ -139,7 +139,7 @@ window.Vessels = (function () {
     else if (R.need != null && R.avail < R.need + 15) out.push(['warn', 'Uyarı', xl(`Pedikül payı az: ${fmt(R.avail, 0)} mm mevcut, ${fmt(R.need, 0)} mm gerekli (gerilimsiz anastomoz için ≥ 15 mm pay önerilir).`), 'fib']);
     if (R.perfSeg < 0) out.push(['warn', 'Uyarı', 'Perforatör greft segmentlerinin dışında kalıyor; deri adası kemikle birlikte taşınamaz.', 'fib']);
     if (!R.rp) out.push(['info', 'Bilgi', xl('Alıcı damar noktası bulunamadı; elle seçin.'), 'fib']);
-    const st = fib(); if (st && P.donor && (st.F.c.FC.x > 0 ? 'L' : 'R') !== P.donor) out.push(['info', 'Bilgi', xl(`Verici bacak ${side(P.donor)} seçili, BT'deki fibula ${side(st.F.c.FC.x > 0 ? 'L' : 'R')} tarafta görünüyor.`), 'fib']);
+    const ls = fib() && Fibula.legSide(); if (ls && P.donor && ls.side !== P.donor) out.push(['info', 'Bilgi', xl(P.donor === 'L' ? 'Verici bacak sol seçili, fibula planındaki bacak tarafı sağ.' : 'Verici bacak sağ seçili, fibula planındaki bacak tarafı sol.'), 'fib']);
     return out;
   });
   (window.ReportSections = window.ReportSections || []).push(d => {

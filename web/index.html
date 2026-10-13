@@ -471,7 +471,7 @@ button.ghost.danger { color: var(--crit); }
 #chkQc:has(#qc:empty):has(#caseInfo:empty) { display: none; }
 #chkQc .col { display: grid; gap: 10px; }
 :is(#apprMsg, #auMsg, #expMsg, #fibMirrorMsg, #fibPickMsg, #fibStatus, #guideStat, #imMsg, #lesStatus, #lsStat, #mkStat, #plMsg, #seStat, #verMsg, #xMsg) { color: var(--fg); background: var(--sunken); border-radius: var(--r); padding: 6px 10px; }
-:is(#apprMsg, #auMsg, #expMsg, #fibMirrorMsg, #fibPickMsg, #fibStatus, #guideStat, #imMsg, #lesStatus, #lsStat, #mkStat, #oneMsg, #prodMsg, #plMsg, #seStat, #verMsg, #xMsg):empty { display: none; }
+:is(#apprMsg, #auMsg, #expMsg, #fibMirrorMsg, #fibPickMsg, #fibSideMsg, #fibStatus, #guideStat, #imMsg, #lesStatus, #lsStat, #mkStat, #oneMsg, #prodMsg, #plMsg, #seStat, #verMsg, #xMsg):empty { display: none; }
 </style>
 <link rel="stylesheet" href="styles/kart.css">
 <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
@@ -637,6 +637,8 @@ button.ghost.danger { color: var(--crit); }
           <div id="fibBody" class="col" hidden>
             <h3 class="sub">Kaynak</h3>
             <div class="ctl"><label for="fibCand" class="lbl2">Fibula</label><select id="fibCand"></select></div>
+            <div class="ctl"><label for="fibSide" class="lbl2">Bacak tarafı</label><select id="fibSide"><option value="">Otomatik</option><option value="L">Sol bacak</option><option value="R">Sağ bacak</option></select></div>
+            <p class="hint" id="fibSideMsg"></p>
             <div class="btns"><button id="fibPick" aria-pressed="false"><svg class="i"><use href="#i-target"/></svg>Modelde seç</button><button id="fibSplit" aria-pressed="false"><svg class="i"><use href="#i-scissors"/></svg>Tibiadan ayır</button></div>
             <p class="hint" id="fibPickMsg" hidden></p>
             <h3 class="sub">Segmentler</h3>
@@ -644,6 +646,8 @@ button.ghost.danger { color: var(--crit); }
             <div id="fibKnots" class="col"></div>
             <div class="btns"><button id="fibOpt" class="accent"><svg class="i"><use href="#i-spark"/></svg>Kesileri öner</button></div>
             <details class="sec" id="secFibAng"><summary>Segment ve eklem açıları</summary>
+              <label class="chk"><input type="checkbox" id="fibRollAuto"> Dönüşü anatomiden öner</label>
+              <p class="hint more" data-for="fibRollAuto">Her segment, fibulanın lateral yüzü (plak ve guide yüzü) bukkala, pedikül lingual tarafa gelecek şekilde kendi ekseni etrafında döndürülür. Kaydırıcıyla elle değiştirmek öneriyi kapatır.</p>
               <div id="fibRolls" class="col"></div>
               <div id="fibJointBox" class="col">
                 <div class="ctl"><label for="fibJoint" class="lbl2">Bağlantı</label><select id="fibJoint"></select></div>
@@ -667,6 +671,7 @@ button.ghost.danger { color: var(--crit); }
             <div class="tbl"><table><thead><tr><th>Segment</th><th>Boy</th><th>Distalden</th><th>Uç açıları</th><th>Kret</th></tr></thead><tbody id="fibRows"></tbody></table></div>
             <dl class="kv" id="fibSum"></dl>
             <ul class="checks" id="fibChecks"></ul>
+            <details class="sec" id="secFibRules"><summary>Klinik eşikler</summary><div id="fibRulesBox" class="col"></div></details>
             <details class="sec" id="secOsteo"><summary>Osteotomi raporu</summary><div id="osteoBox" class="col"></div></details>
             <details class="sec" id="secFg"><summary>Fibula guide'ı</summary><div id="fgBox" class="col"></div></details>
             <details class="sec" id="secImpl"><summary>Dental implant</summary><div id="implBox" class="col"></div></details>
