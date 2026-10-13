@@ -89,3 +89,30 @@ html[data-style="k1"] .step.done:not([open]) > summary .n { background: var(--ok
 html[data-style="k1"] .top button:not(.primary):not(.info) { border-color: transparent; background: transparent; }
 html[data-style="k1"] .top button:not(.primary):not(.info):hover:not(:disabled) { background: var(--hover); }
 html[data-style="k1"] .top button[aria-pressed="true"] { background: var(--accent-soft) !important; color: var(--accent); }
+
+/* ---------- small windows (1024x768, 1280x720): slimmer side panels, tighter chrome, one-row toolbar ---------- */
+@media (max-width: 1366px) {
+  :root { --lw: 300px; --rw: 310px; }
+  html[data-style="k1"] .top { padding: 0 12px; }
+  html[data-style="k1"] .work { gap: 12px; padding: 12px; }
+}
+@media (max-width: 1100px) {
+  :root { --lw: 264px; --rw: 280px; }
+  html[data-style="k1"] .top { height: 52px; gap: 4px; padding: 0 8px; }
+  html[data-style="k1"] .work { gap: 8px; padding: 8px; }
+  html[data-style="k1"] .ibtn .lbl, html[data-style="k1"] .brand small, html[data-style="k1"] .top .sep { display: none; }
+  html[data-style="k1"] .top > * { flex-shrink: 0; }
+  html[data-style="k1"] .top > .case { flex-shrink: 1; min-width: 0; }
+  html[data-style="k1"] .top .ibtn, html[data-style="k1"] .top .pill { white-space: nowrap; }
+  html[data-style="k1"] .step { margin: 2px 6px; }
+  html[data-style="k1"] .body { padding: 12px 4px 18px; }
+  html[data-style="k1"] .pane { padding: 12px; }
+  html[data-style="k1"] .progress { padding: 14px 12px 10px; }
+  html[data-style="k1"] .tabs { padding: 6px 6px 0; }
+  html[data-style="k1"] .tab { padding: 10px 4px 9px; font-size: 12.5px; }
+  html[data-style="k1"] details.sec[open] { padding: 0 10px 10px; }
+  html[data-style="k1"] details.sec[open] > summary { margin: 0 -10px; }
+}
+@media (max-height: 760px) {
+  html[data-style="k1"] .top { height: 48px; }
+}

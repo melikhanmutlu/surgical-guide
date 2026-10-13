@@ -14,7 +14,8 @@ window.FibGuide = (function () {
   // write one edit into the plan; the guide is rebuilt when the slider is released
   const P = () => Fibula.plan();
   function setBody(k, v) { const p = P(); p.fg = Object.assign({}, p.fg || {}, { [k]: v }); }
-  function screws() { const p = P(), info = Fibula.guideInfo(); if (!p.fsc) p.fsc = info.screws.map(s => Object.assign({}, s)); return p.fsc; }
+  // the first edit takes over the automatic screws as they are (their placement flags dropped: from now on they are by hand)
+  function screws() { const p = P(), info = Fibula.guideInfo(); if (!p.fsc) p.fsc = info.screws.map(s => { const { auto, none, ...f } = s; return f; }); return p.fsc; }
   function commit() { St.unapprove(P()); Fibula.guideEdited(); render(); }
 
   function render() {
@@ -22,11 +23,11 @@ window.FibGuide = (function () {
     const info = Fibula.active() ? Fibula.guideInfo() : null;
     if (!info) { box.innerHTML = ''; return; }
     if (box.contains(document.activeElement) && document.activeElement.type === 'range') return;   // do not rebuild under a drag
-    const b = Object.assign({}, info.auto, P().fg || {}), list = info.screws; sel = Math.min(sel, list.length - 1);
+    const b = Object.assign({}, info.auto, P().fg || {}), list = info.screws; sel = Math.max(0, Math.min(sel, list.length - 1));
     const sc = list[sel], R = S.fib.guide && S.fib.guide.result, edited = !!(P().fg || P().fsc);
     box.innerHTML = `<h3 class="sub">Fibula guide'ı</h3>
       ${BODY.map(([k, t, mn, mx, st, un]) => ctl('fg_' + k, t, mn, mx, st, b[k], un)).join('')}
-      <p class="hint more">Kesi yuvaları testere payı kadar açılır.</p>
+      <p class="hint more">Kesi yuvaları "Yuva genişliği" kadar açılır, her greft yüzünün dışında kalır.</p>
       <div class="ctl"><span class="lbl2">Guide vidaları</span><div class="el-list" id="fgList" role="group" aria-label="Guide vidaları">${list.map((s, i) => `<button class="el ${i === sel ? 'on' : ''}" data-i="${i}" aria-pressed="${i === sel}">Vida ${i + 1}</button>`).join('')}</div></div>
       ${sc ? `<div class="ctl"><label for="fgSeg" class="lbl2">Hangi segment</label><select id="fgSeg">${info.segs.map((g, i) => `<option value="${i}" ${i === sc.seg ? 'selected' : ''}>Segment ${i + 1}${g.barrel ? ' (üst)' : ''}</option>`).join('')}</select></div>
       ${SCREW.map(([k, t, mn, mx, st, un]) => ctl('fs_' + k, t, mn, mx, st, sc[k], un)).join('')}` : ''}
@@ -37,7 +38,7 @@ window.FibGuide = (function () {
       $('fgSeg').addEventListener('change', e => { screws()[sel].seg = +e.target.value; screws()[sel].off = 0; commit(); });
     }
     box.querySelectorAll('#fgList button').forEach(el => el.addEventListener('click', () => { sel = +el.dataset.i; render(); }));
-    $('fgAdd').addEventListener('click', () => { const l = screws(), last = l[sel] || l[0]; l.push(Object.assign({}, last, { off: Math.max(-25, Math.min(25, (last.off || 0) + 8)) })); sel = l.length - 1; commit(); });
+    $('fgAdd').addEventListener('click', () => { const l = screws(), last = l[sel] || l[0] || { seg: 0, off: -8 }; l.push(Object.assign({}, last, { off: Math.max(-25, Math.min(25, (last.off || 0) + 8)) })); sel = l.length - 1; commit(); });
     if ($('fgDel')) $('fgDel').addEventListener('click', () => { screws().splice(sel, 1); sel = Math.max(0, sel - 1); commit(); });
     if ($('fgAuto')) $('fgAuto').addEventListener('click', () => { P().fg = null; P().fsc = null; sel = 0; commit(); });
   }

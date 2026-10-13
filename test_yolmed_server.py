@@ -132,6 +132,17 @@ def main():
         st, r = J(call(base, "PUT", f"/cases/{a}/versions/1", {"plan": {}})); assert st == 405   # immutable
         print("cases OK")
 
+        # ---- wrong field types are 400 (not a database error), an over-size upload can still read its 413, error answers carry CORS
+        st, r = J(call(base, "POST", "/cases", {"name": "x", "kind": {"a": 1}, "fingerprint": [1]})); assert st == 400, (st, r)
+        st, r = J(call(base, "POST", f"/cases/{a}/versions", {"plan": {}, "note": {"x": 1}, "author": ["a"]})); assert st == 400, (st, r)
+        st, r = J(call(base, "PUT", f"/cases/{a}/draft", {"plan": {"blob": "x" * yolmed_server.MAX_PLAN_BODY}})); assert st == 413, (st, r)
+        st, h, _ = call(base, "POST", "/segment?nx=1&ny=1&nz=1", raw=b"", headers={"Content-Type": "application/octet-stream"})
+        assert st == 400 and h.get("Access-Control-Allow-Origin") == "*", (st, dict(h))
+        req_, _m = synthetic_case(0.6)
+        st, r = J(call(base, "POST", "/guide", {"crop": req_, "mask_b64": "", "frame": {}, "g": {}, "planes": [{}] * (yolmed_server.MAX_PLANES + 1)}))
+        assert st == 400, (st, r)
+        print("robustness OK")
+
         # ---- guide
         crop, mask = synthetic_case()
         cw = 0.3 + 3.0
@@ -158,7 +169,9 @@ def main():
         lo, hi = tm.bounds
         assert lo[0] >= -15.01 and hi[0] <= 15.01, tm.bounds              # |uu| <= L/2
         assert lo[1] >= -8.01 and hi[1] <= 8.01, tm.bounds                # |vv| <= W/2
-        assert lo[2] >= 8 - 4 - 0.01, tm.bounds                           # nn >= -wrap
+        # nn >= -wrap: the wrap line is measured from the bone top found in the grid (as the preview does), so it may lie
+        # a fraction of the 0.2 mm grid below the anchor plane
+        assert lo[2] >= 8 - 4 - 0.1, tm.bounds
         R0 = 8.0
         probes = {
             "shell mid-wall (x=0)":            ([0, 0, R0 + 0.3 + 1.5], True),
@@ -175,6 +188,14 @@ def main():
         for (name, (_, want)), got in zip(probes.items(), inside):
             assert bool(got) == want, f"probe '{name}': expected {want}, got {got}"
         print("guide geometry probes OK")
+        # slot width follows the request's w (the fibula plan sends its slot width apart from the blade)
+        for w, open_at_07 in ((0.8, False), (1.8, True)):
+            rq = dict(req, planes=[dict(req["planes"][0], w=w), req["planes"][1]])
+            st, rw = J(call(base, "POST", "/guide", rq)); assert st == 200 and rw["bodies"] == 1, (st, rw.get("bodies"))
+            tw = trimesh.load(io.BytesIO(base64.b64decode(rw["stl_b64"])), file_type="stl")
+            c0, cm, cp = contains(tw, np.array([[-6, 0, R0 + 1.8], [-6 - 0.7, 0, R0 + 1.8], [-6 + 0.7, 0, R0 + 1.8]], float))
+            assert not bool(c0) and bool(cm) != open_at_07 and bool(cp) != open_at_07, (w, c0, cm, cp)
+        print("slot width OK (0.8 / 1.8 mm)")
         # two separate guides: nothing between the cuts beyond a 3 mm flange, one body per side
         req2 = dict(req, gap={"A": req["planes"][0], "B": req["planes"][1], "flange": 3.0})
         st, r2 = J(call(base, "POST", "/guide", req2))
@@ -205,7 +226,52 @@ def main():
         assert not bool(contains(tm4, np.array([[0, 7.5, -4.5]], float))[0])
         st, r = J(call(base, "POST", "/guide", dict(req, stops={"pos": [40, 6]}))); assert st == 400, r
         print("stops OK")
+        # ---- the preview's adaptive body (web/app.js buildGuide): the same request fields the studio sends
+        # seat_dir: the insertion direction the preview chose is used as given (tilt 10 deg, azimuth 0 = towards +u)
+        st, r5 = J(call(base, "POST", "/guide", dict(req, seat_dir={"tilt": 10, "az": 0})))
+        assert st == 200 and r5["watertight"] and r5["bodies"] == 1 and r5["seat_dir"]["forced"] and (r5["seat_dir"]["tilt"], r5["seat_dir"]["az"]) == (10, 0), (st, r5.get("seat_dir"), r5.get("error"))
+        assert r5["pieces"] == 1 and len(r5["screws"]) == 2 and all(s["ok"] for s in r5["screws"]), r5["screws"]
+        st, r = J(call(base, "POST", "/guide", dict(req, seat_dir=[1, 2]))); assert st == 400, r
+        # g.wrapU: a per-position wrap profile (the automatic sizing's), shallower towards +u: the body ends higher there
+        req6 = dict(req, g=dict(req["g"], W=24, wrapU=[[-15, 4], [0, 4], [15, 2]]))
+        st, r6 = J(call(base, "POST", "/guide", req6))
+        assert st == 200 and r6["watertight"] and r6["bodies"] == 1, (st, r6.get("error"))
+        tm6 = trimesh.load(io.BytesIO(base64.b64decode(r6["stl_b64"])), file_type="stl")
+        deep_end, shallow_end = contains(tm6, np.array([[-13, 10.6, 5.0], [13, 10.6, 5.0]], float))     # nn = -3: inside the 4 mm wrap, outside the 2 mm one
+        assert bool(deep_end) and not bool(shallow_end), (deep_end, shallow_end)
+        # g.vc: the body centred 3 mm towards +v (the bone's lateral centre found by the sizing)
+        req7 = dict(req, g=dict(req["g"], vc=3))
+        st, r7 = J(call(base, "POST", "/guide", req7))
+        assert st == 200 and r7["watertight"] and r7["bodies"] == 1, (st, r7.get("error"))
+        tm7 = trimesh.load(io.BytesIO(base64.b64decode(r7["stl_b64"])), file_type="stl")
+        # shell points on the bone: vv = -5.9 lies in the centred body only, vv = 8.5 in the shifted one only
+        shifted = contains(tm7, np.array([[0, -5.88, 7.84], [0, 8.5, 4.9]], float)); centred = contains(tm, np.array([[0, -5.88, 7.84], [0, 8.5, 4.9]], float))
+        assert list(map(bool, shifted)) == [False, True] and list(map(bool, centred)) == [True, False], (shifted, centred)
+        # a screw whose sleeve would float (entry 30 mm beyond the guide): no sleeve, no hole, reported as no_body
+        req8 = dict(req, screws=req["screws"] + [{"entry": [60, 0, 8], "dir": [0, 0, -1], "d": 2.0, "D": 5.0, "sleeveH": 5.0}])
+        st, r8 = J(call(base, "POST", "/guide", req8))
+        assert st == 200 and r8["watertight"] and r8["bodies"] == 1 and len(r8["screws"]) == 3 and r8["screws"][2].get("no_body") is True, (st, r8.get("screws"), r8.get("error"))
+        # the same request gives the same STL (deterministic production)
+        st, r9 = J(call(base, "POST", "/guide", req))
+        assert r9["stl_b64"] == J(call(base, "POST", "/guide", req))[1]["stl_b64"]
+        print("adaptive body fields OK")
         st, r = J(call(base, "POST", "/guide", {"crop": crop})); assert st == 400 and "error" in r
+        # the connecting bar (kind "bar"): rod path + two pads with holes -> one closed body, the holes open, clearance
+        # from the bone the request carries (here a slab 10 mm below the rod)
+        bar = {"path": [[-20, 0, 0], [-20, 0, -8], [20, 0, -8], [20, 0, 0]], "r": 2.0,
+               "pads": [{"c": [-20, 0, 2], "axis": [0, 0, 1], "R": 3.5, "T": 4, "hole": 1.1}, {"c": [20, 0, 2], "axis": [0, 0, 1], "R": 3.5, "T": 4, "hole": 1.1}]}
+        bsp = 0.5; bn = (100, 30, 60)
+        bmask = np.zeros(bn[::-1], np.uint8)
+        bz = (np.arange(bn[2]) * bsp - 30.0); bmask[(bz < -20), :, :] = 1
+        bcrop = {"nx": bn[0], "ny": bn[1], "nz": bn[2], "sp": [bsp] * 3, "origin": [-25.0, -7.5, -30.0], "axes": [[1, 0, 0], [0, 1, 0], [0, 0, 1]]}
+        st, rb = J(call(base, "POST", "/guide", {"kind": "bar", "resolution": 0.2, "bar": bar, "crop": bcrop, "mask_b64": base64.b64encode(bmask.tobytes()).decode()}))
+        assert st == 200 and rb["watertight"] and rb["bodies"] == 1, (st, rb.get("error"))
+        tmb = trimesh.load(io.BytesIO(base64.b64decode(rb["stl_b64"])), file_type="stl")
+        hole, rod, pad = contains(tmb, np.array([[-20, 0, 2], [0, 0, -8], [-22.5, 0, 2]], float))
+        assert not bool(hole) and bool(rod) and bool(pad), (hole, rod, pad)
+        assert rb["in_bone_verts"] == 0 and 9.0 < rb["bone_clear_mm"] < 10.5, (rb["bone_clear_mm"], rb["in_bone_verts"])
+        st, r = J(call(base, "POST", "/guide", {"kind": "bar", "bar": dict(bar, r=-1)})); assert st == 400 and "error" in r
+        print("connecting bar OK")
     finally:
         srv.shutdown(); srv.server_close()
         os.remove(db)

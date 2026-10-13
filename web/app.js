@@ -7,25 +7,36 @@
   const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
   const deg = THREE.MathUtils.degToRad;
   const esc = t => String(t).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+  // English text for a message assembled at run time (i18n.js looks up whole strings, so the fixed pieces are translated before joining)
+  const xl = s => (window.I18N ? I18N.t(s) : s);
   const COLORS = { bone: 0xddd5bd, resected: 0xd67850, guide: 0x3c82dc, fguide: 0x2a9d8f, screw: 0x8c959c, plane: 0xe0533d, anchor: 0x22a06b, lesion: 0x8e6fd6 };
   // busy indicator; long server jobs get a running bar, elapsed time and a cancel button
-  let busyTick = null, busyCancelFn = null;
+  let busyTick = null, busyCancelFn = null, pipeGuide = false;   // pipeGuide: the guide build is the last stage (4/4) of a bone rebuild
   const busy = (on, text, opt = {}) => {
-    $('busy').hidden = !on; if (text) $('busyText').textContent = text;
+    $('busy').hidden = !on; $('busy').setAttribute('aria-busy', on ? 'true' : 'false'); document.body.classList.toggle('is-busy', !!on); if (text) $('busyText').textContent = text;
     $('busyBar').hidden = !(on && opt.bar); $('busyBar').classList.remove('det'); $('busyBar').firstElementChild.style.width = ''; $('busyCancel').hidden = !(on && opt.cancel); busyCancelFn = on ? opt.cancel || null : null;
     clearInterval(busyTick);
-    if (on && opt.bar) { const t0 = Date.now(); busyTick = setInterval(() => { $('busyText').textContent = `${text} ${Math.round((Date.now() - t0) / 1000)} sn${opt.max ? ' / en çok ' + opt.max + ' sn' : ''}`; }, 1000); }
+    if (on && opt.bar) { const t0 = Date.now(); busyTick = setInterval(() => { $('busyText').textContent = `${xl(text)} ${xl(`${Math.round((Date.now() - t0) / 1000)} sn`)}${opt.max ? ' ' + xl(`/ en çok ${opt.max} sn`) : ''}`; }, 1000); }
   };
   // determinate bar for file loading: percentage and, once the rate is known, the time left
   const etaText = s => s < 60 ? `${Math.max(1, Math.round(s))} sn` : `${Math.floor(s / 60)} dk ${Math.round(s % 60)} sn`;
-  function progress() {
+  // a DICOM / zip load can be cancelled (button in the busy bar) and a newer load replaces an older one: the older one stops at its next
+  // progress step (LOAD_CANCELLED) and never reaches setVolume, so a stale series cannot overwrite the case
+  const LOAD_CANCELLED = Object.assign(new Error('load cancelled'), { cancelled: true });
+  let loadCtl = null, committing = false;
+  function startLoad() { if (loadCtl) loadCtl.cancelled = true; return (loadCtl = { cancelled: false, byUser: false }); }
+  // another load while the previous one is already building the case (setVolume) would race it: refuse with a notice
+  function loadBlocked() { if (!committing) return false; alertMsg('Önceki yükleme sürüyor; bitince yeniden deneyin.'); return true; }
+  function progress(ctl) {
     const t0 = performance.now(); let last = -1e9;
-    clearInterval(busyTick); $('busy').hidden = false; $('busyBar').hidden = false; $('busyBar').classList.add('det'); $('busyCancel').hidden = true;
+    clearInterval(busyTick); $('busy').hidden = false; $('busy').setAttribute('aria-busy', 'true'); document.body.classList.add('is-busy'); $('busyBar').hidden = false; $('busyBar').classList.add('det'); $('busyCancel').hidden = !ctl;
+    busyCancelFn = ctl ? () => { ctl.cancelled = ctl.byUser = true; $('busyCancel').hidden = true; $('busyText').textContent = 'Yükleme iptal ediliyor…'; } : null;
     return async (f, text) => {
+      if (ctl && ctl.cancelled) throw LOAD_CANCELLED;
       const now = performance.now(); if (now - last < 120 && f < 1) return; last = now;
       f = Math.max(0, Math.min(1, f)); const el = (now - t0) / 1000, eta = f > 0.03 && el > 0.8 && f < 1 ? el * (1 - f) / f : null;
       $('busyBar').firstElementChild.style.width = (f * 100).toFixed(1) + '%';
-      $('busyText').textContent = `${text} %${Math.floor(f * 100)}${eta !== null ? ` · yaklaşık ${etaText(eta)} kaldı` : ''}`;
+      $('busyText').textContent = `${xl(text)} ${xl(`%${Math.floor(f * 100)}`)}${eta !== null ? ' ' + xl(`· yaklaşık ${etaText(eta)} kaldı`) : ''}`;
       await sleep();
     };
   }
@@ -127,11 +138,43 @@
     return new THREE.Mesh(g, material);
   }
 
+  // Marching tetrahedra triangulate smooth areas much finer than the shape needs. In the background (a few ms at a time, so
+  // the page stays usable) the displayed guide's edges are collapsed while the surface moves less than LITE_TOL mm, which
+  // cuts the STL / 3MF size several times over; the mesh stays closed and 2-manifold. A newer guide (the mesh leaves its
+  // parent) cancels the job. window.GUIDE_LITE = false switches it off.
+  const LITE_TOL = 0.03;
+  async function simplifyMesh(mesh) {
+    const g0 = mesh && mesh.geometry;
+    if (!g0 || !g0.index || window.GUIDE_LITE === false) return false;
+    const it = G.decimateGen({ positions: g0.attributes.position.array, indices: g0.index.array }, LITE_TOL);
+    let t = performance.now(), r;
+    for (;;) {
+      r = it.next(); if (r.done) break;
+      if (performance.now() - t > 14) { await new Promise(res => setTimeout(res, 0)); t = performance.now(); if (!mesh.parent || mesh.geometry !== g0) return false; }
+    }
+    if (!mesh.parent || mesh.geometry !== g0) return false;
+    const ng = new THREE.BufferGeometry();
+    ng.setAttribute('position', new THREE.BufferAttribute(r.value.positions, 3)); ng.setIndex(new THREE.BufferAttribute(r.value.indices, 1)); ng.computeVertexNormals();
+    mesh.geometry = ng; g0.dispose();
+    render();
+    return true;
+  }
+
   // ---------- case state ----------
+  // kerfSide: where the saw slot lies relative to the planned cut plane. 1 = fully on the resected side (the cut plane
+  // is the stump face, the graft sits flush), 0 = centred on the plane (half the slot width is lost from each stump).
+  // vc: lateral (v) centre of the guide body relative to the anchor; set by the automatic sizing, 0 by hand.
+  const G_DEFAULT = { rot: 0, roll: 0, L: 36, W: 22, wrap: 6, wall: 2.5, clear: 0.3, bridge: 4, side: 1, split: 0, flange: 3, peri: 0, fit: 0, stopT: 0, stopB: 0, stopL: 6, stopD: 5, kerfSide: 1, vc: 0 };
+  // which body values are still chosen automatically from the bone (a slider edit takes a value over by hand)
+  const AUTO_DEFAULT = { L: 1, W: 1, wrap: 1, split: 1 };
+  // bar: the connecting bar between the two guides of a long resection (split 2); stopP: a lip on the posterior edge of a
+  // guide that runs up the ramus (its v axis front to back), so the piece rests on the posterior border
+  Object.assign(G_DEFAULT, { bar: 0, stopP: 0 }); Object.assign(AUTO_DEFAULT, { bar: 1, stopP: 1 });
   const S = {
     vol: null, red: null, labels: null, comps: [], selected: new Set(), mask: null,
     anchor: null,             // {p:Vector3, n:Vector3, axis:Vector3}
-    g: { rot: 0, roll: 0, L: 36, W: 22, wrap: 6, wall: 2.5, clear: 0.3, bridge: 4, side: 1, split: 0, flange: 3, peri: 0, fit: 0, stopT: 0, stopB: 0, stopL: 6, stopD: 5 },
+    g: Object.assign({}, G_DEFAULT), gAuto: Object.assign({}, AUTO_DEFAULT),
+    fitLog: [],               // what the automatic fit ladder tried (wrap, two guides, flange), shown in the checks
     planes: [], screws: [], sel: null, explode: 0, mode: 'orbit', result: null,
     guideOn: false,           // the guide is built only after 'Guide oluştur', never on its own
     resRemoved: false,        // 'Rezeksiyon bölgesini sil': the resected piece is hidden
@@ -163,27 +206,39 @@
     S.source = { type: 'sample', name, fp: 'sample:' + name };
     await setVolume(vol, name === 'mandible' ? 'Örnek: mandibula (sentetik BT)' : 'Örnek: alt bacak (sentetik BT)', name);
   }
+  // true when this load was cancelled (by the button, or replaced by a newer load); the busy bar is hidden unless a newer load owns it
+  function loadStopped(ctl) {
+    if (!ctl.cancelled) return false;
+    if (loadCtl === ctl) { loadCtl = null; busy(false); }
+    if (ctl.byUser) alertMsg('Yükleme iptal edildi.');
+    return true;
+  }
   async function loadDicom(files) {
-    const r = await readDicom(files);
+    if (loadBlocked()) return;
+    const ctl = startLoad();
+    let r;
+    try { r = await readDicom(files, ctl); } catch (e) { if (e !== LOAD_CANCELLED) { if (loadCtl === ctl) loadCtl = null; throw e; } }
+    if (loadStopped(ctl) || !r) return;
+    if (loadCtl === ctl) loadCtl = null;
     if (r.error) { busy(false); alertMsg(r.error); return; }
     S.source = r.source; scan = r.scan;
     if (S.pendingPlan && S.pendingPlan.source && S.pendingPlan.source.fp === r.source.fp) S.autoAnchor = false;
     await setVolume(r.vol, r.label, 'dicom');
   }
   // DICOM files -> { vol, label, source } or { error }
-  async function readDicom(files) {
+  async function readDicom(files, ctl) {
     if (!window.dicomParser) return { error: 'DICOM okuyucu yüklenemedi.' };
     const zipName = files.length === 1 && /\.zip$/i.test(files[0].name) ? files[0].name.replace(/\.zip$/i, '') : null;
     // one bar across the stages: unzip (if any) 30 %, reading the files, then decoding the chosen series
-    const prog = progress(), hasZip = window.Unzip && (files.some(f => /\.zip$/i.test(f.name || '')) || (await Promise.all(files.slice(0, 50).map(f => Unzip.isZip(f).catch(() => false)))).some(Boolean));
+    const prog = progress(ctl), hasZip = window.Unzip && (files.some(f => /\.zip$/i.test(f.name || '')) || (await Promise.all(files.slice(0, 50).map(f => Unzip.isZip(f).catch(() => false)))).some(Boolean));
     const zw = hasZip ? 0.3 : 0, pw = (1 - zw) * 0.55, dw = 1 - zw - pw;
     await prog(0, 'Dosyalar okunuyor…');
     if (hasZip) {
       try {
         const x = await Unzip.expand(files, (i, n) => prog(zw * i / n, `Zip açılıyor (${i}/${n})…`));
         files = x.files;
-        if (x.skipped.length) alertMsg(`Zip içinde ${x.skipped.length} dosya açılamadı ve atlandı (şifreli, desteklenmeyen sıkıştırma ya da çok iç içe): ${x.skipped.slice(0, 3).join(', ')}${x.skipped.length > 3 ? '…' : ''}`);
-      } catch (e) { return { error: 'Zip açılamadı: ' + e.message }; }
+        if (x.skipped.length) alertMsg(`${xl(`Zip içinde ${x.skipped.length} dosya açılamadı ve atlandı (şifreli, desteklenmeyen sıkıştırma ya da çok iç içe):`)} ${x.skipped.slice(0, 3).join(', ')}${x.skipped.length > 3 ? '…' : ''}`);
+      } catch (e) { if (e === LOAD_CANCELLED) throw e; return { error: 'Zip açılamadı: ' + e.message }; }
     }
     if (!files.length) return { error: 'Dosya bulunamadı.' };
     const slices = [], unsup = {}; let skipped = 0, multi = 0;
@@ -201,7 +256,7 @@
       } catch (e) { skipped++; }
       await prog(zw + pw * (slices.length + skipped + multi) / files.length, `DICOM okunuyor (${slices.length + skipped} / ${files.length})…`);
     }
-    if (!slices.length) { const u = Object.keys(unsup); return { error: u.length ? `Bu aktarım sözdizimi desteklenmiyor: ${u.map(t => window.DicomCodecs ? DicomCodecs.name(t) : t).join(', ')}.` : multi ? 'Çok çerçeveli (enhanced) DICOM henüz desteklenmiyor; seriyi tek kesitli dosyalar olarak dışa aktarın.' : 'Görüntü içeren DICOM bulunamadı.' }; }
+    if (!slices.length) { const u = Object.keys(unsup); return { error: u.length ? `${xl('Bu aktarım sözdizimi desteklenmiyor:')} ${u.map(t => window.DicomCodecs ? DicomCodecs.name(t) : t).join(', ')}.` : multi ? 'Çok çerçeveli (enhanced) DICOM henüz desteklenmiyor; seriyi tek kesitli dosyalar olarak dışa aktarın.' : 'Görüntü içeren DICOM bulunamadı.' }; }
     const bySeries = {}; slices.forEach(s => (bySeries[s.series] = bySeries[s.series] || []).push(s));
     const groups = Object.values(bySeries).sort((a, b) => b.length - a.length);
     let ser = groups[0];
@@ -259,13 +314,13 @@
     for (let k = 0; k < ser.length; k++) {
       let ds;
       try { ds = await dparse(new Uint8Array(await ser[k].file.arrayBuffer())); }
-      catch (e) { return { error: `Kesit ${k + 1} okunamadı: ${e.message || e}` }; }
+      catch (e) { return { error: `${xl(`Kesit ${k + 1} okunamadı:`)} ${e.message || e}` }; }
       const el = ds.elements.x7fe00010, signed = ds.uint16('x00280103') === 1;
       const slope = parseFloat(ds.string('x00281053') || '1'), icpt = parseFloat(ds.string('x00281052') || '0');
       let px;
       if (window.DicomCodecs) {
         try { px = await DicomCodecs.decode(ds); }
-        catch (e) { return { error: `Kesit ${k + 1} açılamadı: ${e.message}` }; }
+        catch (e) { return { error: `${xl(`Kesit ${k + 1} açılamadı:`)} ${e.message}` }; }
         if (px.length < rows * cols) return { error: `Kesit ${k + 1} boyutu seriyle uyuşmuyor.` };
       } else {
         const buf = ds.byteArray.buffer.slice(ds.byteArray.byteOffset + el.dataOffset, ds.byteArray.byteOffset + el.dataOffset + rows * cols * 2);
@@ -275,7 +330,7 @@
       await prog(p0 + dw * (k + 1) / ser.length, `${what} (${k + 1} / ${ser.length})…`);
     }
     return { source, vol: { hu, nx: cols, ny: rows, nz: ser.length, sp: [ps[1], ps[0], dz], origin: ser[0].ipp,
-      axes: [[r.x, r.y, r.z], [c.x, c.y, c.z], [nrm.x, nrm.y, nrm.z]], meta }, label: `${zipName || ((ser[0].path || '').includes('/') ? ser[0].path.split('/')[0] : 'DICOM')}${groups.length > 1 && source.name ? ' · ' + source.name : ''} · ${ser.length} kesit${skipped ? `, ${skipped} dosya atlandı` : ''}` };
+      axes: [[r.x, r.y, r.z], [c.x, c.y, c.z], [nrm.x, nrm.y, nrm.z]], meta }, label: `${zipName || ((ser[0].path || '').includes('/') ? ser[0].path.split('/')[0] : 'DICOM')}${groups.length > 1 && source.name ? ' · ' + source.name : ''} · ${xl(`${ser.length} kesit`)}${skipped ? xl(`, ${skipped} dosya atlandı`) : ''}` };
   }
   const dstr = (ds, tag) => (ds.string(tag) || '').replace(/\0/g, '').trim();
   // one line per series for the series switcher: description, size, slice thickness, kernel, and a warning for scouts
@@ -296,8 +351,11 @@
   async function switchSeries(i) {
     if (!scan || !scan.groups[i] || i === scan.cur) return;
     if (S.anchor && !confirm('Başka seri açılınca kesiler ve guide silinir. Devam edilsin mi?')) { renderSeries(); return; }
-    const prog = progress(); await prog(0, 'Seri açılıyor…');
-    const r = await decodeSeries(scan.groups[i], prog, 0, 1, scan);
+    if (loadBlocked()) { renderSeries(); return; }
+    const ctl = startLoad(), prog = progress(ctl); let r;
+    try { await prog(0, 'Seri açılıyor…'); r = await decodeSeries(scan.groups[i], prog, 0, 1, scan); } catch (e) { if (e !== LOAD_CANCELLED) { if (loadCtl === ctl) loadCtl = null; throw e; } }
+    if (loadStopped(ctl) || !r) { renderSeries(); return; }
+    if (loadCtl === ctl) loadCtl = null;
     if (r.error) { busy(false); alertMsg(r.error); renderSeries(); return; }
     S.source = r.source; await setVolume(r.vol, r.label, 'dicom');
   }
@@ -316,15 +374,20 @@
   }
 
   async function setVolume(vol, label, kind) {
+    committing = true;
+    try { return await setVolumeNow(vol, label, kind); } finally { committing = false; }
+  }
+  async function setVolumeNow(vol, label, kind) {
     $('caseMsg').hidden = true;
     S.vol = vol; S.kind = kind;
-    busy(true, 'Hacim küçültülüyor…'); await sleep();
+    busy(true, 'Hacim küçültülüyor… 1/4'); await sleep();
     S.red = G.reduce(vol, 0.8);
     $('caseInfo').innerHTML = `<dt>Vaka</dt><dd>${esc(label)}</dd><dt>Boyut</dt><dd>${vol.nx}×${vol.ny}×${vol.nz}</dd><dt>Voksel</dt><dd>${vol.sp.map(s => fmt(s, 2)).join(' × ')} mm</dd><dt>Çalışma ızgarası</dt><dd>${S.red.sp.map(s => fmt(s, 2)).join(' × ')} mm</dd>`;
-    S.qc = qualityCheck(vol); renderQC();
+    S.qcBase = qualityCheck(vol); S.segWarn = []; syncQC();
     S.anchor = null; S.planes = []; S.screws = []; S.sel = null; S.result = null; S.guideOn = false; S.resRemoved = false; unapprove(S.lesion);
-    if (S.autoAnchor !== false) { S.lesion.condyle = null; S.g.split = 0; syncGuideInputs(); syncLesion(); }
-    ['guide', 'resected', 'anchor', 'lesion'].forEach(id => setPart(id, null, null));
+    // a new volume is a new patient: the previous case's guide settings and lesion bounds must not carry over (a plan restore keeps its own)
+    if (S.autoAnchor !== false) { Object.assign(S.g, G_DEFAULT, { wrapU: null }); Object.assign(S.gAuto, AUTO_DEFAULT); S.fitLog = []; S.autoSize = null; Object.assign(S.lesion, { from: -6, to: 6, margin: 3, condyle: null }); syncGuideInputs(); syncLesion(); }
+    ['guide', 'bar', 'resected', 'anchor', 'lesion'].forEach(id => setPart(id, null, null));
     clearElementParts();
     await segment(true);
     renderSeries();
@@ -336,7 +399,7 @@
   // ---------- image quality control (thresholds from published guide workflows; clinical team sets the final values) ----------
   function qualityCheck(vol) {
     const m = vol.meta || {}, out = [], dz = vol.sp[2], th = m.thickness || dz;
-    if (m.modality && m.modality !== 'CT') out.push(['crit', 'Kritik', `Modalite ${m.modality}; BT serisi gerekli.`]);
+    if (m.modality && m.modality !== 'CT') out.push(['crit', 'Kritik', `${xl('Modalite')} ${m.modality}; ${xl('BT serisi gerekli.')}`]);
     const step = Math.max(dz, th);
     out.push(step <= 1 ? ['ok', 'Uygun', `Kesit kalınlığı ${fmt(th, 2)} mm, aralık ${fmt(dz, 2)} mm (≤ 1 mm).`]
       : step <= 1.5 ? ['warn', 'Uyarı', `Kesit ${fmt(step, 2)} mm; guide için ≤ 1 mm önerilir.`]
@@ -349,7 +412,7 @@
       out.push(bad ? ['crit', 'Kritik', `${bad} yerde kesit aralığı düzensiz; eksik ya da tekrar eden kesit olabilir.`] : ['ok', 'Uygun', 'Kesit aralığı düzenli, eksik kesit yok.']);
     }
     if (m.bits && m.bits <= 8) out.push(['crit', 'Kritik', `Görüntü ${m.bits} bit; HU değerleri korunmamış (pencerelenmiş ya da ekran görüntüsü). Ham BT serisi gerekli.`]);
-    if (m.ts && /^1\.2\.840\.10008\.1\.2\.4\.(50|51|81|91)$/.test(m.ts) && window.DicomCodecs) out.push(['warn', 'Uyarı', `${DicomCodecs.name(m.ts)}: kayıplı sıkıştırma; kemik sınırı birkaç HU kayabilir.`]);
+    if (m.ts && /^1\.2\.840\.10008\.1\.2\.4\.(50|51|81|91)$/.test(m.ts) && window.DicomCodecs) out.push(['warn', 'Uyarı', `${DicomCodecs.name(m.ts)}: ${xl('kayıplı sıkıştırma; kemik sınırı birkaç HU kayabilir.')}`]);
     if (m.tilt > 1) out.push(['crit', 'Kritik', `Gantry eğimi ${fmt(m.tilt)}°; hacim eğik örneklenmiş, guide kemiğe oturmayabilir. Eğimsiz (0°) ya da eğimi düzeltilmiş seri kullanın.`]);
     let mn = Infinity, metal = 0, n = 0;
     for (let i = 0; i < vol.hu.length; i += 7) { const v = vol.hu[i]; if (v < mn) mn = v; if (v > 2500) metal++; n++; }
@@ -359,25 +422,54 @@
     out.push(['info', 'Bilgi', `Kapsam ${fmt(vol.nz * dz, 0)} mm${m.kernel ? `, kernel ${m.kernel}` : ''}.`]);
     return out;
   }
-  function renderQC() { $('qc').innerHTML = S.qc.map(([c, t, m]) => `<li class="${c}"><b>${t}</b><span>${m}</span></li>`).join(''); }
+  // image quality checks + checks of the chosen planning bone (is it really only a mandible?)
+  function syncQC() { S.qc = (S.qcBase || []).concat(S.segWarn || []); renderQC(); }
+  function segChecks() {
+    const out = [], inf = S.segInfo, w = (t, ...a) => out.push(['warn', 'Uyarı', t(...a)]);
+    if (!S.mask || !S.red) return out;
+    if (inf && inf.status === 'failed')
+      w((v, e) => `Eşik maskesi kafatası, çene ve omurgayı tek parça veriyor (${v} cm³, yükseklik ${e} mm) ve mandibula otomatik ayrılamadı. Planlama kemiği olarak bu büyük parça alındı; kondil, rezeksiyon ve fibula planı güvenilmez. Yalnız mandibulayı "Seç" aracıyla ya da kemik listesinden seçin, ya da bitişik kemikleri işaretleyip ayırın.`, fmt(inf.before.vol, 0), fmt(inf.before.ext[2], 0));
+    else if (inf && inf.status === 'split' && (inf.ext[2] > 105 || inf.vol < 30 || inf.vol > 120))
+      w((v, e) => `Mandibula otomatik ayrıldı (${v} cm³, yükseklik ${e} mm) ama parça beklenen aralığın kenarında; üst çene ya da kafatası artıkları karışmış ya da mandibulanın bir kısmı eksik olabilir. Kemik modelini kontrol edin.`, fmt(inf.vol, 0), fmt(inf.ext[2], 0));
+    if (window.Bones) Bones.boneWarnings(S.red, S.mask).forEach(x => {
+      if (x.code === 'big' && !(inf && inf.status === 'failed')) w(v => `Planlama kemiği ${v} cm³; bir mandibula için fazla büyük (250 cm³ üstü). Kafatası, üst çene ya da omurga da seçili olabilir; planı bu kemikle kurmayın.`, fmt(x.vol, 0));
+      if (x.code === 'edge') w(() => 'Planlama kemiği tarama alanının üst ya da alt kenarına dayanıyor; kafatası ya da omurga seçili olabilir.');
+    });
+    return out;
+  }
+  function renderQC() { $('qc').innerHTML = S.qc.map(([c, t, m]) => `<li class="${esc(c)}"><b>${esc(t)}</b><span>${esc(m)}</span></li>`).join(''); }
 
   // ---------- segmentation ----------
   async function segment(autoSelect) {
-    busy(true, 'Kemik segmentasyonu (eşik + bileşen ayırma)…'); await sleep();
+    busy(true, 'Kemik ayrılıyor… 2/4'); await sleep();
     const r = S.red, thr = +$('thr').value;
     const m = G.threshold(r, thr);
-    const { labels, comps } = G.components(m, r.nx, r.ny, r.nz, 200);
-    S.labels = labels; S.comps = comps.slice(0, 8); S.compNames = null; S.segMethod = `Eşik ${thr} HU (tarayıcı)`;
+    const { labels, comps, count } = G.components(m, r.nx, r.ny, r.nz, 200);
+    S.labels = labels; S.comps = comps.slice(0, 8); S.compNames = null; S.segMethod = `Eşik ${thr} HU (tarayıcı)`; S.segInfo = null;
+    let pick = comps.length ? comps[0].label : null;
+    // a head CT's threshold mask is one piece (skull + upper jaw + mandible + spine): cut it at its thin necks and take
+    // the piece that is built like a mandible; when none is, keep the largest and say so (see segChecks)
+    if (window.Bones && Bones.assess(r, labels, comps).cut) {
+      busy(true, 'Bitişik kemikler ayrılıyor (kafatası, çene, omurga)… 2/4'); await sleep();
+      const res = S.segInfo = Bones.pickMandible(r, labels, comps, count);
+      if (res.status === 'split') {
+        pick = res.picked; S.comps = res.comps.slice(0, 8);
+        if (!S.comps.some(c => c.label === pick)) S.comps[S.comps.length - 1] = res.comps.find(c => c.label === pick);
+        S.compNames = { [pick]: 'Mandibula (otomatik ayrıldı)' }; S.segMethod += ' + bitişik kemik ayırma';
+      }
+    }
     // painted layer marks (Masks) split the threshold mask into layers and choose the planning bone
     const split = window.Masks ? Masks.relabel() : false;
-    if (!split && (autoSelect || ![...S.selected].some(l => S.comps.find(c => c.label === l)))) S.selected = new Set(S.comps.length ? [S.comps[0].label] : []);
+    if (!split && (autoSelect || ![...S.selected].some(l => S.comps.find(c => c.label === l)))) S.selected = new Set(pick == null ? [] : [pick]);
     renderComps();
     await rebuildBone(true);
+    // a failed or doubtful cut is announced, not left for the Kontroller tab alone
+    if (S.segInfo && S.segInfo.status !== 'whole' && S.segWarn.length && !S.restoring) alertMsg(S.segWarn[0][2]);
   }
   function renderComps() {
     if (window.Masks) { Masks.renderList(); return; }
     const vox = S.red.sp[0] * S.red.sp[1] * S.red.sp[2] / 1000;
-    $('comps').innerHTML = S.comps.map((c, i) => `<label class="comp"><input type="checkbox" data-l="${c.label}" ${S.selected.has(c.label) ? 'checked' : ''}> ${S.compNames ? S.compNames[c.label] || 'Yapı ' + (i + 1) : 'Yapı ' + (i + 1)} <span>${fmt(c.size * vox)} cm³</span></label>`).join('') || '<p class="hint">Eşiğin üstünde yapı bulunamadı.</p>';
+    $('comps').innerHTML = S.comps.map((c, i) => `<label class="comp"><input type="checkbox" data-l="${c.label}" ${S.selected.has(c.label) ? 'checked' : ''}> ${S.compNames ? esc(S.compNames[c.label] || 'Yapı ' + (i + 1)) : 'Yapı ' + (i + 1)} <span>${fmt(c.size * vox)} cm³</span></label>`).join('') || '<p class="hint">Eşiğin üstünde yapı bulunamadı.</p>';
     $('comps').querySelectorAll('input').forEach(el => el.addEventListener('change', async () => {
       el.checked ? S.selected.add(+el.dataset.l) : S.selected.delete(+el.dataset.l);
       await rebuildBone(false);
@@ -391,28 +483,29 @@
     try {
       const q = new URLSearchParams({ nx: r.nx, ny: r.ny, nz: r.nz, sp: r.sp.join(','), origin: r.origin.join(','), axes: r.axes.flat().join(','), structures: $('aiStruct').value });
       const res = await fetch(`${url}/segment?${q}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: r.hu, signal: ac.signal });
-      if (!res.ok) throw new Error(`sunucu ${res.status} döndü`);
+      if (!res.ok) throw new Error(xl(`sunucu ${res.status} döndü`));
       const lab = new Uint8Array(await res.arrayBuffer()), names = JSON.parse(res.headers.get('X-Structures') || '[]');
       if (lab.length !== r.hu.length) throw new Error('etiket hacmi boyutu uyuşmuyor');
       const labels = Int32Array.from(lab), comps = names.map(s => ({ label: s.label, size: 0, centroid: [0, 0, 0] }));
       for (let v = 0; v < labels.length; v++) { const c = comps.find(cc => cc.label === labels[v]); if (c) c.size++; }
-      S.labels = labels; S.comps = comps.filter(c => c.size > 0); S.compNames = Object.fromEntries(names.map(s => [s.label, s.name]));
+      S.segInfo = null; S.labels = labels; S.comps = comps.filter(c => c.size > 0); S.compNames = Object.fromEntries(names.map(s => [s.label, s.name]));
       S.selected = new Set(S.comps.slice(0, 1).map(c => c.label)); S.segMethod = `Yapay zeka sunucusu (${url})`;
       $('caseMsg').hidden = true; renderComps(); await rebuildBone(true);
     } catch (e) {
-      busy(false); alertMsg(ac.signal.aborted ? 'Segmentasyon iptal edildi.' : `Segmentasyon sunucusuna ulaşılamadı (${e.message}). Eşik yöntemiyle devam edebilirsiniz.`);
+      busy(false); alertMsg(ac.signal.aborted ? 'Segmentasyon iptal edildi.' : `${xl('Segmentasyon sunucusuna ulaşılamadı')} (${xl(e.message)}). ${xl('Eşik yöntemiyle devam edebilirsiniz.')}`);
     }
   }
   async function rebuildBone(frame) {
-    busy(true, 'Yüzey modeli oluşturuluyor…'); await sleep();
+    busy(true, 'Yüzey modeli oluşturuluyor… 3/4'); await sleep();
     const r = S.red, m = new Uint8Array(S.labels.length);
     for (let i = 0; i < m.length; i++) m[i] = S.selected.has(S.labels[i]) ? 1 : 0;
     if (window.SegEdit) SegEdit.applyTo(m);
     S.mask = m; S.maskF = G.blur(m, r.nx, r.ny, r.nz);
+    S.segWarn = segChecks(); syncQC();
     await rebuildResection();
     if (frame && parts.bone) fitTo(parts.bone.obj);
-    if (S.kind && !S.anchor && S.autoAnchor !== false) presetCase();
-    else if (S.anchor) await regenerate();
+    pipeGuide = true;
+    try { if (S.kind && !S.anchor && S.autoAnchor !== false) presetCase(); else if (S.anchor) await regenerate(); } finally { pipeGuide = false; }
     busy(false); render(); emit('bone');
   }
   const toWorldRed = (x, y, z) => G.worldOf(S.red, x, y, z);
@@ -437,39 +530,71 @@
     }
     return fullBone.geo;
   }
-  async function rebuildResection(opts = {}) {
-    const r = S.red, nxy = r.nx * r.ny;
-    let resMask = null, box = null, best = null;
-    const E = resEnds();
-    if (E) {
-      const { A, B } = E;
-      // a condylar resection runs from the cut to the condyle: search a ball around that span, keep the piece at the condyle
-      const ap = E.condyle ? A.p.clone().lerp(B.p, 0.5) : S.anchor.p, R = E.condyle ? A.p.distanceTo(B.p) / 2 + 35 : 70, c = G.indexOf(r, [ap.x, ap.y, ap.z]);
-      const rad = r.sp.map(s => Math.ceil(R / s));
-      const lo = c.map((x, a) => Math.max(0, Math.floor(x - rad[a]))), hi = c.map((x, a) => Math.min([r.nx, r.ny, r.nz][a] - 1, Math.ceil(x + rad[a])));
-      const cand = new Uint8Array(S.mask.length), ax = r.axes, sp = r.sp, o = r.origin;
-      const aT = A.w / 2 + A.N.dot(A.p), bT = -B.w / 2 + B.N.dot(B.p);
-      for (let k = lo[2]; k <= hi[2]; k++) for (let j = lo[1]; j <= hi[1]; j++) for (let i = lo[0]; i <= hi[0]; i++) {
-        const v = i + r.nx * (j + r.ny * k); if (!S.mask[v]) continue;
-        const x = o[0] + ax[0][0] * i * sp[0] + ax[1][0] * j * sp[1] + ax[2][0] * k * sp[2];
-        const y = o[1] + ax[0][1] * i * sp[0] + ax[1][1] * j * sp[1] + ax[2][1] * k * sp[2];
-        const z = o[2] + ax[0][2] * i * sp[0] + ax[1][2] * j * sp[1] + ax[2][2] * k * sp[2];
-        if ((x - ap.x) ** 2 + (y - ap.y) ** 2 + (z - ap.z) ** 2 > R * R) continue;
-        if (x * A.N.x + y * A.N.y + z * A.N.z > aT && (E.condyle || x * B.N.x + y * B.N.y + z * B.N.z < bT)) cand[v] = 1;
-      }
-      const { labels, comps } = G.components(cand, r.nx, r.ny, r.nz, 1);
-      if (comps.length) {
-        // the piece nearest the anchor
-        let bd = Infinity;
-        const near = E.condyle ? B.p : ap;
-        comps.forEach(cm => { const d = V(...G.worldOf(r, ...cm.centroid)).distanceTo(near); if (d < bd) { bd = d; best = cm; } });
-        resMask = new Uint8Array(cand.length); box = [Infinity, Infinity, Infinity, -1, -1, -1];
-        for (let v = 0; v < cand.length; v++) if (labels[v] === best.label) {
-          resMask[v] = 1; const i = v % r.nx, j = ((v / r.nx) | 0) % r.ny, k = (v / nxy) | 0;
-          if (i < box[0]) box[0] = i; if (j < box[1]) box[1] = j; if (k < box[2]) box[2] = k; if (i > box[3]) box[3] = i; if (j > box[4]) box[4] = j; if (k > box[5]) box[5] = k;
-        }
-      }
+  // The resected piece itself: the bone between the outer cuts (beyond each saw slot) connected to the anchor within
+  // 70 mm, or from the cut to the condyle for a condylar resection. Two infinite cut planes on a curved jaw enclose
+  // more than the piece (the bone of the other side of the chin curving back between them, the ramus or the coronoid
+  // beside a cut at the angle); that bone stays, so every "is this resected" question asks the piece, not the slab.
+  // Cached per plan; `dist` = the distance to the piece in mm over its box plus RES_PAD mm (for the screw margin).
+  const RES_PAD = 6;
+  let rpCache = { key: null, mask: null, piece: null };
+  function resPieceKey(E) {
+    const cond = E && E.condyle ? (E.B.cond || E.B.p).toArray() : null;
+    return JSON.stringify([S.anchor && S.anchor.p.toArray(), S.anchor && S.anchor.n.toArray(), S.anchor && S.anchor.axis.toArray(), S.g.rot, S.g.kerfSide, S.lesion.condyle || '', cond, S.planes.map(p => [p.off, p.yaw, p.pitch, p.w, p.pv || 0, p.pn || 0])]);
+  }
+  function resPiece() {
+    if (!S.anchor || !S.mask || !S.red) return null;
+    const E = resEnds(); if (!E) return null;
+    const key = resPieceKey(E);
+    if (rpCache.key === key && rpCache.mask === S.mask) return rpCache.piece;
+    const r = S.red, nxy = r.nx * r.ny, { A, B } = E;
+    let piece = null;
+    // a condylar resection runs from the cut to the condyle: search a ball around that span, keep the piece at the condyle
+    const Bc = E.condyle ? B.cond || B.p : B.p, ap = E.condyle ? A.p.clone().lerp(Bc, 0.5) : S.anchor.p, R = E.condyle ? A.p.distanceTo(Bc) / 2 + 35 : 70, c = G.indexOf(r, [ap.x, ap.y, ap.z]);
+    const rad = r.sp.map(s => Math.ceil(R / s));
+    const lo = c.map((x, a) => Math.max(0, Math.floor(x - rad[a]))), hi = c.map((x, a) => Math.min([r.nx, r.ny, r.nz][a] - 1, Math.ceil(x + rad[a])));
+    const cand = new Uint8Array(S.mask.length), ax = r.axes, sp = r.sp, o = r.origin;
+    // the resected piece starts beyond the saw slot (slot centre pSlot, half width w/2)
+    const aT = A.w / 2 + A.N.dot(A.pSlot || A.p), bT = -B.w / 2 + B.N.dot(B.pSlot || B.p);
+    for (let k = lo[2]; k <= hi[2]; k++) for (let j = lo[1]; j <= hi[1]; j++) for (let i = lo[0]; i <= hi[0]; i++) {
+      const v = i + r.nx * (j + r.ny * k); if (!S.mask[v]) continue;
+      const x = o[0] + ax[0][0] * i * sp[0] + ax[1][0] * j * sp[1] + ax[2][0] * k * sp[2];
+      const y = o[1] + ax[0][1] * i * sp[0] + ax[1][1] * j * sp[1] + ax[2][1] * k * sp[2];
+      const z = o[2] + ax[0][2] * i * sp[0] + ax[1][2] * j * sp[1] + ax[2][2] * k * sp[2];
+      if ((x - ap.x) ** 2 + (y - ap.y) ** 2 + (z - ap.z) ** 2 > R * R) continue;
+      if (x * A.N.x + y * A.N.y + z * A.N.z > aT && (E.condyle || x * B.N.x + y * B.N.y + z * B.N.z < bT)) cand[v] = 1;
     }
+    const { labels, comps } = G.components(cand, r.nx, r.ny, r.nz, 1);
+    if (comps.length) {
+      // the piece nearest the anchor
+      let bd = Infinity, best = null;
+      const near = E.condyle ? Bc : ap;
+      comps.forEach(cm => { const d = V(...G.worldOf(r, ...cm.centroid)).distanceTo(near); if (d < bd) { bd = d; best = cm; } });
+      const mask = new Uint8Array(cand.length), box = [Infinity, Infinity, Infinity, -1, -1, -1];
+      for (let v = 0; v < cand.length; v++) if (labels[v] === best.label) {
+        mask[v] = 1; const i = v % r.nx, j = ((v / r.nx) | 0) % r.ny, k = (v / nxy) | 0;
+        if (i < box[0]) box[0] = i; if (j < box[1]) box[1] = j; if (k < box[2]) box[2] = k; if (i > box[3]) box[3] = i; if (j > box[4]) box[4] = j; if (k > box[5]) box[5] = k;
+      }
+      // distance to the piece (mm) over its box grown by RES_PAD
+      const pad = r.sp.map(s => Math.ceil(RES_PAD / s) + 1);
+      const d0 = [0, 1, 2].map(a => Math.max(0, box[a] - pad[a])), d1 = [0, 1, 2].map(a => Math.min([r.nx, r.ny, r.nz][a] - 1, box[a + 3] + pad[a]));
+      const dn = [0, 1, 2].map(a => d1[a] - d0[a] + 1), sub = new Uint8Array(dn[0] * dn[1] * dn[2]);
+      for (let k = 0; k < dn[2]; k++) for (let j = 0; j < dn[1]; j++) { const a = dn[0] * (j + dn[1] * k), b = d0[0] + r.nx * (j + d0[1] + r.ny * (k + d0[2])); for (let i = 0; i < dn[0]; i++) sub[a + i] = mask[b + i]; }
+      piece = { mask, box, size: best.size, lo: d0, dims: dn, dist: G.edt(sub, dn[0], dn[1], dn[2], r.sp) };
+    }
+    rpCache = { key, mask: S.mask, piece };
+    return piece;
+  }
+  // distance (mm) from a world point to the resected piece; Infinity when it is farther than RES_PAD or there is no piece
+  function resDist(q, piece) {
+    const r = S.red, ix = G.indexOf(r, [q.x, q.y, q.z]), i = Math.round(ix[0]) - piece.lo[0], j = Math.round(ix[1]) - piece.lo[1], k = Math.round(ix[2]) - piece.lo[2], d = piece.dims;
+    if (i < 0 || j < 0 || k < 0 || i >= d[0] || j >= d[1] || k >= d[2]) return Infinity;
+    return piece.dist[i + d[0] * (j + d[1] * k)];
+  }
+  // a point within m mm of the resected piece (null when there is no piece to ask)
+  function resectedNear(q, m = 0) { const pc = resPiece(); return pc ? resDist(q, pc) <= m : null; }
+  async function rebuildResection(opts = {}) {
+    const r = S.red;
+    const piece = resPiece(), resMask = piece ? piece.mask : null, box = piece ? piece.box : null, best = piece;
     // the remaining bone's field differs from the full one only around the resected piece
     let field = S.maskF;
     if (resMask && !opts.live) {
@@ -498,11 +623,36 @@
       if (!pl.length || !cond) return null;
       const c = V(...cond), A = pl.reduce((a, b) => (b.p.distanceTo(c) > a.p.distanceTo(c) ? b : a)), dir = c.clone().sub(A.p).normalize();
       const N = A.N.clone(); if (N.dot(dir) < 0) N.negate();
-      return { A: Object.assign({}, A, { N }), B: { p: c, N: dir, w: 0, off: A.off, virtual: true }, condyle: side };
+      // new condyle (web/condyle.js): the graft's rounded end lies `neo` mm short of the fossa (the condyle's place), on
+      // the line to the cut; the resected piece is still found at the condyle itself (B.cond)
+      const neo = window.Condyle && Condyle.neoOffset ? Math.max(0, Math.min(c.distanceTo(A.p) - 10, Condyle.neoOffset() || 0)) : 0;
+      return { A: Object.assign({}, A, { N }), B: { p: neo ? c.clone().addScaledVector(dir, -neo) : c, cond: c, neo, N: dir, w: 0, off: A.off, virtual: true }, condyle: side };
     }
     if (pl.length < 2) return null;
     pl.sort((a, b) => a.off - b.off);
     return { A: pl[0], B: pl[pl.length - 1], condyle: null };
+  }
+
+  // cuts whose plane meets no bone within the guide's reach (indices into S.planes): such a cut guides nothing and the
+  // defect has no stump face there. Sampled on the plane across the body (±W/2 + 6 mm) and down to 45 mm below the anchor.
+  let cmCache = { key: null, maskF: null, miss: [] };
+  function cutMisses() {
+    if (!S.anchor || !S.maskF) return [];
+    const key = JSON.stringify([S.anchor.p.toArray(), S.anchor.n.toArray(), S.anchor.axis.toArray(), S.g.rot, S.g.W, S.planes.map(p => [p.off, p.yaw, p.pitch, p.pv || 0, p.pn || 0])]);
+    if (cmCache.key === key && cmCache.maskF === S.maskF) return cmCache.miss;
+    const { n } = frameAxes(), miss = [], q = V();
+    planesWorld().forEach(pw => {
+      const vAx = V().crossVectors(n, pw.N); if (vAx.lengthSq() < 1e-8) return;
+      vAx.normalize(); const dAx = V().crossVectors(pw.N, vAx).normalize(), half = (S.g.W || 22) / 2 + 6;
+      let hit = false;
+      outer: for (let vv = -half; vv <= half; vv += 1) for (let dd = 8; dd >= -45; dd -= 1) {
+        q.copy(pw.p).addScaledVector(vAx, vv).addScaledVector(dAx, dd);
+        if (boneAt(q) || boneAt(q.clone().addScaledVector(pw.N, 0.6)) || boneAt(q.clone().addScaledVector(pw.N, -0.6))) { hit = true; break outer; }
+      }
+      if (!hit) miss.push(S.planes.indexOf(pw.pl));
+    });
+    cmCache = { key, maskF: S.maskF, miss };
+    return miss;
   }
 
   // 'Rezeksiyon bölgesini sil': the piece between the cuts is hidden (it stays in the plan and the exports)
@@ -524,16 +674,18 @@
   async function makeGuide() {
     if (!S.anchor || !S.planes.length) { alertMsg('Önce kesileri belirleyin.'); return; }
     S.guideOn = true; placeScrews(); S.sel = null;
-    busy(true, 'Rezeksiyon güncelleniyor…'); await sleep(); await rebuildResection();
-    busy(true, 'Guide oluşturuluyor…'); await sleep();
+    busy(true, 'Rezeksiyon güncelleniyor… 1/2'); await sleep(); await rebuildResection();
+    busy(true, 'Guide oluşturuluyor… 2/2'); await sleep();
     const f = await fitWrap();
     $('guideStat').textContent = !f ? '' : !f.ok ? 'Guide bu yerleşimde takılamıyor; kesileri ya da ayarları kontrol edin.'
-      : `Guide hazır · ${S.screws.length} vida` + (f.split ? ' · iki parça (kavisli kemik)' : '') + (f.wrap < (S.kind === 'leg' ? 6 : 5) ? ` · sarma ${fmt(f.wrap, 1)} mm'ye indirildi` : '');
+      : `Guide hazır · ${S.screws.length} vida` + (f.split ? (S.g.split === 2 && S.g.bar ? ' · iki guide + bağlantı köprüsü' : S.g.split === 2 ? ' · iki parça, her kesi kendi ekseninde (açı bölgesi)' : ' · iki parça (kavisli kemik)') : '') + (f.wrap < (S.kind === 'leg' ? 6 : 5) ? ` · sarma ${fmt(f.wrap, 1)} mm'ye indirildi` : '');
     syncSeq();
   }
   // one button: region (sample spot, painted lesion, or one click on the model), cuts, resected piece removed, guide
   async function autoPrep() {
     if (!S.red || !parts.bone) return;
+    // a fresh automatic plan sizes the body from the bone again
+    Object.assign(S.gAuto, AUTO_DEFAULT); S.fitLog = [];
     const pts = window.Lesion && Lesion.points ? Lesion.points() : [];
     if (pts.length) { await Lesion.plan(); }
     else if (!S.anchor) {
@@ -552,9 +704,10 @@
   async function resetPlan() {
     if (S.anchor && !confirm('Kesiler, guide ve vidalar silinip baştan başlanacak. Emin misiniz?')) return;
     S.anchor = null; S.planes = []; S.screws = []; S.sel = null; S.result = null; S.grid = null; S.guideOn = false; S.resRemoved = false;
+    Object.assign(S.gAuto, AUTO_DEFAULT); S.g.wrapU = null; S.g.vc = 0; S.fitLog = []; S.autoSize = null;
     unapproveAll(); $('guideStat').textContent = '';
     if (window.Lesion && Lesion.clear) Lesion.clear();
-    ['guide', 'resected', 'anchor', 'lesion'].forEach(id => setPart(id, null, null)); clearElementParts();
+    ['guide', 'bar', 'resected', 'anchor', 'lesion'].forEach(id => setPart(id, null, null)); clearElementParts();
     busy(true, 'Kemik modeli yenileniyor…'); await sleep(); await rebuildResection(); busy(false);
     setMode('orbit'); updatePanels(); syncSeq(); render(); emit('parts'); emit('changed');
   }
@@ -566,6 +719,14 @@
     m.position.copy(S.anchor.p); setPart('anchor', 'Guide merkezi', m, COLORS.anchor);
   }
   function setAnchor(p, nGuess) {
+    S.anchor = frameAt(p, nGuess);
+    S.g.roll = 0; S.g.vc = 0;
+    showAnchor();
+  }
+  // local bone frame at a surface point: seating normal n (surface normal blended with the direction away from the local
+  // bone centre) and the local bone axis (PCA of the bone within 16 mm). Used for the anchor and, for a guide split
+  // into two pieces on a curved jaw (body + ramus), for each piece's own frame at its cut.
+  function frameAt(p, nGuess) {
     // average surface normal and local bone axis (PCA) around the picked point
     const r = S.red, ip = G.indexOf(r, [p.x, p.y, p.z]).map(Math.round), rad = Math.ceil(16 / Math.min(...r.sp));
     const pts = [];
@@ -583,10 +744,9 @@
       pts.forEach(q => { const d = [q.x - c.x, q.y - c.y, q.z - c.z]; for (let a = 0; a < 3; a++) for (let b = 0; b < 3; b++) C[a][b] += d[a] * d[b]; });
       let e = V(1, 0.3, 0.2);
       for (let it = 0; it < 50; it++) e = V(C[0][0] * e.x + C[0][1] * e.y + C[0][2] * e.z, C[1][0] * e.x + C[1][1] * e.y + C[1][2] * e.z, C[2][0] * e.x + C[2][1] * e.y + C[2][2] * e.z).normalize();
-      S.anchor = { p: p.clone(), n, axis: e };
-    } else S.anchor = { p: p.clone(), n, axis: Math.abs(n.z) < 0.9 ? V(0, 0, 1) : V(1, 0, 0) };
-    S.g.roll = 0;
-    showAnchor();
+      return { p: p.clone(), n, axis: e };
+    }
+    return { p: p.clone(), n, axis: Math.abs(n.z) < 0.9 ? V(0, 0, 1) : V(1, 0, 0) };
   }
   // guide frame: u along the bone axis (rotated by g.rot about n), v = n x u, n = seating normal
   function frameAxes() {
@@ -596,27 +756,68 @@
     const v = V().crossVectors(n, u);
     return { u, v, n };
   }
+  // p is the planned cut plane (the stump face when the kerf lies on the resected side); pSlot is the centre of the saw
+  // slot in the guide, shifted by `shift` mm along N towards the defect (w/2 when kerfSide = 1, 0 when centred)
   function planesWorld() {
     const { u, v, n } = frameAxes();
-    return S.planes.map(pl => {
+    const out = S.planes.map(pl => {
       const N = u.clone().applyAxisAngle(n, deg(pl.yaw));
       N.applyAxisAngle(V().crossVectors(n, N).normalize(), deg(pl.pitch)).normalize();
-      return { pl, off: pl.off, w: pl.w, N, p: S.anchor.p.clone().add(u.clone().multiplyScalar(pl.off)) };
+      const p = S.anchor.p.clone().add(u.clone().multiplyScalar(pl.off));
+      // (pv, pn: the plane's reference point on the bone, as its v and n coordinates; the point slides along u within
+      // the plane, so the plane itself is still the one through the guide axis at `off`)
+      if (pl.pv || pl.pn) { const Nu = N.dot(u); if (Math.abs(Nu) > 0.05) p.addScaledVector(u, -((pl.pv || 0) * N.dot(v) + (pl.pn || 0) * N.dot(n)) / Nu).addScaledVector(v, pl.pv || 0).addScaledVector(n, pl.pn || 0); }
+      return { pl, off: pl.off, w: pl.w, N, p, pSlot: p.clone(), shift: 0 };
     });
+    if (S.g.kerfSide && out.length) {
+      const side = S.lesion.condyle, ref = side && window.Ref && Ref.get && Ref.get(), cond = ref && ref.cond && ref.cond[side];
+      const lo = out.reduce((a, b) => (b.off < a.off ? b : a)), hi = out.reduce((a, b) => (b.off > a.off ? b : a));
+      out.forEach(pw => {
+        // direction towards the defect: towards the condyle for a condylar resection, else from the outer cuts inwards
+        let dir = 0;
+        if (cond) dir = Math.sign(V(...cond).sub(pw.p).dot(pw.N)) || 0;
+        else if (out.length >= 2 && pw === lo) dir = Math.sign(pw.N.dot(u)) || 1;
+        else if (out.length >= 2 && pw === hi) dir = -(Math.sign(pw.N.dot(u)) || 1);
+        if (dir) { pw.shift = dir * pw.w / 2; pw.pSlot = pw.p.clone().addScaledVector(pw.N, pw.shift); }
+      });
+    }
+    return out;
   }
+  // bone lost from the stump at a cut: the half slot behind the plane that the shift did not move to the resected side
+  const stumpGap = pw => Math.max(0, pw.w / 2 - Math.abs(pw.shift || 0));
   function screwsWorld() { return S.screws.map(screwWorld); }
+  // the two frames of a two-guide layout (split 2), one at each outer cut (cutFrame); the same anchor and cuts give the
+  // same frames, so they are kept until one of those changes
+  let pfCache = { key: null, frames: null };
+  function pieceFrames() {
+    if (!S.anchor || S.planes.length < 2) return null;
+    const key = JSON.stringify([S.anchor.p.toArray(), S.anchor.n.toArray(), S.anchor.axis.toArray(), S.g.rot, S.g.kerfSide, S.planes.map(p => [p.off, p.yaw, p.pitch, p.w, p.pv || 0, p.pn || 0])]);
+    if (pfCache.key === key) return pfCache.frames;
+    const pls = planesWorld().sort((a, b) => a.off - b.off), { u, n } = frameAxes();
+    const a = cutFrame(pls[0], u.clone().negate(), n), b = cutFrame(pls[pls.length - 1], u, n);
+    pfCache = { key, frames: a && b ? { a, b, A: pls[0], B: pls[pls.length - 1] } : null };
+    return pfCache.frames;
+  }
+  // the frame a screw's (u, v) refers to: its piece's frame in the two-guide layout (sc.part = -1 / 1), else the guide frame
+  function screwFrame(sc) {
+    if (S.g.split === 2 && sc.part) { const f = pieceFrames(); if (f) return sc.part < 0 ? f.a : f.b; }
+    return Object.assign({ P: S.anchor.p }, frameAxes());
+  }
+  // the drill direction of a screw: down the frame normal, tilted by tiltU about v and tiltV about u
+  function screwDir(sc) { const { u, v, n } = screwFrame(sc); return n.clone().negate().applyAxisAngle(v, deg(sc.tiltU)).applyAxisAngle(u, deg(sc.tiltV)).normalize(); }
   function screwWorld(sc) {
-    const { u, v, n } = frameAxes();
+    const { P, u, v, n } = screwFrame(sc);
     {
       const dir = n.clone().negate().applyAxisAngle(v, deg(sc.tiltU)).applyAxisAngle(u, deg(sc.tiltV)).normalize();
       // entry = first bone voxel met when walking down -n from above the guide
-      const top = S.anchor.p.clone().add(u.clone().multiplyScalar(sc.u)).add(v.clone().multiplyScalar(sc.v)).add(n.clone().multiplyScalar(20));
+      const top = P.clone().add(u.clone().multiplyScalar(sc.u)).add(v.clone().multiplyScalar(sc.v)).add(n.clone().multiplyScalar(20));
       let entry = null;
       for (let t = 0; t < 60; t += 0.2) { const q = top.clone().add(n.clone().multiplyScalar(-t)); if (boneAt(q)) { entry = q; break; } }
       return { sc, dir, entry };
     }
   }
   function boneAt(q) { return boneAtIn(S.red, S.maskF, q); }
+  function boneField(q) { return fieldAt(S.red, S.maskF, [q.x, q.y, q.z]); }
   function boneAtIn(r, F, q) { return fieldAt(r, F, [q.x, q.y, q.z]) > 0.5; }
   function fieldAt(r, F, w) {
     const ix = G.indexOf(r, w);
@@ -637,67 +838,386 @@
     m.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(u, v, n));
     setPart('lesion', 'Lezyon (hedef)', m, COLORS.lesion);
   }
-  function screwScore(sc, pls) {
-    const s = screwWorld(sc); if (!s.entry) return -Infinity;
-    let inBone = 0, cross = false;
-    for (let t = 0; t <= sc.len; t += 0.25) {
-      const q = s.entry.clone().add(s.dir.clone().multiplyScalar(t));
-      if (boneAt(q)) inBone += 0.25;
-      for (const pw of pls) if (Math.abs(q.clone().sub(pw.p).dot(pw.N)) <= pw.w / 2 + 1.5) cross = true;
+  // where a point lies relative to the planned resection: inside the resected region (between the outer cuts, or from
+  // the cut to the condyle for a condylar resection) within m mm; E = resEnds()
+  function resectedAt(q, E, m = 0) {
+    if (!E) return false;
+    // the piece itself when it is known (m up to RES_PAD); the slab between the cuts only as a fallback
+    const pc = m <= RES_PAD ? resPiece() : null;
+    if (pc) return resDist(q, pc) <= m;
+    const { A, B } = E;
+    if (E.condyle) return q.clone().sub(A.p).dot(A.N) > -m;
+    const dir = B.p.clone().sub(A.p).normalize(), NA = A.N.clone(), NB = B.N.clone();
+    if (NA.dot(dir) < 0) NA.negate(); if (NB.dot(dir) < 0) NB.negate();
+    return q.clone().sub(A.p).dot(NA) > -m && q.clone().sub(B.p).dot(NB) < m;
+  }
+  // One screw position judged against the bone: the entry on bone with the sleeve over the guide body, the drill in
+  // solid bone from the entry on (a ray that only skims a turned-away surface is not a screw), the drill path in bone
+  // for at least SCREW_MIN_DEPTH mm (the whole screw length preferred), at least SCREW_SLOT_GAP mm between the sleeve
+  // and every saw slot and no bone of the resected region on the path. Returns null when the position is unusable
+  // (the reason counted in `why`), else { score, inBone, slotGap }: more bone scores higher, tilt lower.
+  // a saw cut is the osteotomy through the bone at the slot, not the whole infinite plane: on a curved jaw the plane
+  // of one cut passes the bone of the other side far from it. Screws keep their distance from a slot plane within
+  // SLOT_REACH mm of the slot (in the plane), which covers the bone section the saw goes through (the cut-miss test
+  // samples ±W/2 + 6 mm across and 45 mm down)
+  const SLOT_REACH = 45, CUT_OFF_MAX = 80, PIECE_GAIN = 20, PIECE_TURN = 70, CUT_STEEP = 0.83, CUT_ALONG_DEG = 60;
+  const SCREW_CREST_TOL = 6, SCREW_SLOT_GAP = 2, SCREW_MIN_DEPTH = 4, SCREW_GAP_MIN = 5, SCREW_GAP_MAX = 15, SCREW_GAP_FAR = 22, SCREW_GAP_BACK = 12, SCREW_CORE_R = 1.5, L_MAX = 160;
+  // a screw hole closer than this to the osteotomy plane leaves a thin bone bridge that can break (checks only, a warning)
+  const SCREW_CUT_GAP = 5, SCREW_CUT_WARN = 3;   // 5 mm = recommended bone bridge (info below it); a warning only under 3 mm
+  // wrap depth at uu from a per-position profile ([[uu, depth], ...]) capped by the global value, as buildGuide's wrapOf
+  function wrapAtU(wrap, pr, uu) {
+    if (!pr || !pr.length) return wrap;
+    if (uu <= pr[0][0]) return Math.min(wrap, pr[0][1]);
+    for (let a = 1; a < pr.length; a++) if (uu <= pr[a][0]) { const t = (uu - pr[a - 1][0]) / ((pr[a][0] - pr[a - 1][0]) || 1); return Math.min(wrap, pr[a - 1][1] + t * (pr[a][1] - pr[a - 1][1])); }
+    return Math.min(wrap, pr[pr.length - 1][1]);
+  }
+  // The guide body a screw must stand on, as buildGuide builds it on this frame: the box W wide about the lane vc whose
+  // bottom at each position uu lies wrap(uu) below the bone's top there (the highest bone within the box width, never
+  // above `cap`, the level of the frame plane the wrap is measured from). The shell follows the bone inside that box,
+  // so a screw whose entry lies in the box stands on the body. secs = bone sections along the frame (boneSections over
+  // the box width); wrap(uu) = the global depth capped by the per-position profile.
+  function screwBody(frame, secs, W, vc, wrap, wrapU, cap = 0) {
+    if (!secs || !secs.length) return null;
+    const live = secs.filter(s => !s.empty); if (!live.length) return null;
+    const near = uu => { let b = live[0]; for (const s of live) if (Math.abs(s.uu - uu) < Math.abs(b.uu - uu)) b = s; return b; };
+    return { frame, W, vc, cap, top: uu => { const s = near(uu); return Math.abs(s.uu - uu) > 4 ? -Infinity : Math.min(cap, s.top); }, rawTop: uu => { const s = near(uu); return Math.abs(s.uu - uu) > 4 ? -Infinity : s.top; }, wrap: uu => wrapAtU(wrap, wrapU, uu), cache: new Map() };
+  }
+  function onBody(body, uu, vv, depth) {
+    const key = uu + '|' + vv + '|' + depth.toFixed(1); if (body.cache.has(key)) return body.cache.get(key);
+    // the entry lies within the body's depth range: not under the wrap limit, and not above the bone's crest there (a
+    // column that meets other bone high above the frame, as on a guide turned round the jaw, is not a surface the sleeve stands on)
+    const ok = Math.abs(vv - body.vc) <= body.W / 2 - 0.5 && depth >= body.top(uu) - body.wrap(uu) + 0.3 && (!body.rawTop || depth <= Math.max(body.rawTop(uu), body.top(uu)) + SCREW_CREST_TOL);
+    body.cache.set(key, ok);
+    return ok;
+  }
+  // thin: the graded fallback for thin bone (the upper ramus, a narrow chin): the plate is drilled through, so the core
+  // ring is only asked to stay in bone while the drill axis does (that run at least SCREW_MIN_DEPTH mm), not over the
+  // first 6 mm whatever the bone's thickness. Also returns cutGap: the bone bridge between the hole (radius d/2) and
+  // the nearest osteotomy plane over the part of the hole in bone, as buildGuide measures it for the checks.
+  // (entry: the screw's entry when the caller already has it; it depends on u, v and the frame only, not on the tilt)
+  function evalScrew(sc, pls, body, E, why, thin = false, entry) {
+    const s = entry !== undefined ? { sc, dir: screwDir(sc), entry } : screwWorld(sc); if (!s.entry) { if (why) why.noBone++; return null; }
+    let below = 0;
+    if (body) {
+      const depth = s.entry.clone().sub(body.frame.P).dot(body.frame.n);
+      if (!onBody(body, sc.u, sc.v, depth)) { if (why) why.noBody++; return null; }
+      below = Math.max(0, body.top(sc.u) - depth);
     }
-    return 100 * inBone / sc.len - (cross ? 1000 : 0) - 0.15 * (Math.abs(sc.tiltU) + Math.abs(sc.tiltV));
+    // solid core: a ring of SCREW_CORE_R about the drill axis stays in bone over the first millimetres past the entry,
+    // which a ray running along a surface turned away from the guide does not give
+    const q = V(), d = V(), pa = Math.abs(s.dir.z) < 0.9 ? V(0, 0, 1) : V(1, 0, 0), ea = V().crossVectors(pa, s.dir).normalize(), eb = V().crossVectors(s.dir, ea).normalize();
+    let coreTo = Math.min(sc.len, 6);
+    if (thin) {
+      let run = 0; while (run + 0.25 <= sc.len && boneAt(q.copy(s.entry).addScaledVector(s.dir, run + 0.25))) run += 0.25;
+      if (run < SCREW_MIN_DEPTH) { if (why) why.shallow++; return null; }
+      coreTo = Math.min(coreTo, run - 0.75);
+    }
+    let core = 0, coreN = 0;
+    for (let t = 1.5; t <= coreTo; t += 0.75) for (const [a, b] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      q.copy(s.entry).addScaledVector(s.dir, t).addScaledVector(ea, a * SCREW_CORE_R).addScaledVector(eb, b * SCREW_CORE_R); coreN++; if (boneAt(q)) core++;
+    }
+    if (!coreN || core < 0.85 * coreN) { if (why) why.shallow++; return null; }
+    let inBone = 0, slotGap = Infinity, cutGap = Infinity, res = false;
+    for (let t = 0; t <= sc.len; t += 0.25) {
+      q.copy(s.entry).addScaledVector(s.dir, t);
+      const bone = boneAt(q);
+      if (bone) { inBone += 0.25; if (!res && resectedAt(q, E, SCREW_SLOT_GAP)) res = true; }
+      for (const pw of pls) {
+        d.copy(q).sub(pw.pSlot || pw.p); const a = d.dot(pw.N); if (d.lengthSq() - a * a > SLOT_REACH * SLOT_REACH) continue; slotGap = Math.min(slotGap, Math.abs(a) - pw.w / 2 - sc.D / 2);
+        if (bone) cutGap = Math.min(cutGap, Math.abs(d.copy(q).sub(pw.p).dot(pw.N)) - sc.d / 2);
+      }
+    }
+    if (res) { if (why) why.resected++; return null; }
+    if (slotGap < SCREW_SLOT_GAP) { if (why) why.nearSlot++; return null; }
+    if (inBone < SCREW_MIN_DEPTH) { if (why) why.shallow++; return null; }
+    inBone = Math.min(inBone, sc.len);
+    return { inBone, slotGap, cutGap, score: 10 * inBone - 0.15 * (Math.abs(sc.tiltU) + Math.abs(sc.tiltV)) - 1.0 * below };
+  }
+  function screwScore(sc, pls, body) { const r = evalScrew(sc, pls, body || null, resEnds(), null); return r ? r.score : -Infinity; }
+  // the reason no screw position was found: the furthest stage any candidate reached in evalScrew (a lane off the bone
+  // says nothing when another lane had bone but too little of it), and the check line per reason
+  function screwWhy(why) { return ['shallow', 'nearSlot', 'resected', 'noBody', 'noBone'].find(k => why[k] > 0) || 'none'; }
+  const DROP_MSG = {
+    noBone: n => `Kesi ${n} ötesinde vida için uygun yer bulunamadı (altında kemik yok); vidayı elle yerleştirin ya da kesiyi taşıyın.`,
+    shallow: n => `Kesi ${n} ötesinde vida için uygun yer bulunamadı (kemik derinliği yetersiz); vidayı elle yerleştirin ya da kesiyi taşıyın.`,
+    nearSlot: n => `Kesi ${n} ötesinde vida için uygun yer bulunamadı (kesi yuvasına çok yakın); vidayı elle yerleştirin ya da kesiyi taşıyın.`,
+    resected: n => `Kesi ${n} ötesinde vida için uygun yer bulunamadı (rezeke bölgede); vidayı elle yerleştirin ya da kesiyi taşıyın.`,
+    noBody: n => `Kesi ${n} ötesinde vida için uygun yer bulunamadı (guide gövdesinin altında kalıyor); vidayı elle yerleştirin ya da kesiyi taşıyın.`,
+    none: n => `Kesi ${n} ötesinde vida için uygun yer bulunamadı (uygun yer yok); vidayı elle yerleştirin ya da kesiyi taşıyın.`,
+  };
+  // The best screw past one cut: positions along u (SCREW_GAP_MIN..SCREW_GAP_MAX mm from the slot edge measured across
+  // the slot, uAt(vv) = the u of the slot edge on lane vv, side = the kept direction, scale = 1 / cos of the angle
+  // between u and the slot normal), across v (every lane of the body within lim of vc, the wanted lane vLane preferred)
+  // and tilts (±20°), each judged by evalScrew; a position nearer the cut and the lane wins a tie. Straight screws are
+  // tried first; when none fits, tilted ones over the whole grid; when still none, up to SCREW_GAP_FAR mm from the slot.
+  // `taken` = screws already there (hand-set or placed before), kept clear by D + 1 mm. Returns the screw or null.
+  // Graded: the stages above keep a bone bridge of SCREW_CUT_GAP mm between the hole and the osteotomy (measured on
+  // the drill path in bone, as the checks measure it); when no position past the cut has that, one with at least
+  // SCREW_CUT_WARN mm (3-4 mm from the slot edge included; the checks add a note), then any the slot clearance allows
+  // (the checks warn). On thin bone (the upper ramus, a narrow chin), where no straight or tilted drill keeps the core
+  // ring in bone over 6 mm, the plate is drilled through (evalScrew thin) with the same order of bridges.
+  // (cut: the slot this screw holds past, when known: on a cut pitched against the frame the slot edge on the bone
+  // lies well before or after uAt, which is measured in the frame plane, so positions from SCREW_GAP_BACK mm before it are
+  // tried too, every one with its entry on the kept side of the slot)
+  function bestScrew(def, uAt, side, scale, vLane, vc, lim, pls, body, E, taken, why, extra = {}, cut = null) {
+    const mk = (uu, vv, tu, tv) => Object.assign({ u: uu, v: vv, tiltU: tu, tiltV: tv, ok: false }, def, extra);
+    const blocked = S.screwBlocked || [];
+    const clear = sc => taken.every(o => (o.part || 0) !== (sc.part || 0) || Math.hypot(o.u - sc.u, o.v - sc.v) >= Math.max(o.D, sc.D) + 1)
+      && blocked.every(b => (b.part || 0) !== (sc.part || 0) || Math.hypot(b.u - sc.u, b.v - sc.v) >= sc.D + 1);
+    const pen = (dist, vv) => Math.max(0, dist - 7) + 0.3 * Math.abs(vv - vLane);
+    const tilts = [[0, 0]], more = [];
+    for (let tu = -20; tu <= 20; tu += 10) for (let tv = -20; tv <= 20; tv += 10) if (tu || tv) more.push([tu, tv]);
+    // the entry depends on (u, v) only: found once per position (a column that meets no bone skips every tilt)
+    const entries = new Map(), entryAt = (uu, vv) => { const k = uu + '|' + vv; if (!entries.has(k)) entries.set(k, screwWorld(mk(uu, vv, 0, 0)).entry); return entries.get(k); };
+    const seen = new Map(), kIn = cut && cut.keep, kept = e => !kIn || e.clone().sub(cut.pSlot || cut.p).dot(kIn) >= cut.w / 2 + def.d / 2;
+    const grid = (d0, d1, tl, w, thin = false, dstep = 1, vstep = 1) => {
+      const out = [];
+      for (let dist = d0; dist <= d1; dist += dstep) for (let k = -Math.floor(lim); k <= Math.floor(lim); k += vstep) for (const [tu, tv] of tl) {
+        const vv = vc + k, uu = Math.round((uAt(vv) + side * dist * scale) * 2) / 2, sc = mk(uu, vv, tu, tv);
+        const key = [uu, vv, tu, tv, thin ? 1 : 0].join('|'); if (seen.has(key)) continue; seen.set(key, 1);
+        if (!clear(sc)) continue;
+        const e = entryAt(uu, vv); if (e && !kept(e)) continue;
+        const r = evalScrew(sc, pls, body, E, w, thin, e); if (r) out.push({ sc, r, score: r.score - pen(Math.abs(dist), vv), dist, thin });
+      }
+      return out;
+    };
+    // the best candidate whose bridge is at least gMin
+    const pick = (cands, gMin) => cands.filter(c => c.r.cutGap >= gMin).sort((a, b) => b.score - a.score);
+    // (every stage counts towards the reason reported when nothing fits: the furthest any candidate got)
+    let all = grid(SCREW_GAP_MIN, SCREW_GAP_MAX, tilts, why), gMin = SCREW_CUT_GAP, first = pick(all, gMin);
+    if (!first.length) { all = all.concat(grid(SCREW_GAP_MIN, SCREW_GAP_MAX, more, why)); first = pick(all, gMin); }
+    if (!first.length) { all = all.concat(grid(SCREW_GAP_MAX + 1, SCREW_GAP_FAR, tilts.concat(more), why)); first = pick(all, gMin); }
+    // a pitched cut: the bone past it may start before the slot edge in the frame plane
+    if (!first.length && kIn) { all = all.concat(grid(-SCREW_GAP_BACK, SCREW_GAP_MIN - 1, tilts.concat(more), why)); first = pick(all, gMin); }
+    // a narrower bone bridge: 3-5 mm (the checks note it), then whatever clears the slot (the checks warn)
+    if (!first.length) { if (!kIn) all = all.concat(grid(SCREW_CUT_WARN, SCREW_GAP_MIN - 1, tilts.concat(more), why)); gMin = SCREW_CUT_WARN; first = pick(all, gMin); }
+    if (!first.length) { gMin = -Infinity; first = pick(all, gMin); }
+    // thin bone, drilled through
+    if (!first.length) {
+      const th = grid(kIn ? -SCREW_GAP_BACK : SCREW_CUT_WARN, SCREW_GAP_FAR, tilts.concat(more), why, true, 1, 2);
+      for (const g of [SCREW_CUT_GAP, SCREW_CUT_WARN, -Infinity]) { first = pick(th, g); if (first.length) { gMin = g; break; } }
+    }
+    let best = first[0] || null;
+    // fine tilt around the best few (same bridge and bone test as the stage that found them)
+    for (const c of first.slice(0, 5)) for (let tu = -20; tu <= 20; tu += 5) for (let tv = -20; tv <= 20; tv += 5) {
+      if (tu === c.sc.tiltU && tv === c.sc.tiltV) continue;
+      const sc = mk(c.sc.u, c.sc.v, tu, tv), r = evalScrew(sc, pls, body, E, null, c.thin, entryAt(c.sc.u, c.sc.v));
+      if (r && r.cutGap >= gMin && r.score - pen(c.dist, sc.v) > best.score) best = { sc, score: r.score - pen(c.dist, sc.v), dist: c.dist };
+    }
+    return best ? best.sc : null;
+  }
+  // automatic body: width and lateral centre from the bone's extent under the guide, wrap depth per position from the
+  // bone's widest level (sizeBody); hand-set values (S.gAuto false) are left alone. Returns the sizing (secs for the checks).
+  // (keepWrap: the fit ladder owns the global wrap depth; only the per-position profile is refreshed)
+  function autoBody(uA, uB, keepWrap = false) {
+    if (!S.anchor || !S.maskF) return null;
+    const auto = S.gAuto, fr = Object.assign({ P: S.anchor.p }, frameAxes());
+    if (!auto.W && !auto.wrap) { S.g.wrapU = null; return null; }
+    const sz = sizeBody(fr, boneField, uA, uB, S.g, { W: !!auto.W, wrap: !!auto.wrap });
+    if (!sz.ok) return sz;
+    if (auto.W) { S.g.W = sz.W; S.g.vc = sz.vc; }
+    if (auto.wrap) { S.g.wrapU = sz.wrapU; if (!keepWrap) S.g.wrap = Math.max(2, Math.min(20, sz.wrap)); } else S.g.wrapU = null;
+    S.autoSize = { W: sz.W, vc: sz.vc, wrap: sz.wrap, depth: Math.min(...sz.secs.map(s => s.depth)), height: Math.max(...sz.secs.map(s => s.vHi - s.vLo)), n: sz.secs.length };
+    return sz;
+  }
+  // The jaw's basal line from the anchor along dir (±u): in cross-sections across the line (the bone within TRACK_R mm
+  // in a 2 mm slab, TRACK_SIDE mm to either side), the centroid of the lowest TRACK_BAND mm of bone (the basal bone
+  // above the lower border: teeth, an opposing jaw, the skull base in the same mask or the other half of a narrow chin
+  // do not pull it), stepped 2 mm at a time, the direction following
+  // the centroids. Returns the point at arc length s from the section through the anchor and the bone's direction
+  // there, or null when the bone ends first. up = patient superior as the guide frame sees it.
+  const TRACK_R = 22, TRACK_BAND = 14, TRACK_AHEAD = 6, TRACK_SIDE = 10;
+  function boneTrack(dir, s, trace = null) {
+    if (!S.mask || !S.red || !S.anchor) return null;
+    const { v } = frameAxes(), up = Math.abs(v.z) > 0.3 ? v.clone().multiplyScalar(Math.sign(v.z)) : V(0, 0, 1);
+    const r = S.red, q = V(), pts = [], sec = (c, t) => {
+      const ci = G.indexOf(r, [c.x, c.y, c.z]), rad = r.sp.map(sp => Math.ceil(TRACK_R / sp));
+      pts.length = 0; let lo = Infinity; const side = V().crossVectors(t, up); if (side.lengthSq() > 1e-6) side.normalize();
+      for (let k = Math.max(0, Math.floor(ci[2] - rad[2])); k <= Math.min(r.nz - 1, Math.ceil(ci[2] + rad[2])); k++)
+        for (let j = Math.max(0, Math.floor(ci[1] - rad[1])); j <= Math.min(r.ny - 1, Math.ceil(ci[1] + rad[1])); j++)
+          for (let i = Math.max(0, Math.floor(ci[0] - rad[0])); i <= Math.min(r.nx - 1, Math.ceil(ci[0] + rad[0])); i++) {
+            if (!S.mask[i + r.nx * (j + r.ny * k)]) continue;
+            q.set(...G.worldOf(r, i, j, k)).sub(c); const a = q.dot(t);
+            if (Math.abs(a) > 1 || q.lengthSq() - a * a > TRACK_R * TRACK_R || Math.abs(q.dot(side)) > TRACK_SIDE) continue;
+            const h = q.dot(up); pts.push(q.x, q.y, q.z, h); if (h < lo) lo = h;
+          }
+      let n = 0; const m = V();
+      for (let a = 0; a < pts.length; a += 4) if (pts[a + 3] <= lo + TRACK_BAND) { n++; m.x += pts[a]; m.y += pts[a + 1]; m.z += pts[a + 2]; }
+      return n ? { c: m.multiplyScalar(1 / n).add(c), n } : { c, n: 0 };
+    };
+    let t = dir.clone().normalize(), cur = sec(S.anchor.p, t);
+    if (trace) trace.push(['start', cur.n]);
+    if (cur.n < 20) return null;
+    // the path runs TRACK_AHEAD mm past s where the bone allows; the direction at s is the chord over ±TRACK_AHEAD mm
+    // (a single 2 mm step follows every bump of the lower border)
+    const n0 = cur.n, path = [[0, cur.c]]; let c = cur.c, done = 0;
+    for (let it = 0; it < 90 && done < s + TRACK_AHEAD; it++) {
+      const nx = sec(c.clone().addScaledVector(t, 2), t);
+      if (trace) trace.push([+done.toFixed(1), nx.n, nx.c.toArray().map(x => +x.toFixed(1)), t.toArray().map(x => +x.toFixed(2))]);
+      if (nx.n < Math.max(20, 0.15 * n0)) break;
+      // a section suddenly much fuller than the last one has run into another structure (the genial tubercles, the
+      // other half of the chin, a tooth row): the track stops there rather than follow it
+      if (nx.n > 2.2 * Math.max(cur.n, 0.5 * n0)) break;
+      cur = nx;
+      const step = nx.c.clone().sub(c), len = step.length(); if (len < 0.5) break;
+      done += len; c = nx.c; t = t.clone().add(step.multiplyScalar(1 / len)).normalize(); path.push([done, c]);
+    }
+    if (done < s) return null;
+    const at = x => { for (let k = 1; k < path.length; k++) if (path[k][0] >= x) { const [s0, c0] = path[k - 1], [s1, c1] = path[k]; return c0.clone().lerp(c1, (x - s0) / ((s1 - s0) || 1)); } return path[path.length - 1][1].clone(); };
+    const cS = at(s), tS = at(Math.min(done, s + TRACK_AHEAD)).sub(at(Math.max(0, s - TRACK_AHEAD)));
+    return tS.lengthSq() > 1e-6 ? { c: cS, t: tS.normalize() } : null;
+  }
+  // a cut `off` mm from the anchor along the guide axis, proposed perpendicular to the bone where it crosses it: on a
+  // curved jaw (chin, a short body, the angle) the bone `off` mm along the arch has turned away from the guide axis
+  // and a cut square to the axis would run along the bone (no stump face, no bone for the screws past it). The cut
+  // goes through the bone's centre line at that arc length, turned with the bone (up to CUT_TURN_MAX degrees; a turn
+  // under CUT_TURN_MIN degrees keeps the straight cut), and keeps its reference point on the bone (pv, pn).
+  const CUT_TURN_MIN = 12, CUT_TURN_MAX = 70, CUT_TURN_SPAN = 42;
+  function cutAlongBone(off) {
+    const pl = { off, yaw: 0, pitch: 0, w: 1.2, ok: false };
+    if (Math.abs(off) < 8 || !S.anchor) return pl;
+    const { u, v, n } = frameAxes(), tr = boneTrack(u.clone().multiplyScalar(Math.sign(off)), Math.abs(off));
+    if (!tr) return pl;
+    let N = tr.t.clone(); if (N.dot(u) < 0) N.negate();
+    const ang = THREE.MathUtils.radToDeg(Math.acos(Math.min(1, N.dot(u))));
+    if (ang < CUT_TURN_MIN) return pl;
+    // turned with the bone as far as the plane can still be written on the guide axis: it must cross the axis on the
+    // cut's side of the anchor within CUT_OFF_MAX (a smaller turn is tried, 10° at a time, when the full one cannot)
+    const d = tr.c.clone().sub(S.anchor.p), perp = N.clone().addScaledVector(u, -N.dot(u)).normalize();
+    let o2 = NaN;
+    for (let a = Math.min(ang, CUT_TURN_MAX); a >= CUT_TURN_MIN; a -= 10) {
+      N = u.clone().multiplyScalar(Math.cos(deg(a))).addScaledVector(perp, Math.sin(deg(a)));
+      o2 = N.dot(d) / N.dot(u);
+      if (Math.abs(o2) <= CUT_OFF_MAX && Math.sign(o2) === Math.sign(off) && Math.abs(o2) >= 4) break;
+      o2 = NaN;
+    }
+    if (!Number.isFinite(o2)) return pl;
+    return Object.assign(pl, { off: Math.round(o2 * 10) / 10, yaw: +THREE.MathUtils.radToDeg(Math.atan2(N.dot(v), N.dot(u))).toFixed(1), pitch: +THREE.MathUtils.radToDeg(-Math.asin(Math.max(-1, Math.min(1, N.dot(n))))).toFixed(1), pv: +d.dot(v).toFixed(1), pn: +d.dot(n).toFixed(1) });
   }
   function suggest() {
     if (!S.anchor) return;
     const L = S.lesion, a = Math.min(L.from, L.to) - L.margin, b = Math.max(L.from, L.to) + L.margin;
-    S.planes = [{ off: a, yaw: 0, pitch: 0, w: 1.2, ok: false }, { off: b, yaw: 0, pitch: 0, w: 1.2, ok: false }];
+    // a short resection keeps straight cuts: the bone barely turns between them, and two cuts turned towards each other
+    // would shorten the defect below the planned length (and the fibula segment below its 20 mm minimum)
+    S.planes = b - a >= CUT_TURN_SPAN ? [cutAlongBone(a), cutAlongBone(b)] : [];
+    const straight = [{ off: a, yaw: 0, pitch: 0, w: 1.2, ok: false }, { off: b, yaw: 0, pitch: 0, w: 1.2, ok: false }];
+    if (!S.planes.length || S.planes[0].off >= S.planes[1].off) S.planes = straight;
+    // a cut turned with the bone near the angle can swing up past the sigmoid notch and leave a condyle in the
+    // resected piece of a segment resection: that cut stays square to the guide axis (the turn is only a proposal)
+    const ref = !L.condyle && window.Ref && Ref.get && Ref.get(), conds = ref && ref.cond ? ['R', 'L'].map(k => ref.cond[k]).filter(Boolean).map(p => V(...p)) : [];
+    const takesCondyle = () => conds.some(q => resectedNear(q, 4));
+    if (conds.length && takesCondyle()) {
+      const turned = S.planes.slice();
+      for (const k of [0, 1]) if (turned[k].pv !== undefined) { S.planes = turned.map((p, i) => i === k ? straight[i] : p); if (!takesCondyle()) break; S.planes = turned; }
+      if (takesCondyle()) S.planes = straight;
+    }
     if (S.guideOn) placeScrews(); else S.screws = [];
     unapprove(S.lesion); S.sel = null;
     updateLesionPart(); schedule(true);
   }
-  // screws outside the two outer cuts (one or two per side, 'Vida / taraf'), each at the tilt that stays longest in bone
-  // without crossing a cut; the guide is made long enough to hold them
-  function placeScrews() {
-    const def = SCREW_DEFAULT[S.kind] || SCREW_DEFAULT.dicom, per = +($('perSide') ? $('perSide').value : 1) || 1, gap = 7;
-    const { u, v } = frameAxes(), pls = planesWorld().sort((x, y) => x.off - y.off);
-    if (pls.length < 1) { S.screws = []; return; }
-    const ends = pls.length > 1 ? [[pls[0], -1], [pls[pls.length - 1], 1]] : [[pls[0], -1], [pls[0], 1]];
-    const sv = per === 2 ? Math.max(2, Math.min(5, S.g.W / 2 - def.D / 2 - 1.5)) : 0, vs = per === 2 ? [-sv, sv] : [0];
-    const pos = [];
-    for (const [pw, side] of ends) for (const vv of vs) {
-      // where the cut crosses this screw's lateral line, then the gap outward
-      const t = pw.off - vv * pw.N.dot(v) / Math.max(0.2, pw.N.dot(u));
-      pos.push({ u: Math.round((t + side * (gap + pw.w / 2)) * 2) / 2, v: vv });
-    }
-    S.g.L = Math.min(100, Math.max(16, Math.ceil(2 * Math.max(...pos.map(p => Math.abs(p.u))) + def.D + 2)));
-    syncGuideInputs();
-    const pw = planesWorld();
-    S.screws = pos.map(({ u: uu, v: vv }) => {
-      // straight screw unless a tilt scores better; if the spot has no bone under it (a turned guide axis on a
-      // curved jaw), slide it sideways within the guide until it finds bone; with none at all it stays and the
-      // screw checks report it
-      const lim = Math.max(0, S.g.W / 2 - def.D / 2 - 0.5), dvs = [0];
-      for (let d = 1; d <= 2 * lim; d++) dvs.push(d / 2, -d / 2);
-      let first = null;
-      for (const dv of dvs) {
-        const v0 = Math.max(-lim, Math.min(lim, vv + dv));
-        let best = Object.assign({ u: uu, v: v0, tiltU: 0, tiltV: 0, ok: false }, def), bs = screwScore(best, pw);
-        if (!Number.isFinite(bs)) bs = -Infinity;
-        for (let tu = -20; tu <= 20; tu += 5) for (let tv = -20; tv <= 20; tv += 5) {
-          const sc = Object.assign({ u: uu, v: v0, tiltU: tu, tiltV: tv, ok: false }, def), sc2 = screwScore(sc, pw);
-          if (Number.isFinite(sc2) && sc2 > bs) { bs = sc2; best = sc; }
-        }
-        if (!first) first = best;
-        if (bs > 50) return best;
+  // Screws outside the two outer cuts (one or two per side, 'Vida / taraf'), each where the drill reaches the most bone
+  // (bestScrew: along the axis 5-15 mm past the slot, across the body, tilted up to 20°, then the graded fallbacks:
+  // further out, before the frame-plane slot edge on a pitched cut, a 3-5 mm bone bridge, thin bone), never on the resected side,
+  // never within 2 mm of a slot. A side with no usable position gets no screw and a critical check says why
+  // (S.screwDrops). Screws the surgeon placed or moved (sc.hand) are kept and the automatic ones fill up around them.
+  // The guide is made long enough to hold the screws and the slots (up to L_MAX, from the plan, no fixed 100 mm).
+  // The body the screws stand on, on any frame: buildGuide's box (W about vc, wrap(uu) below the bone's top per
+  // position, never above `cap`), from bone sections over the box width along the span the screws may use.
+  function screwBodyOn(frame, uA, uB, W, vc, wrap, wrapU, cap = 0) {
+    const us = []; for (let x = uA; x <= uB + 1e-6; x += 3) us.push(x);
+    return screwBody(frame, boneSections(frame.P, frame.u, frame.v, frame.n, boneField, us, { vHalf: W / 2, vc }), W, vc, wrap, wrapU, cap);
+  }
+  // (opts.keepWrap: the fit ladder sets the global wrap depth itself; the screws are placed for that depth)
+  function placeScrews(opts = {}) {
+    const def = SCREW_DEFAULT[S.kind] || SCREW_DEFAULT.dicom, per = +($('perSide') ? $('perSide').value : 1) || 1;
+    const { u, v, n } = frameAxes(), pls0 = planesWorld().sort((x, y) => x.off - y.off);
+    S.screwDrops = [];
+    if (pls0.length < 1) { S.screws = []; return; }
+    const hand = S.screws.filter(sc => sc && sc.hand);
+    // body width, lateral centre and wrap depth from the bone over the span the screws may need
+    const span = [pls0[0].off - SCREW_GAP_MAX - pls0[0].w - def.D, pls0[pls0.length - 1].off + SCREW_GAP_MAX + pls0[pls0.length - 1].w + def.D];
+    autoBody(Math.min(span[0], -8), Math.max(span[1], 8), !!opts.keepWrap);
+    const pls = planesWorld().sort((x, y) => x.off - y.off), vc = S.g.vc || 0, E = resEnds();
+    // two guides on their own frames (angle region, curved jaw): each piece's screws lie along its own bone axis past its cut
+    if (S.g.split === 2 && pls.length >= 2) { const sp = splitScrews(pls, per, def, E, hand.filter(sc => sc.part)); if (sp) { S.screws = sp; setLength(pls); return; } }
+    // the ends to hold: both outer cuts, or (one cut) both sides of it; a condylar resection keeps bone on one side only
+    let ends = pls.length > 1 ? [[pls[0], -1], [pls[pls.length - 1], 1]] : [[pls[0], -1], [pls[0], 1]];
+    if (E && E.condyle) { const A = pls.find(p => p.pl === E.A.pl) || pls[0]; ends = [[A, Math.sign(-E.A.N.dot(u)) || -1]]; }
+    const perEnd = E && E.condyle ? Math.max(per, 2) : per;
+    const sv = perEnd === 2 ? Math.max(2, Math.min(5, S.g.W / 2 - def.D / 2 - 1.5)) : 0, lanes = perEnd === 2 ? [vc - sv, vc + sv] : [vc];
+    const lim = Math.max(0, S.g.W / 2 - def.D / 2 - 0.5);
+    // the body the screws stand on: the box buildGuide builds on this frame
+    const body = screwBodyOn(Object.assign({ P: S.anchor.p }, frameAxes()), Math.min(span[0], -8) - 7, Math.max(span[1], 8) + 7, S.g.W, vc, S.g.wrap, S.g.wrapU, 0);
+    const out = hand.filter(sc => !sc.part);
+    for (const [pw, side] of ends) {
+      // the u of the slot edge on lane vv (slot centre shifted by kerfSide, tilted cuts cross each lane elsewhere)
+      const cu = Math.max(0.2, Math.abs(pw.N.dot(u))), scale = 1 / cu;
+      const uAt = vv => pw.off + (pw.shift || 0) * Math.sign(pw.N.dot(u) || 1) - vv * pw.N.dot(v) / Math.max(0.2, pw.N.dot(u)) + side * pw.w / 2 * scale;
+      const have = out.filter(sc => Math.sign(sc.u - uAt(sc.v)) === side).length;
+      for (let k = have; k < perEnd; k++) {
+        const why = { noBone: 0, noBody: 0, resected: 0, nearSlot: 0, shallow: 0 };
+        const best = bestScrew(def, uAt, side, scale, lanes[k % lanes.length], vc, lim, pls, body, E, out, why, {}, { p: pw.p, pSlot: pw.pSlot, w: pw.w, keep: pw.N.clone().multiplyScalar(Math.sign(pw.N.dot(u) * side) || side) });
+        if (best) out.push(best); else S.screwDrops.push({ cut: Math.max(0, S.planes.indexOf(pw.pl)), side, why: screwWhy(why) });
       }
-      return first;
-    });
+    }
+    S.screws = out;
+    setLength(pls);
+  }
+  // guide length from what it has to hold: every screw sleeve and every slot plus the flange, never above L_MAX
+  function setLength(pls) {
+    if (S.gAuto.L) {
+      const forScrews = 2 * Math.max(0, ...S.screws.filter(sc => !sc.part).map(sc => Math.abs(sc.u) + sc.D / 2 + 1));
+      const forCuts = 2 * Math.max(0, ...pls.map(p => Math.abs(p.off) + p.w / 2 + S.g.flange));
+      S.g.L = Math.min(L_MAX, Math.max(16, Math.ceil(Math.max(forScrews, forCuts))));
+    }
+    syncGuideInputs();
+  }
+  // screws for the two-guide layout: on each piece's own frame (cutFrame), past the stump face along the piece's bone
+  // axis (up the ramus for a cut at the angle), one or two across; stored in the guide frame as every screw is. The
+  // slot crosses the piece frame obliquely, so its edge is found per lane and the distance is measured across the slot.
+  // The body of one piece of the two-guide layout, sized as buildGuideSet sizes the piece: its anchor on the bone near
+  // the middle of the span it will have (the capture flange behind the slot, the screws up to SCREW_GAP_FAR past it),
+  // width and lateral centre from the bone over that span, wrap from the piece's own profile within the global depth.
+  function pieceBody(cut, fr, def) {
+    const half = cut.w / 2 + Math.abs(cut.shift || 0), back = half + S.g.flange, reach = SCREW_GAP_FAR + def.D / 2 + 2;
+    let Pq = null; { const Pc = fr.P.clone().addScaledVector(fr.u, (reach - back) / 2), top = Pc.clone().addScaledVector(fr.n, 20); for (let t = 0; t < 70; t += 0.25) { const c = top.clone().addScaledVector(fr.n, -t); if (boneAt(c)) { Pq = c; break; } } }
+    const cap = Pq ? Pq.clone().sub(fr.P).dot(fr.n) : 0, auto = S.gAuto;
+    const sz = sizeBody(fr, boneField, -back, reach, S.g, { W: !!auto.W, wrap: !!auto.wrap });
+    const W = sz.W, vc = sz.vc || 0, wrapU = auto.wrap ? sz.wrapU : null;
+    return { W, vc, wrap: Math.min(S.g.wrap, sz.wrap), body: screwBodyOn(fr, -back, reach, W, vc, S.g.wrap, wrapU, cap) };
+  }
+  // the deepest wrap the pieces' own bone allows (the fit ladder starts the two-guide layout from it)
+  function pieceWrapTop() {
+    const f = pieceFrames(); if (!f) return 0;
+    const def = SCREW_DEFAULT[S.kind] || SCREW_DEFAULT.dicom;
+    return Math.min(20, Math.max(...[[f.A, f.a], [f.B, f.b]].map(([cut, fr]) => sizeBody(fr, boneField, -(cut.w / 2 + S.g.flange), SCREW_GAP_FAR + def.D / 2 + 2, S.g, { W: true, wrap: true }).wrap)));
+  }
+  function splitScrews(pls, per, def, E, hand) {
+    const f = pieceFrames(); if (!f) return null;
+    const out = hand.slice();
+    for (const [cut, fr, part] of [[f.A, f.a, -1], [f.B, f.b, 1]]) {
+      if (E && E.condyle && cut.pl !== E.A.pl) continue;             // the piece on the resected side holds no screw
+      const c = fr.u.dot(cut.N), cu = Math.max(0.2, Math.abs(c)), scale = 1 / cu, d0 = (cut.pSlot || cut.p).clone().sub(fr.P).dot(cut.N), vN = fr.v.dot(cut.N);
+      const uAt = vv => (d0 - vv * vN) / (c || 0.2) + cut.w / 2 * scale;
+      // the piece's own body and lanes: across its whole width, one lane or two about its lateral centre preferred
+      const pb = pieceBody(cut, fr, def), lim = Math.max(0, pb.W / 2 - def.D / 2 - 0.5);
+      const sv = per === 2 ? Math.max(2, Math.min(5, pb.W / 2 - def.D / 2 - 1.5)) : 0, lanes = per === 2 ? [pb.vc - sv, pb.vc + sv] : [pb.vc];
+      const have = out.filter(sc => sc.part === part).length;
+      for (let k = have; k < per; k++) {
+        const why = { noBone: 0, noBody: 0, resected: 0, nearSlot: 0, shallow: 0 };
+        const best = bestScrew(def, uAt, 1, scale, lanes[k % lanes.length], pb.vc, lim, pls, pb.body, E, out, why, { part }, { p: cut.p, pSlot: cut.pSlot, w: cut.w, keep: cut.N.clone().multiplyScalar(Math.sign(c) || 1) });
+        if (best) out.push(best); else S.screwDrops.push({ cut: Math.max(0, S.planes.indexOf(cut.pl)), side: part, why: screwWhy(why) });
+      }
+    }
+    return out;
   }
   // a painted lesion (world points) -> lesion extent, and cuts that clear it by the safety margin at the angle that
   // removes the least bone (up to 30°, small penalty per degree so a straight cut wins a near tie)
   function planFromLesion(pts) {
     if (!S.anchor || !pts.length) return null;
-    const { u, v, n } = frameAxes(), A0 = S.anchor.p, L = S.lesion, w = 1.2, clear = L.margin + w / 2;
+    // the safety margin is measured to the stump face: with the kerf on the resected side that face is the plane itself,
+    // with a centred slot it lies w/2 behind the plane
+    const { u, v, n } = frameAxes(), A0 = S.anchor.p, L = S.lesion, w = 1.2, clear = L.margin + (S.g.kerfSide ? 0 : w / 2);
     const rel = pts.map(q => q.clone().sub(A0)), offs = rel.map(q => q.dot(u));
     const lo = Math.min(...offs), hi = Math.max(...offs), mid = (lo + hi) / 2;
     L.from = Math.round(lo * 2) / 2; L.to = Math.round(hi * 2) / 2;
@@ -739,22 +1259,127 @@
     return S.planes;
   }
   // after an automatic plan: if the guide cannot be put on (or splits), try a shallower wrap, 1 mm at a time
+  // Fallback ladder: (1) shallower wrap, 1 mm at a time; (2) two guides: on their own frames when the cuts straddle the
+  // angle of the jaw (local bone axes more than 20° apart), else one frame with a gap; (3) a shorter capture flange
+  // on the two guides. Values set by hand (S.gAuto false) are not touched. Every step is recorded in S.fitLog for the
+  // checks. The "ok" criterion is the expected piece count, at least one free insertion direction and the screws: the
+  // automatic screws are placed again for every rung (the body they stand on is as deep as that rung's wrap), and a
+  // rung whose guide drops a screw, holds one on a sleeve off the body or out of bone, or is held at one end only is
+  // not ok, so a straight guide that cannot hold screws on a curved jaw goes on to the two-guide layouts.
+  // A1: when two guides joined by a bar are proposed instead of one straight guide (lesion length, the straight axis
+  // leaving the bone, a segment of the ramus with the condyle kept); null when one guide is the first choice
+  const LONG_MM = 55, AXIS_DROP = 20;
+  function longCase() {
+    const L = S.lesion, len = Math.abs(L.to - L.from), E = resEnds();
+    if (!S.anchor || S.planes.length < 2 || (E && E.condyle)) return null;
+    if (len >= LONG_MM) return { len, why: 'len' };
+    if (ramusAxis()) return { len, why: 'ramus' };
+    const off = axisOffBone(); return off ? { len, why: 'axis', at: off.off } : null;
+  }
+  // the guide axis runs up the ramus (more vertical than not)
+  function ramusAxis() { return !!S.anchor && Math.abs(frameAxes().u.z) > 0.6; }
+  // the straight guide axis between the outer cuts: the first position where no bone lies within AXIS_DROP mm below the
+  // guide plane across the body width (a single straight guide cannot follow the bone there), or null
+  function axisOffBone() {
+    if (!S.anchor || S.planes.length < 2) return null;
+    const pl = planesWorld().sort((a, b) => a.off - b.off), { u, v, n } = frameAxes(), W = S.g.W || 22, vc = S.g.vc || 0, q = V();
+    for (let uu = pl[0].off; uu <= pl[pl.length - 1].off + 1e-6; uu += 2) {
+      let hit = false;
+      for (let vv = vc - W / 2; vv <= vc + W / 2 + 1e-6 && !hit; vv += 2) for (let t = -10; t <= AXIS_DROP; t += 1) { q.copy(S.anchor.p).addScaledVector(u, uu).addScaledVector(v, vv).addScaledVector(n, -t); if (boneAt(q)) { hit = true; break; } }
+      if (!hit) return { off: uu };
+    }
+    return null;
+  }
+  const FIT_BUDGET_MS = 45000;
   async function fitWrap() {
     if (!S.anchor) return null;
-    const w0 = S.g.wrap, test = async (h = 0.8) => { const o = await buildGuide(Object.assign({ g: S.g, P: S.anchor.p, pls: planesWorld(), scs: screwsWorld(), bone: boneAt, h }, frameAxes())); const R = o.result, want = S.g.split && S.planes.length >= 2 ? 2 : 1; return R.pieces === want && (!R.seat || !R.seat.ok || R.seat.free > 0); };
+    const auto = S.gAuto, w0 = S.g.wrap, f0 = S.g.flange, s0 = S.g.split, log = [], t0 = performance.now();
+    // the rung that came closest when none fits (kept at the end): the right piece count first, then a free seating
+    // direction, then the fewest failed screws; `onlyScrews` marks a rung whose body sits but whose screws fail,
+    // `noBoneDrop` one whose automatic placement found no bone at all past a cut (no wrap depth mends that),
+    // `rejected` the automatic screws the built guide found no body under (their spots are kept clear on a retry)
+    let best = null, onlyScrews = false, noBoneDrop = false, rejected = [];
+    S.screwBlocked = [];
+    const over = () => performance.now() - t0 > FIT_BUDGET_MS;
+    const place = () => { if (S.guideOn) placeScrews({ keepWrap: true }); };
+    // failed screws of a rung: dropped positions, sleeves off the body or out of bone, and a guide held at one end
+    // only (one guide across two real cuts) or a piece without a screw (two guides)
+    const screwsBad = R => {
+      const bad = R.screwInfo.filter(si => !si.ok).length + (S.screwDrops || []).length, E = resEnds();
+      const real2 = S.planes.length >= 2 && !(E && E.condyle) && S.bonelessCut == null;
+      let held = true;
+      if (real2 && S.g.split === 2) { const c = [0, 0]; R.screwInfo.forEach(si => { if (si.ok && si.s.sc.part) c[si.s.sc.part < 0 ? 0 : 1]++; }); held = c[0] > 0 && c[1] > 0; }
+      else if (real2) { const pl = planesWorld().sort((x, y) => x.off - y.off), mid = (pl[0].off + pl[pl.length - 1].off) / 2, sides = new Set(R.screwInfo.filter(si => si.ok).map(si => Math.sign(si.s.sc.u - mid))); held = sides.has(-1) && sides.has(1); }
+      return bad + (held ? 0 : 1);
+    };
+    const test = async (h = 0.8) => {
+      const o = await buildGuideSet(Object.assign({ g: S.g, P: S.anchor.p, pls: planesWorld(), scs: screwsWorld(), bone: boneAt, field: boneField, h, noBarMesh: true }, frameAxes())); const R = o.result, want = S.g.split && S.planes.length >= 2 ? 2 : 1; disposeObj(o.mesh);
+      const bad = screwsBad(R), scOk = !bad, piecesOk = R.pieces === want, seatFree = !R.seat || !R.seat.ok || R.seat.free > 0;
+      if (!scOk) log.push({ step: 'screws', split: S.g.split, wrap: S.g.wrap, flange: S.g.flange, ok: false, screws: bad });
+      const score = (piecesOk ? 1000 : 0) + (seatFree ? 100 : 0) - bad - (h > 0.5 ? 0.5 : 0);
+      if (!best || score > best.score) best = { score, wrap: S.g.wrap, split: S.g.split, flange: S.g.flange, pieces: R.pieces, want, free: R.seat && R.seat.ok ? R.seat.free : null, screws: bad };
+      onlyScrews = piecesOk && seatFree && !scOk;
+      noBoneDrop = (S.screwDrops || []).some(d => d.why === 'noBone');
+      rejected = R.screwInfo.filter(si => !si.ok && si.noBody && si.s.sc && !si.s.sc.hand).map(si => ({ part: si.s.sc.part || 0, u: si.s.sc.u, v: si.s.sc.v }));
+      return piecesOk && (h > 0.5 || seatFree) && scOk;
+    };
     // coarse grid first, then confirm at the resolution of the final guide
     const okAt = async () => (await test()) && (await test(0.4));
     // start from the usual depth (an earlier plan may have lowered it), never below 2 mm (the bridge needs it)
-    const top = Math.max(w0, S.kind === 'leg' ? 6 : 5);
-    let ok = false, split = false;
-    for (let w = top; !ok && w >= 2; w--) { S.g.wrap = w; ok = await okAt(); }
-    // a long resection on a curved jaw: two separate guides, one on each side, sit on straighter bone
-    if (!ok && !S.g.split && S.planes.length >= 2) {
-      S.g.split = 1;
-      for (let w = top; !ok && w >= 2; w--) { S.g.wrap = w; ok = await okAt(); }
-      if (ok) split = true; else S.g.split = 0;
+    const top = auto.wrap ? Math.max(w0, S.kind === 'leg' ? 6 : 5) : w0, wMin = auto.wrap ? 2 : w0;
+    // a rung whose body sits in one piece with a free direction and fails only on its screws is not mended by a
+    // shallower wrap (a shallower body holds fewer of them), so that ladder ends there
+    // (a sleeve the built guide finds no body under: its spot is kept clear and the screws placed again, twice at most;
+    // the whole fit stops at FIT_BUDGET_MS and keeps the closest rung)
+    const ladder = async (step, from, stop = over, dw = 1) => {
+      let ok = false;
+      for (let w = from; !ok && w >= wMin && !stop(); w -= dw) {
+        S.g.wrap = w; place(); onlyScrews = false; ok = await okAt(); log.push({ step, split: S.g.split, wrap: w, flange: S.g.flange, ok });
+        for (let r = 0; !ok && r < 2 && onlyScrews && rejected.length && !stop(); r++) { S.screwBlocked.push(...rejected); place(); ok = await okAt(); log.push({ step, split: S.g.split, wrap: w, flange: S.g.flange, ok, retry: r + 1 }); }
+        if (!ok && (onlyScrews || noBoneDrop)) break;
+      }
+      return ok;
+    };
+    // A1 / B3: a long resection (lesion LONG_MM or more), a straight guide axis that leaves the bone between the cuts, or a
+    // segment of the ramus (condyle kept): two guides on their own frames joined by the connecting bar are tried first,
+    // the single guide only when they cannot be put on. A guide running up the ramus rests on the posterior border (stopP).
+    // a cut that meets no bone leaves nothing for a guide to hold past it: no layout mends that (the check says so)
+    const sortedPl = S.planes.length >= 2 ? planesWorld().sort((x, y) => x.off - y.off) : [], misses = cutMisses();
+    const outerMiss = sortedPl.length >= 2 && (misses.includes(S.planes.indexOf(sortedPl[0].pl)) || misses.includes(S.planes.indexOf(sortedPl[sortedPl.length - 1].pl)));
+    const lng = S.planes.length >= 2 && auto.split && S.bonelessCut == null && !outerMiss ? longCase() : null;
+    S.longCase = lng; S.fitAngle = 0;
+    if (auto.bar) S.g.bar = 0;
+    if (auto.stopP) S.g.stopP = ramusAxis() ? 1 : 0;
+    let ok = false, split = false, tried2 = false;
+    if (lng && !over()) {
+      S.g.split = 2; if (auto.bar) S.g.bar = 1; tried2 = true;
+      // (3 mm rungs within half the fit budget, so the single guide is still tried when the two cannot be put on)
+      ok = await ladder('long', auto.wrap ? Math.min(20, Math.max(top, Math.round(pieceWrapTop()))) : top, () => performance.now() - t0 > FIT_BUDGET_MS * 0.5, 3);
+      if (ok) split = true; else { S.g.split = s0; if (auto.bar) S.g.bar = 0; }
     }
-    if (!ok) S.g.wrap = top;
+    if (!ok) ok = await ladder('wrap', top);
+    // a long resection on a curved jaw: two separate guides, one on each side, sit on straighter bone and hold their
+    // screws along their own bone; two guides on their own frames start from the depth their own bone allows
+    if (!ok && auto.split && !S.g.split && S.planes.length >= 2 && S.bonelessCut == null && !outerMiss && !over()) {
+      const ang = cutsAngle();
+      // the screws follow the layout: on two frames each piece holds its own, on one frame they sit beside the cuts
+      const layout = sp => { S.g.split = sp; return sp === 2 && auto.wrap ? Math.min(20, Math.max(top, Math.round(pieceWrapTop()))) : top; };
+      let from = layout(ang > 20 && !tried2 ? 2 : 1); S.fitAngle = ang;
+      ok = await ladder('split', from);
+      if (!ok && auto.split && !over() && !(tried2 && S.g.split === 1)) { from = layout(S.g.split === 2 ? 1 : 2); ok = await ladder('split', from); }
+      // the capture flange past each slot shortened: each guide reaches less far around the curve
+      if (!ok && S.g.flange > 2 && !over()) { S.g.flange = 2; ok = await ladder('flange', from); if (!ok) S.g.flange = f0; }
+      if (ok) split = true; else S.g.split = s0;
+    }
+    // nothing fits: keep the rung that came closest (its layout, flange and wrap) rather than the first one
+    if (!ok && best) {
+      if (auto.split && S.planes.length >= 2) S.g.split = best.split;
+      if (auto.wrap) S.g.wrap = best.wrap; S.g.flange = best.flange;
+      place();
+      log.push({ step: 'kept', split: S.g.split, wrap: S.g.wrap, flange: S.g.flange, ok: false, pieces: best.pieces, want: best.want, free: best.free, screws: best.screws });
+      if (lng && auto.bar) S.g.bar = S.g.split === 2 ? 1 : 0;
+    } else if (!ok) { S.g.wrap = top; place(); }
+    S.fitLog = log;
     if ($('g_split')) $('g_split').value = String(S.g.split || 0);
     syncGuideInputs(); schedule(false);
     return { wrap: S.g.wrap, split, ok };
@@ -769,14 +1394,54 @@
     const rc = new THREE.Raycaster(c.clone().addScaledVector(out, 120), out.clone().negate());
     const hit = rc.intersectObjects(targets, false)[0]; if (!hit) return false;
     const nrm = hit.face.normal.clone().transformDirection(hit.object.matrixWorld); if (nrm.dot(out) < 0) nrm.negate();
-    setAnchor(hit.point.clone(), nrm); return true;
+    setAnchor(hit.point.clone(), nrm);
+    // the guide axis follows the painted lesion when the stroke has a direction (6 mm or more across the seating
+    // normal): on the chin or up the ramus the local bone PCA is ambiguous (the bone is as tall as it is long within
+    // 16 mm), and the surgeon's stroke says which way the resection runs
+    const nA = S.anchor.n, flat = pts.map(q => q.clone().sub(c).addScaledVector(nA, -q.clone().sub(c).dot(nA)));
+    if (flat.length >= 2) {
+      const C = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+      flat.forEach(d => { const a = [d.x, d.y, d.z]; for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) C[i][j] += a[i] * a[j]; });
+      let e = flat.reduce((a, b) => (b.lengthSq() > a.lengthSq() ? b : a), flat[0]).clone(); if (e.lengthSq() < 1e-6) e = S.anchor.axis.clone();
+      for (let it = 0; it < 30; it++) e = V(C[0][0] * e.x + C[0][1] * e.y + C[0][2] * e.z, C[1][0] * e.x + C[1][1] * e.y + C[1][2] * e.z, C[2][0] * e.x + C[2][1] * e.y + C[2][2] * e.z).normalize();
+      const span = Math.max(...flat.map(d => d.dot(e))) - Math.min(...flat.map(d => d.dot(e)));
+      if (span >= 6 && e.lengthSq() > 0.5) { if (e.dot(S.anchor.axis) < 0) e.negate(); S.anchor.axis = e; S.anchor.axisFrom = 'lesion'; }
+    }
+    refineAxis();
+    return true;
+  }
+  // the guide axis at the scale of the guide: PCA of the bone in the outer-cortex slab under the guide footprint
+  // (12 mm deep, 30 mm each way along the first guess, 20 mm across). A stroke painted at a slant, or the 16 mm PCA
+  // on a tall symphysis / thin ramus, can leave the axis far from the bone's run; the slab PCA follows the arch (chin,
+  // body) or the ramus. Kept only when it stays within 60° of the first guess (the stroke says which way the resection runs).
+  function refineAxis() {
+    if (!S.anchor || !S.red || !S.mask) return;
+    const { p, n, axis } = S.anchor, u0 = axis.clone().sub(n.clone().multiplyScalar(axis.dot(n))).normalize(), v0 = V().crossVectors(n, u0), r = S.red;
+    const c = p.clone(), ci = G.indexOf(r, [c.x, c.y, c.z]), rad = r.sp.map(sp => Math.ceil(36 / sp)), pts = [];
+    for (let k = Math.max(0, Math.round(ci[2] - rad[2])); k <= Math.min(r.nz - 1, ci[2] + rad[2]); k += 2)
+      for (let j = Math.max(0, Math.round(ci[1] - rad[1])); j <= Math.min(r.ny - 1, ci[1] + rad[1]); j += 2)
+        for (let i = Math.max(0, Math.round(ci[0] - rad[0])); i <= Math.min(r.nx - 1, ci[0] + rad[0]); i += 2) {
+          if (!S.mask[i + r.nx * (j + r.ny * k)]) continue;
+          const q = V(...G.worldOf(r, i, j, k)).sub(c), dn = q.dot(n);
+          if (dn < -12 || dn > 6 || Math.abs(q.dot(u0)) > 30 || Math.abs(q.dot(v0)) > 20) continue;
+          pts.push(q);
+        }
+    if (pts.length < 60) return;
+    const m = pts.reduce((a, b) => a.add(b), V()).multiplyScalar(1 / pts.length), C = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+    pts.forEach(q => { const d = [q.x - m.x, q.y - m.y, q.z - m.z]; for (let a = 0; a < 3; a++) for (let b = 0; b < 3; b++) C[a][b] += d[a] * d[b]; });
+    let e = u0.clone();
+    for (let it = 0; it < 40; it++) e = V(C[0][0] * e.x + C[0][1] * e.y + C[0][2] * e.z, C[1][0] * e.x + C[1][1] * e.y + C[1][2] * e.z, C[2][0] * e.x + C[2][1] * e.y + C[2][2] * e.z).normalize();
+    e.sub(n.clone().multiplyScalar(e.dot(n))).normalize();
+    if (e.lengthSq() < 0.5 || Math.abs(e.dot(u0)) < 0.5) return;
+    if (e.dot(u0) < 0) e.negate();
+    S.anchor.axis = e; S.anchor.axisFrom = (S.anchor.axisFrom || 'pca') + '+slab';
   }
   const lFields = [['from', 'Lezyon başlangıcı', -45, 45, 0.5, 'mm'], ['to', 'Lezyon bitişi', -45, 45, 0.5, 'mm'], ['margin', 'Güvenlik payı', 0, 15, 0.5, 'mm']];
   $('lesCtl').innerHTML = lFields.map(([k, t, mn, mx, st]) => `<div class="ctl"><div class="ctl-row"><label for="l_${k}">${t}</label><output id="lo_${k}"></output></div><input type="range" id="l_${k}" min="${mn}" max="${mx}" step="${st}"></div>`).join('');
   function syncLesion() {
     lFields.forEach(([k, , , , , unit]) => { $('l_' + k).value = S.lesion[k]; $('lo_' + k).textContent = `${fmt(S.lesion[k])} ${unit}`; });
     $('resType').value = S.lesion.condyle || ''; $('resTypeHint').hidden = !S.lesion.condyle;
-    $('lesStatus').textContent = !S.anchor ? '' : S.lesion.ok ? `Sınır onaylandı${S.lesion.by ? ' · ' + S.lesion.by : ''}.` : 'Sınır onayı bekliyor (7. adım).';
+    $('lesStatus').textContent = !S.anchor ? '' : S.lesion.ok ? `${xl('Sınır onaylandı')}${S.lesion.by ? ' · ' + S.lesion.by : ''}.` : 'Sınır onayı bekliyor (7. adım).';
   }
   lFields.forEach(([k]) => $('l_' + k).addEventListener('input', e => { S.lesion[k] = +e.target.value; unapprove(S.lesion); syncLesion(); updateLesionPart(); renderAppr(); render(); emit('parts'); emit('changed'); }));
   syncLesion();
@@ -785,109 +1450,296 @@
   // generic voxel guide builder: ctx = { P, u, v, n, g, pls:[{p,N,w}], scs:[{sc,dir,entry}], bone(q) -> bool }
   // which guide edge (+v or −v) is the upper one (patient superior, +z in LPS); the stop flags map onto them
   function stopSides(g, v) {
-    const upPos = v.z >= 0;
-    return { pos: !!(upPos ? g.stopT : g.stopB), neg: !!(upPos ? g.stopB : g.stopT) };
+    const upPos = v.z >= 0, out = { pos: !!(upPos ? g.stopT : g.stopB), neg: !!(upPos ? g.stopB : g.stopT) };
+    // posterior stop (ramus): only on a frame whose v axis runs front to back (LPS +y = posterior)
+    if (g.stopP && Math.abs(v.y) > 0.5) { if (v.y > 0) out.pos = true; else out.neg = true; }
+    return out;
   }
   async function buildGuide(ctx) {
     const t0 = performance.now();
     const { g, P, u, v, n, pls, scs } = ctx, boneAt = ctx.bone, h = ctx.h || 0.4, T = {};
     const maxSleeve = Math.max(0, ...scs.map(s => s.sc.sleeveH));
     // optional stops: lips past the upper / lower guide edge that reach around the bone edge (crest, lower border)
-    const sUp = stopSides(g, v), stopX = g.stopT || g.stopB ? (g.stopL || 6) : 0, stopZ = g.stopT || g.stopB ? (g.stopD || 5) : 0;
-    const lo = [-g.L / 2 - 4, -g.W / 2 - 4 - stopX, -Math.max(g.wrap + 10, 30) - Math.max(0, g.L / 2 - 15) * 0.6], hi = [g.L / 2 + 4, g.W / 2 + 4 + stopX, g.clear + g.wall + Math.max(maxSleeve, g.bridge) + 6];
-    const nx = Math.ceil((hi[0] - lo[0]) / h) + 1, ny = Math.ceil((hi[1] - lo[1]) / h) + 1, nz = Math.ceil((hi[2] - lo[2]) / h) + 1, N = nx * ny * nz;
-    const world = (a, b, c) => P.clone().add(u.clone().multiplyScalar(lo[0] + a * h)).add(v.clone().multiplyScalar(lo[1] + b * h)).add(n.clone().multiplyScalar(lo[2] + c * h));
-    const toWorld = (a, b, c) => { const q = world(a, b, c); return [q.x, q.y, q.z]; };
+    const sUp = stopSides(g, v), anyStop = sUp.pos || sUp.neg, stopX = anyStop ? (g.stopL || 6) : 0, stopZ = anyStop ? (g.stopD || 5) : 0, vc = g.vc || 0;
+    // wrap depth at a position along the guide: the hand / global value, capped by the automatic per-position profile
+    // (g.wrapU = [[uu, depth], ...]) where the bone's widest level is shallower towards an end of the guide
+    const wrapOf = uu => { const pr = g.wrapU; if (!pr || !pr.length) return g.wrap; if (uu <= pr[0][0]) return Math.min(g.wrap, pr[0][1]); for (let a = 1; a < pr.length; a++) if (uu <= pr[a][0]) { const t = (uu - pr[a - 1][0]) / ((pr[a][0] - pr[a - 1][0]) || 1); return Math.min(g.wrap, pr[a - 1][1] + t * (pr[a][1] - pr[a - 1][1])); } return Math.min(g.wrap, pr[pr.length - 1][1]); };
+    const uc = g.uc || 0;
+    const lo = [uc - g.L / 2 - 4, vc - g.W / 2 - 4 - stopX, -Math.max(g.wrap + 10, 30) - Math.max(0, g.L / 2 - 15) * 0.6], hi = [uc + g.L / 2 + 4, vc + g.W / 2 + 4 + stopX, g.clear + g.wall + Math.max(maxSleeve, g.bridge) + 6];
+    const nx = Math.ceil((hi[0] - lo[0]) / h) + 1, ny = Math.ceil((hi[1] - lo[1]) / h) + 1, nz = Math.ceil((hi[2] - lo[2]) / h) + 1, N = nx * ny * nz, nxy = nx * ny;
+    const toWorld = (a, b, c) => { const x = lo[0] + a * h, y = lo[1] + b * h, z = lo[2] + c * h; return [P.x + u.x * x + v.x * y + n.x * z, P.y + u.y * x + v.y * y + n.y * z, P.z + u.z * x + v.z * y + n.z * z]; };
     // bone in the local grid
-    const B = new Uint8Array(N);
-    for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) if (boneAt(world(i, j, k))) B[i + nx * (j + ny * k)] = 1;
+    // (ctx.field, when given, is the bone density behind ctx.bone (bone = field > 0.5): it places the surface between grid nodes)
+    const B = new Uint8Array(N), qv = new THREE.Vector3(), soft = ctx.field ? new Float32Array(N) : null;
+    for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) {
+      const z = lo[2] + k * h, y = lo[1] + j * h, bx = P.x + v.x * y + n.x * z, by = P.y + v.y * y + n.y * z, bz = P.z + v.z * y + n.z * z, r = nx * (j + ny * k);
+      for (let i = 0; i < nx; i++) {
+        const x = lo[0] + i * h; qv.set(bx + u.x * x, by + u.y * x, bz + u.z * x);
+        if (soft) { const f = ctx.field(qv); soft[r + i] = f; if (f > 0.5) B[r + i] = 1; } else if (boneAt(qv)) B[r + i] = 1;
+      }
+    }
     T.bone = performance.now() - t0; await sleep();
-    const O = G.exterior(B, nx, ny, nz), D = G.edt(B, nx, ny, nz); T.edt = performance.now() - t0;
+    // solid = bone plus every void the outside cannot reach; d = signed distance to its surface (outside > 0), lightly smoothed
+    // as the server does; the guide is the level set of a few such fields (shell band, box, slots, sleeves) combined with
+    // min / max, so every plane in the design stays a plane and the mesh below can be marched on exact distances
+    const O = G.exterior(B, nx, ny, nz), Bs = new Uint8Array(N); for (let i = 0; i < N; i++) Bs[i] = O[i] ? 0 : 1;
+    const D = G.edt(Bs, nx, ny, nz); T.edt = performance.now() - t0;
     await sleep();
+    const dist = new Float32Array(N); for (let i = 0; i < N; i++) dist[i] = Bs[i] ? -h / 2 : D[i] * h - h / 2;
+    // within a voxel and a half of the surface the distance comes from the density itself, (0.5 - density) / |gradient|,
+    // which places the surface to a fraction of a voxel instead of the voxel the node-to-node distance lands in
+    if (soft) {
+      const near = 1.5 * h, g2 = 1 / (2 * h), fade = 0.5 * h;
+      for (let k = 1; k < nz - 1; k++) for (let j = 1; j < ny - 1; j++) for (let i = 1; i < nx - 1; i++) {
+        const id = i + nx * (j + ny * k), de = dist[id]; if (de > near || (Bs[id] && soft[id] <= 0.5)) continue;
+        const gx = (soft[id + 1] - soft[id - 1]) * g2, gy = (soft[id + nx] - soft[id - nx]) * g2, gz = (soft[id + nxy] - soft[id - nxy]) * g2, gm = Math.sqrt(gx * gx + gy * gy + gz * gz);
+        if (gm < 0.05) continue;
+        const sd = Math.max(-near, Math.min(near, (0.5 - soft[id]) / gm)), wgt = de <= near - fade ? 1 : (near - de) / fade;
+        dist[id] = de + wgt * (sd - de);
+      }
+    }
+    const dd = G.blur(dist, nx, ny, nz);
     // periosteum allowance (soft tissue left on the bone) adds to the clearance
-    const c = g.clear + (g.peri || 0), w = g.wall, Gm = new Uint8Array(N), gap = splitGap(g, pls);
-    let undercutCols = 0, contact = 0;
+    const c = g.clear + (g.peri || 0), w = g.wall, gap = splitGap(g, pls), cw = c + w;
     const colTopBone = new Float32Array(nx * ny).fill(-Infinity);
-    for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) if (B[i + nx * (j + ny * k)]) colTopBone[i + nx * j] = lo[2] + k * h;
+    for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) if (Bs[i + nx * (j + ny * k)]) colTopBone[i + nx * j] = lo[2] + k * h;
     // the wrap depth follows the bone: on a curved jaw the bone drops away from the guide plane towards the guide
     // ends, so the depth limit is measured from the top of the bone at each position along the guide (never above
     // the plane through the anchor)
     const topU = new Float32Array(nx).fill(0);
     for (let i = 0; i < nx; i++) {
       let t = -Infinity;
-      for (let j = 0; j < ny; j++) if (Math.abs(lo[1] + j * h) <= g.W / 2) t = Math.max(t, colTopBone[i + nx * j]);
+      for (let j = 0; j < ny; j++) if (Math.abs(lo[1] + j * h - vc) <= g.W / 2) t = Math.max(t, colTopBone[i + nx * j]);
       topU[i] = t === -Infinity ? 0 : Math.min(0, t);
     }
     const win = Math.max(1, Math.round(1.5 / h)), wrapAt = new Float32Array(nx);
-    for (let i = 0; i < nx; i++) { let m = 0; for (let a = Math.max(0, i - win); a <= Math.min(nx - 1, i + win); a++) m = Math.min(m, topU[a]); wrapAt[i] = m - g.wrap; }
+    for (let i = 0; i < nx; i++) { let m = 0; for (let a = Math.max(0, i - win); a <= Math.min(nx - 1, i + win); a++) m = Math.min(m, topU[a]); wrapAt[i] = m - wrapOf(lo[0] + i * h); }
+    // ---- insertion direction and the seatable envelope ----
+    // The guide is put on along one direction d (a cone of up to 40° around n). Along d the bone surface has a visible
+    // part (nothing above it along d) and a hidden part under its own overhangs: tooth crowns over the alveolar bone,
+    // the lower border curving in, the lingual side of a thin bone. The shell is built on the envelope = bone plus its
+    // shadow along d (every undercut filled), so it is one connected sheet that lifts off along d by construction, and
+    // it is kept only where real bone is within `skirt` of it, so it stops at the silhouette instead of hanging down
+    // beside a deep undercut. d is chosen per build: the direction that sees the most bone surface under the guide
+    // footprint, with a small cost per degree of tilt so the seating normal wins a near tie (ctx.seatDir forces one).
+    const seatCand = [];
+    for (let tilt = 0; tilt <= 40; tilt += 10) for (let az = 0; az < (tilt ? 360 : 1); az += 45) { const tr = tilt * Math.PI / 180, ar = az * Math.PI / 180; seatCand.push({ tilt, az, d: [Math.sin(tr) * Math.cos(ar), Math.sin(tr) * Math.sin(ar), Math.cos(tr)] }); }
+    const basis2 = d => { const t = Math.abs(d[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0], a = [t[1] * d[2] - t[2] * d[1], t[2] * d[0] - t[0] * d[2], t[0] * d[1] - t[1] * d[0]], l = Math.hypot(a[0], a[1], a[2]) || 1; const ea = a.map(x => x / l); return [ea, [d[1] * ea[2] - d[2] * ea[1], d[2] * ea[0] - d[0] * ea[2], d[0] * ea[1] - d[1] * ea[0]]]; };
+    // projection of the grid onto the plane normal to d, in voxel units (i, j, k) so that an axis-aligned d maps every
+    // column to its own cell: the top of the bone per cell. `st` > 1 samples every st-th voxel (direction scoring)
+    function projection(d, st = 1) {
+      const [ea, eb] = basis2(d), cell = st;
+      let amin = Infinity, amax = -Infinity, bmin = Infinity, bmax = -Infinity;
+      for (const x of [0, nx - 1]) for (const y of [0, ny - 1]) for (const z of [0, nz - 1]) { const a = x * ea[0] + y * ea[1] + z * ea[2], b = x * eb[0] + y * eb[1] + z * eb[2]; amin = Math.min(amin, a); amax = Math.max(amax, a); bmin = Math.min(bmin, b); bmax = Math.max(bmax, b); }
+      const na = Math.floor((amax - amin) / cell) + 2, nb = Math.floor((bmax - bmin) / cell) + 2, top = new Float32Array(na * nb).fill(-Infinity);
+      const ea0 = ea[0] / cell, ea1 = ea[1] / cell, ea2 = ea[2] / cell, eb0 = eb[0] / cell, eb1 = eb[1] / cell, eb2 = eb[2] / cell, a0 = amin / cell - 0.5, b0 = bmin / cell - 0.5;
+      const cellOf = (i, j, k) => Math.floor(i * ea0 + j * ea1 + k * ea2 - a0) + na * Math.floor(i * eb0 + j * eb1 + k * eb2 - b0);
+      const tOf = (i, j, k) => (i * d[0] + j * d[1] + k * d[2]) * h;
+      for (let k = 0; k < nz; k += st) for (let j = 0; j < ny; j += st) {
+        const r = nx * (j + ny * k), ca = j * ea1 + k * ea2 - a0, cb = j * eb1 + k * eb2 - b0, ct = (j * d[1] + k * d[2]) * h;
+        for (let i = 0; i < nx; i += st) { if (!Bs[r + i]) continue; const ci = Math.floor(i * ea0 + ca) + na * Math.floor(i * eb0 + cb), t = i * d[0] * h + ct; if (t > top[ci]) top[ci] = t; }
+      }
+      return { d, ea, eb, cell: cell * h, na, nb, top, cellOf, tOf };
+    }
+    // bone surface under the guide footprint (a little beyond the box, so a direction is judged on what the guide can reach)
+    const surf = [], surfSt = h < 0.6 ? 2 : 1;
+    for (let k = 1; k < nz - 1; k += surfSt) for (let j = 1; j < ny - 1; j += surfSt) for (let i = 1; i < nx - 1; i += surfSt) {
+      const id = i + nx * (j + ny * k); if (!Bs[id]) continue;
+      if (Bs[id - 1] && Bs[id + 1] && Bs[id - nx] && Bs[id + nx] && Bs[id - nxy] && Bs[id + nxy]) continue;
+      if (Math.abs(lo[0] + i * h - uc) > g.L / 2 + 2 || Math.abs(lo[1] + j * h - vc) > g.W / 2 + 2 || lo[2] + k * h < wrapAt[i] - 2) continue;
+      surf.push(id);
+    }
+    const visCount = (pj, tol) => { let vis = 0; for (const id of surf) { const i = id % nx, j = ((id / nx) | 0) % ny, k = (id / nxy) | 0; if (pj.top[pj.cellOf(i, j, k)] - pj.tOf(i, j, k) <= tol) vis++; } return vis; };
+    let seatPick = null, seatBest = -Infinity;
+    const forced = ctx.seatDir && seatCand.find(cd => cd.tilt === ctx.seatDir.tilt && cd.az === ctx.seatDir.az);
+    for (const cd of forced ? [forced] : seatCand) {
+      const pj = projection(cd.d, surfSt), score = visCount(pj, 1.5 * pj.cell) * (1 - 0.005 * cd.tilt);
+      if (score > seatBest) { seatBest = score; seatPick = cd; }
+    }
+    const prj = projection(seatPick.d, 1), seatDir = { tilt: seatPick.tilt, az: seatPick.az, d: seatPick.d, visible: 0, hidden: 0 };
+    { const vis = visCount(prj, 1.5 * h), a = surfSt * surfSt * h * h; seatDir.visible = vis * a; seatDir.hidden = (surf.length - vis) * a; }
+    // envelope = bone + its shadow along d; its distance field (dE) carries the shell, dd (real bone) the clearance checks
+    const E = new Uint8Array(N), tTop = new Float32Array(N); let nShadow = 0;
     for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
-      const id = i + nx * (j + ny * k), d = D[id] * h;
-      if (!O[id]) continue;
-      const uu = lo[0] + i * h, vv = lo[1] + j * h, nn = lo[2] + k * h;
-      // a stop side: the shell continues past the edge by stopL and deeper by stopD
-      // (only where no bone lies above in the seating direction, so a stop rests on the bone edge without an undercut)
-      const sd = vv > 0 ? sUp.pos : sUp.neg;
-      if (Math.abs(uu) > g.L / 2) continue;
-      const band = sd && Math.abs(vv) > g.W / 2 - 2, shadow = colTopBone[i + nx * j] > nn;
-      const inBox = Math.abs(vv) <= g.W / 2 && nn >= wrapAt[i] && !(band && shadow);
-      const inStop = band && Math.abs(vv) <= g.W / 2 + stopX && nn >= wrapAt[i] - stopZ && !shadow;
-      if (!inBox && !inStop) continue;
-      const inShell = d > c && d <= c + w;
-      const edge = g.side > 0 ? vv >= g.W / 2 - g.bridge : vv <= -g.W / 2 + g.bridge;
-      const inBridge = edge && d > c + w - 0.5 && d <= c + w + 2.5;
-      if (!inShell && !inBridge) continue;
-      const q = world(i, j, k);
-      if (gap && q.clone().sub(gap.A.p).dot(gap.A.N) > gap.A.w / 2 + g.flange && q.clone().sub(gap.B.p).dot(gap.B.N) < -gap.B.w / 2 - g.flange) continue;
-      let cut = false;
-      if (d <= c + w + 0.05) for (const pw of pls) if (Math.abs(q.clone().sub(pw.p).dot(pw.N)) <= pw.w / 2) { cut = true; break; }
-      if (cut) continue;
-      Gm[id] = 1;
-      if (inShell && d <= c + h) contact++;
-      if (colTopBone[i + nx * j] > nn) undercutCols++;
+      const id = i + nx * (j + ny * k), tp = prj.top[prj.cellOf(i, j, k)];
+      tTop[id] = tp - prj.tOf(i, j, k);
+      if (Bs[id]) E[id] = 1; else if (tTop[id] > 0.5 * h) { E[id] = 2; nShadow++; }
+    }
+    // the shadow is one voxel wider across d than the silhouette (not deeper, not higher): a wall standing beside a
+    // silhouette then keeps a voxel plus the clearance from it, and the seating sweep (one-voxel cells) sees the two apart
+    if (nShadow) {
+      const { ea, eb } = prj, nb4 = [[ea[0], ea[1], ea[2]], [-ea[0], -ea[1], -ea[2]], [eb[0], eb[1], eb[2]], [-eb[0], -eb[1], -eb[2]]].map(q => q.map(Math.round));
+      const add = [];
+      for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+        const id = i + nx * (j + ny * k); if (E[id]) continue;
+        for (const [di, dj, dk] of nb4) { const i2 = i + di, j2 = j + dj, k2 = k + dk; if (i2 < 0 || j2 < 0 || k2 < 0 || i2 >= nx || j2 >= ny || k2 >= nz) continue; if (E[i2 + nx * (j2 + ny * k2)] === 2) { add.push(id); break; } }
+      }
+      for (const id of add) E[id] = 3;
+    }
+    let ddE = dd;
+    if (nShadow) {
+      const DE = G.edt(E, nx, ny, nz), distE = new Float32Array(N);
+      for (let i = 0; i < N; i++) distE[i] = E[i] ? -h / 2 : DE[i] * h - h / 2;
+      // the density refinement applies where the envelope surface is the bone surface itself (not a shadow face)
+      if (soft) { for (let i = 0; i < N; i++) if (!E[i] || Bs[i]) { if (Math.abs(distE[i] - (Bs[i] ? -h / 2 : D[i] * h - h / 2)) < 0.5 * h) distE[i] = dist[i]; } }
+      ddE = G.blur(distE, nx, ny, nz);
+    }
+    T.env = performance.now() - t0; await sleep();
+    // planes in guide-frame coordinates: signed distance = a*uu + b*vv + c*nn - e
+    const toF = (p, N_) => { const l = Math.hypot(N_.x, N_.y, N_.z); if (!(l > 1e-9) || !isFinite(l)) return null; const a = N_.dot(u) / l, b = N_.dot(v) / l, cc = N_.dot(n) / l, dx = p.x - P.x, dy = p.y - P.y, dz = p.z - P.z; return { a, b, c: cc, e: a * (dx * u.x + dy * u.y + dz * u.z) + b * (dx * v.x + dy * v.y + dz * v.z) + cc * (dx * n.x + dy * n.y + dz * n.z) }; };
+    // the saw slot is centred on pSlot (the plane shifted towards the defect when the kerf lies on the resected side)
+    const slots = pls.map(pw => { const f = toF(pw.pSlot || pw.p, pw.N); return f && pw.w > 0 ? Object.assign(f, { half: pw.w / 2 }) : null; }).filter(Boolean);
+    const gp = gap && { A: toF(gap.A.p, gap.A.N), B: toF(gap.B.p, gap.B.N), ta: gap.A.w / 2 + g.flange, tb: gap.B.w / 2 + g.flange };
+    const F = new Float32Array(N).fill(h * 4);
+    const bridgeLo = cw - 0.5, bridgeHi = cw + 2.5, skirt = g.skirt == null ? 3 : g.skirt;
+    // the bridge (the rib that carries the body across the saw slots) runs along the body's own +v / -v edge at each
+    // position along the guide: on a bone curved across v the box edge lies off the body, so a rib there would float
+    const edgeV = new Float32Array(nx).fill(NaN);
+    for (let pass = 0; pass < 2; pass++) {
+    if (pass === 1) {
+      const e0 = new Float32Array(nx).fill(NaN);
+      for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) { const vv = lo[1] + j * h; for (let i = 0; i < nx; i++) { if (F[i + nx * (j + ny * k)] >= 0) continue; const e = e0[i]; if (Number.isNaN(e) || (g.side > 0 ? vv > e : vv < e)) e0[i] = vv; } }
+      // smoothed along u (the rib must not step), never beyond the box edge
+      for (let i = 0; i < nx; i++) { let m = NaN, cnt = 0, sum = 0; for (let q = Math.max(0, i - win); q <= Math.min(nx - 1, i + win); q++) if (!Number.isNaN(e0[q])) { cnt++; sum += e0[q]; m = Number.isNaN(m) ? e0[q] : (g.side > 0 ? Math.min(m, e0[q]) : Math.max(m, e0[q])); } edgeV[i] = cnt ? m : NaN; }
+    }
+    for (let k = 0; k < nz; k++) {
+      const nn = lo[2] + k * h;
+      for (let j = 0; j < ny; j++) {
+        const vv = lo[1] + j * h, av = Math.abs(vv - vc), sd = vv > vc ? sUp.pos : sUp.neg, band = sd && av > g.W / 2 - 2;
+        for (let i = 0; i < nx; i++) {
+          const id = i + nx * (j + ny * k), uu = lo[0] + i * h, d = dd[id], dE = ddE[id];
+          const ev = edgeV[i], eT = pass === 0 || Number.isNaN(ev) ? 1e3 : (g.side > 0 ? ev - g.bridge - vv : vv - ev - g.bridge);
+          const outer = Math.abs(uu - uc) - g.L / 2;
+          if (outer > 0 || dE > bridgeHi + h) { F[id] = Math.max(outer, dE - bridgeHi); continue; }
+          // box: guide length and width, depth below the wrap line (stops: a lip past the edge, only off the bone's shadow)
+          const shadow = colTopBone[i + nx * j] > nn;
+          let box = Math.max(outer, av - g.W / 2, wrapAt[i] - nn);
+          if (band && shadow) box = Math.max(box, h);
+          if (sd) {
+            const stop = (band && !shadow) ? Math.max(outer, av - g.W / 2 - stopX, wrapAt[i] - stopZ - nn) : 1e3;
+            box = Math.min(box, stop);
+          }
+          let shell = Math.max(c - dE, dE - cw);
+          if (pass === 1) for (const s of slots) shell = Math.max(shell, s.half - Math.abs(s.a * uu + s.b * vv + s.c * nn - s.e));   // (pass 0 finds the body edge without the slots, so the rib does not dip into them)
+          const bridge = Math.max(bridgeLo - dE, dE - bridgeHi, eT);
+          // near real bone: the envelope point under this voxel is bone, or a shadow face within `skirt` of bone
+          F[id] = Math.max(box, d - dE - skirt, Math.min(shell, bridge));
+        }
+      }
+    }
+    }
+    // the body as one region of the footprint (cells of the projection along d): small islands cut off by the
+    // silhouette or the box are dropped and reported, larger ones stay and count as pieces
+    const dropped = [];
+    {
+      const nc = prj.na * prj.nb, fp = new Uint8Array(nc), lab = new Int32Array(nc).fill(-1), own = new Int32Array(N).fill(-1);
+      for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) { const id = i + nx * (j + ny * k); if (F[id] < 0) { const ci = prj.cellOf(i, j, k); fp[ci] = 1; own[id] = ci; } }
+      const comps2 = [], q = new Int32Array(nc);
+      for (let s0 = 0; s0 < nc; s0++) {
+        if (!fp[s0] || lab[s0] >= 0) continue;
+        const L = comps2.length; let head = 0, tail = 0; q[tail++] = s0; lab[s0] = L; let size = 0;
+        while (head < tail) {
+          const cI = q[head++]; size++; const a = cI % prj.na, b = (cI / prj.na) | 0;
+          for (const [da, db] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const a2 = a + da, b2 = b + db; if (a2 < 0 || b2 < 0 || a2 >= prj.na || b2 >= prj.nb) continue; const c2 = a2 + prj.na * b2; if (fp[c2] && lab[c2] < 0) { lab[c2] = L; q[tail++] = c2; } }
+        }
+        comps2.push({ L, size, area: size * prj.cell * prj.cell });
+      }
+      const main = comps2.reduce((a, b) => (b.size > a.size ? b : a), comps2[0] || { L: -1, size: 0 });
+      const drop = new Set(comps2.filter(cm => cm !== main && cm.area < 50).map(cm => cm.L));
+      if (ctx.debugFp) ctx.debugFp({ fp, lab, na: prj.na, nb: prj.nb, comps: comps2, main });
+      if (drop.size) { for (let id = 0; id < N; id++) if (own[id] >= 0 && drop.has(lab[own[id]])) F[id] = h; comps2.forEach(cm => { if (drop.has(cm.L)) dropped.push(+cm.area.toFixed(1)); }); }
     }
     // screw sleeves (added) and drill holes (removed)
-    const screwInfo = [];
+    const screwInfo = [], axes = [];
     for (const s of scs) {
       if (!s.entry) { screwInfo.push({ s, ok: false }); continue; }
       // the hole is the drill plus the material profile's sleeve fit
-      const out = s.dir.clone().negate(), R = s.sc.D / 2, r = (s.sc.d + (g.fit || 0)) / 2, top = c + w + s.sc.sleeveH;
+      const out = s.dir.clone().negate(), R = s.sc.D / 2, r = (s.sc.d + (g.fit || 0)) / 2, top = cw + s.sc.sleeveH;
       const e0 = s.entry.clone().sub(P), el = [e0.dot(u), e0.dot(v), e0.dot(n)], ol = [out.dot(u), out.dot(v), out.dot(n)];
+      // a sleeve is only added where the guide body is: the body must be present along the sleeve axis just above the
+      // clearance (bone that drops away under a guide end, the silhouette, or outside the box leave none), or the
+      // sleeve would float free of the shell; such a screw is reported instead
+      // (the shell may stand up to `skirt` off the bone where the envelope's shadow face carries it, so the body is
+      // looked for over the clearance band plus that allowance; the sleeve reaches down to the entry in any case)
+      const ie = Math.max(0, Math.min(nx - 1, Math.round((el[0] - lo[0]) / h)));
+      let onN = 0, onHit = 0;
+      { const [pa, pb] = basis2(ol), ts = Math.max(0.2, h / 2); for (let t = c + 0.3; t <= cw - 0.3 + 1e-9; t += ts) onN++; for (let t = c + 0.3; t <= cw - 0.3 + skirt + 1e-9; t += ts) for (const [sa, sb] of [[0, 0], [0.6, 0], [-0.6, 0], [0, 0.6], [0, -0.6]]) { const x = el[0] + ol[0] * t + (pa[0] * sa + pb[0] * sb) * R, y = el[1] + ol[1] * t + (pa[1] * sa + pb[1] * sb) * R, z = el[2] + ol[2] * t + (pa[2] * sa + pb[2] * sb) * R, i = Math.round((x - lo[0]) / h), j = Math.round((y - lo[1]) / h), k = Math.round((z - lo[2]) / h); if (i >= 0 && j >= 0 && k >= 0 && i < nx && j < ny && k < nz) { const q = i + nx * (j + ny * k); if (F[q] < 0 || (ddE[q] > c - h && ddE[q] <= cw + h && slots.some(sl => Math.abs(sl.a * x + sl.b * y + sl.c * z - sl.e) < sl.half + h))) onHit++; } } }
+      const onBody = onN > 0 && onHit >= 0.5 * 5 * onN;
+      if (!onBody) { screwInfo.push({ s, ok: false, noBody: true, depth: el[2] - wrapAt[ie] }); continue; }
       // only the grid cells within R of the drill axis (the hole runs through the whole grid)
       const rng = [0, 1, 2].map(a => { const p1 = el[a] - ol[a] * 400, p2 = el[a] + ol[a] * 400; return [Math.max(0, Math.floor((Math.min(p1, p2) - R - lo[a]) / h) - 1), Math.min([nx, ny, nz][a] - 1, Math.ceil((Math.max(p1, p2) + R - lo[a]) / h) + 1)]; });
-      for (let k = rng[2][0]; k <= rng[2][1]; k++) for (let j = rng[1][0]; j <= rng[1][1]; j++) for (let i = rng[0][0]; i <= rng[0][1]; i++) {
-        const qa = lo[0] + i * h - el[0], qb = lo[1] + j * h - el[1], qc = lo[2] + k * h - el[2];
-        const t = qa * ol[0] + qb * ol[1] + qc * ol[2];
-        const ra = qa - t * ol[0], rb = qb - t * ol[1], rc = qc - t * ol[2], radial = Math.sqrt(ra * ra + rb * rb + rc * rc);
-        if (radial > R) continue;
-        const id = i + nx * (j + ny * k);
-        if (radial <= r) { Gm[id] = 0; continue; }
-        if (t >= -1 && t <= top && O[id] && D[id] * h > c) Gm[id] = 1;
-      }
-      // screw path through bone
-      let inBone = 0, crossesPlane = false, exitAt = null;
+      const info = { s, ok: true }; axes.push({ el, ol, R, r, top, rng, info });
+      // screw path through bone; distance to every saw slot is measured from the slot edge (half width w/2 around pSlot)
+      // to the screw surface: the drill (radius d/2) inside the slot is critical, the sleeve (radius D/2) within
+      // 0.5 mm is a warning
+      // cutGap: bone between the hole (radius d/2) and the planned cut plane p (the osteotomy face), over the part of the
+      // hole that runs in bone
+      let inBone = 0, crossesPlane = false, exitAt = null, slotGap = Infinity, cutGap = Infinity;
       for (let t = 0; t <= s.sc.len; t += 0.25) {
-        const q = s.entry.clone().add(s.dir.clone().multiplyScalar(t));
-        if (boneAt(q)) inBone += 0.25; else if (exitAt === null && t > 1) exitAt = t;
-        for (const pw of pls) if (Math.abs(q.clone().sub(pw.p).dot(pw.N)) <= pw.w / 2 + 0.5) crossesPlane = true;
+        const q = s.entry.clone().add(s.dir.clone().multiplyScalar(t)), bone = boneAt(q);
+        if (bone) inBone += 0.25; else if (exitAt === null && t > 1) exitAt = t;
+        for (const pw of pls) {
+          const dq = q.clone().sub(pw.pSlot || pw.p), a = dq.dot(pw.N); if (dq.lengthSq() - a * a > SLOT_REACH * SLOT_REACH) continue;
+          const dist = Math.abs(a); if (dist < pw.w / 2 + s.sc.d / 2) crossesPlane = true; slotGap = Math.min(slotGap, dist - pw.w / 2 - s.sc.D / 2);
+          if (bone) cutGap = Math.min(cutGap, Math.abs(q.clone().sub(pw.p).dot(pw.N)) - s.sc.d / 2);
+        }
       }
-      screwInfo.push({ s, ok: true, inBone: Math.min(inBone, s.sc.len), crossesPlane, exitAt });
+      screwInfo.push(Object.assign(info, { inBone: Math.min(inBone, s.sc.len), crossesPlane, slotGap, exitAt, cutGap }));
     }
-    if (gap) for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
-      const id = i + nx * (j + ny * k); if (!Gm[id]) continue;
-      const q = world(i, j, k); if (q.clone().sub(gap.A.p).dot(gap.A.N) > gap.A.w / 2 + g.flange && q.clone().sub(gap.B.p).dot(gap.B.N) < -gap.B.w / 2 - g.flange) Gm[id] = 0;
+    const radialAt = (A, i, j, k) => {
+      const qa = lo[0] + i * h - A.el[0], qb = lo[1] + j * h - A.el[1], qc = lo[2] + k * h - A.el[2], t = qa * A.ol[0] + qb * A.ol[1] + qc * A.ol[2];
+      const ra = qa - t * A.ol[0], rb = qb - t * A.ol[1], rc = qc - t * A.ol[2];
+      return [Math.sqrt(ra * ra + rb * rb + rc * rc), t];
+    };
+    // the sleeve keeps clear of the envelope (bone and its shadow along the insertion direction) like the shell does;
+    // the part of the cylinder that would stand in the shadow is left out and, when that is more than a tenth, reported
+    for (const A of axes) {
+      let all = 0, shaded = 0;
+      for (let k = A.rng[2][0]; k <= A.rng[2][1]; k++) for (let j = A.rng[1][0]; j <= A.rng[1][1]; j++) for (let i = A.rng[0][0]; i <= A.rng[0][1]; i++) {
+        const [rad, t] = radialAt(A, i, j, k); if (rad > A.R + h) continue;
+        const id = i + nx * (j + ny * k), cyl = Math.max(rad - A.R, -1 - t, t - A.top);
+        if (cyl < 0 && dd[id] > c) { all++; if (ddE[id] <= c) shaded++; }
+        F[id] = Math.min(F[id], Math.max(cyl, c - dd[id], c - ddE[id]));
+      }
+      if (all && shaded > 0.1 * all) A.info.shadowed = +(shaded / all).toFixed(2);
     }
+    for (const A of axes) for (let k = A.rng[2][0]; k <= A.rng[2][1]; k++) for (let j = A.rng[1][0]; j <= A.rng[1][1]; j++) for (let i = A.rng[0][0]; i <= A.rng[0][1]; i++) {
+      const rad = radialAt(A, i, j, k)[0]; if (rad > A.r + h) continue;
+      const id = i + nx * (j + ny * k); F[id] = Math.max(F[id], A.r - rad);
+    }
+    if (gp) for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      const id = i + nx * (j + ny * k); if (F[id] >= 0) continue;
+      const uu = lo[0] + i * h, vv = lo[1] + j * h, nn = lo[2] + k * h;
+      F[id] = Math.max(F[id], Math.min(gp.A.a * uu + gp.A.b * vv + gp.A.c * nn - gp.A.e - gp.ta, -(gp.B.a * uu + gp.B.b * vv + gp.B.c * nn - gp.B.e) - gp.tb));
+    }
+    // the surface must close inside the grid
+    for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) if (i === 0 || j === 0 || k === 0 || i === nx - 1 || j === ny - 1 || k === nz - 1) { const id = i + nx * (j + ny * k); if (F[id] < h) F[id] = h; }
     T.screws = performance.now() - t0; await sleep();
-    // drop specks left by slots and holes; count real pieces
-    const cc = G.components(Gm, nx, ny, nz, 1), big = cc.comps.length ? cc.comps[0].size * 0.01 : 0;
-    const comps = cc.comps.filter(cm => cm.size >= big), keepL = new Set(comps.map(cm => cm.label));
-    for (let i = 0; i < N; i++) if (Gm[i] && !keepL.has(cc.labels[i])) Gm[i] = 0;
-    const mesh = meshFromNets(G.surfaceNets(G.blur(Gm, nx, ny, nz), nx, ny, nz, 0.5), toWorld, mat(COLORS.guide));
-    let vol = 0; for (let i = 0; i < N; i++) vol += Gm[i];
+    // drop specks left by slots and holes (under 1 % of the main body or 1 mm³); count real pieces
+    const Gm = new Uint8Array(N); for (let i = 0; i < N; i++) if (F[i] < 0) Gm[i] = 1;
+    const cc = G.components(Gm, nx, ny, nz, 1), big = cc.comps.length ? cc.comps[0].size : 0, minSize = Math.max(big * 0.01, 1 / (h * h * h));
+    const comps = cc.comps.filter(cm => cm.size >= minSize), keepL = new Set(comps.map(cm => cm.label));
+    for (let i = 0; i < N; i++) if (Gm[i] && !keepL.has(cc.labels[i])) { Gm[i] = 0; F[i] = h; }
+    let vol = 0, contact = 0, undercutCols = 0, bvLo = Infinity, bvHi = -Infinity;
+    for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      const id = i + nx * (j + ny * k); if (!Gm[id]) continue;
+      vol++; const d = dd[id], vv = lo[1] + j * h; if (vv < bvLo) bvLo = vv; if (vv > bvHi) bvHi = vv;
+      if (d > c && d <= bridgeHi) {
+        if (d <= cw && d <= c + h) contact++;
+        // bone above this voxel along the insertion direction (more than a voxel and a half: the silhouette itself is not an undercut)
+        if (tTop[id] > 1.5 * h) undercutCols++;
+      }
+    }
+    T.field = performance.now() - t0; await sleep();
+    const net = G.marchTets(F, nx, ny, nz, 0);
+    // winding follows the grid -> world map, which is a reflection when (u, v, n) is left-handed
+    if (u.dot(new THREE.Vector3().crossVectors(v, n)) < 0) { const ix = net.indices; for (let i = 0; i < ix.length; i += 3) { const t = ix[i + 1]; ix[i + 1] = ix[i + 2]; ix[i + 2] = t; } }
+    const mesh = meshFromNets(net, toWorld, mat(COLORS.guide));
     T.mesh = performance.now() - t0;
     const seat = window.Seat && !ctx.fast ? Seat.analyze({ Gm, B, D, nx, ny, nz, h, lo, clear: c }) : null;
     const wrapProfile = []; for (let i = 0; i < nx; i += Math.max(1, Math.round(1 / h))) wrapProfile.push([+(lo[0] + i * h).toFixed(2), +wrapAt[i].toFixed(2)]);
-    return { mesh, result: { wrapProfile, pieces: comps.length, contact: contact * h * h, undercut: undercutCols * h * h, volume: vol * h * h * h, screwInfo, pls, seat, ms: performance.now() - t0, T },
-      grid: { Gm, B, nx, ny, nz, h, lo, P: P.clone(), u: u.clone(), v: v.clone(), n: n.clone() } };
+    return { mesh, result: { wrapProfile, pieces: comps.length, contact: contact * h * h, undercut: undercutCols * h * h, volume: vol * h * h * h, screwInfo, pls, seat, seatDir, dropped, bodyW: vol ? +(bvHi - bvLo + h).toFixed(1) : 0, bodyV: vol ? [+bvLo.toFixed(1), +bvHi.toFixed(1)] : null, ms: performance.now() - t0, T },
+      grid: { Gm, B, F, nx, ny, nz, h, lo, P: P.clone(), u: u.clone(), v: v.clone(), n: n.clone(), edgeV, wrapAt } };
   }
   // two separate guides: nothing between the outermost cuts except a capture flange beyond each slot
   function splitGap(g, pls) {
@@ -896,6 +1748,406 @@
     const NA = A.N.clone(), NB = B.N.clone(); if (NA.dot(dir) < 0) NA.negate(); if (NB.dot(dir) < 0) NB.negate();
     return { A: { p: A.p, N: NA, w: A.w }, B: { p: B.p, N: NB, w: B.w } };
   }
+  // ---------- automatic body size from the bone under the guide ----------
+  // Cross-sections of the bone in the guide frame at positions uu along u: in the (v, n) plane, the bone's top
+  // (largest nn), its extent across v at each depth level and the "widest level" (the depth below the top where the
+  // extent across v is largest). A shell wrapped deeper than that level reaches under the bone's edge and the guide can
+  // no longer be lifted off along n (the same idea as fibula.js localSection). field(q) is the bone density (> 0.5 = bone).
+  function boneSections(P, u, v, n, field, uList, opts = {}) {
+    const st = opts.step || 0.5, vHalf = opts.vHalf || 21, v0 = opts.vc || 0, nLo = -(opts.deep || 32), nHi = opts.above || 6, q = new THREE.Vector3(), out = [];
+    const nN = Math.round((nHi - nLo) / st) + 1;
+    for (const uu of uList) {
+      const vmin = new Float32Array(nN).fill(Infinity), vmax = new Float32Array(nN).fill(-Infinity);
+      let top = -Infinity, vTop = 0;
+      for (let vv = v0 - vHalf; vv <= v0 + vHalf + 1e-9; vv += st) {
+        for (let k = 0; k < nN; k++) {
+          const nn = nLo + k * st;
+          q.set(P.x + u.x * uu + v.x * vv + n.x * nn, P.y + u.y * uu + v.y * vv + n.y * nn, P.z + u.z * uu + v.z * vv + n.z * nn);
+          if (field(q) > 0.5) { if (vv < vmin[k]) vmin[k] = vv; if (vv > vmax[k]) vmax[k] = vv; if (nn > top) { top = nn; vTop = vv; } }
+        }
+      }
+      if (top === -Infinity) { out.push({ uu, empty: true }); continue; }
+      // extent across v per level, from the top down; the widest level = mean of the levels within 3 % of the maximum
+      let maxW = 0; const rows = [];
+      for (let k = nN - 1; k >= 0; k--) { const nn = nLo + k * st; if (nn > top || vmin[k] === Infinity) continue; const w = vmax[k] - vmin[k] + st; rows.push([nn, w, vmin[k], vmax[k]]); if (w > maxW) maxW = w; }
+      const eq = rows.filter(r => r[1] >= 0.97 * maxW), nEq = eq.reduce((s, r) => s + r[0], 0) / eq.length;
+      const lo = Math.min(...eq.map(r => r[2])), hi = Math.max(...eq.map(r => r[3]));
+      out.push({ uu, top, vTop, depth: top - nEq, width: maxW, vLo: lo, vHi: hi, vc: (lo + hi) / 2 });
+    }
+    return out;
+  }
+  // body size for a guide frame over the span [uA, uB] (mm along u): W and its lateral centre vc from the bone extent at
+  // the widest level, the wrap depth per position (0.8 of the depth to the widest level, never below 2 mm) and the bone
+  // top per position. Hand-set values are kept (prefs.W / prefs.wrap false).
+  function sizeBody(frame, field, uA, uB, g, prefs = { W: true, wrap: true }) {
+    const { P, u, v, n } = frame, step = Math.max(3, (uB - uA) / 10), us = [];
+    for (let x = uA; x <= uB + 1e-6; x += step) us.push(+x.toFixed(2));
+    if (us[us.length - 1] < uB - 0.5) us.push(uB);
+    const secs = boneSections(P, u, v, n, field, us).filter(s => !s.empty);
+    const out = { secs, W: g.W, vc: g.vc || 0, wrap: g.wrap, wrapU: null, ok: secs.length > 0 };
+    if (!secs.length) return out;
+    const cw = g.clear + (g.peri || 0) + g.wall;
+    if (prefs.W) {
+      // the body covers the bone's extent across v (worst case over the span) plus the shell on both edges
+      const lo = Math.min(...secs.map(s => s.vLo)), hi = Math.max(...secs.map(s => s.vHi));
+      out.W = Math.max(10, Math.min(40, Math.round(hi - lo + 2 * cw + 2)));
+      out.vc = Math.round((lo + hi) / 2 * 2) / 2;
+    }
+    if (prefs.wrap) {
+      const dOf = s => Math.max(2, Math.min(20, Math.round(s.depth * 0.8 * 2) / 2));
+      out.wrapU = secs.map(s => [s.uu, dOf(s)]);
+      out.wrap = Math.max(...out.wrapU.map(x => x[1]));
+    }
+    return out;
+  }
+  // the frame of one piece of a two-piece guide: at the cut's point on the bone surface (found along the guide normal),
+  // the local bone axis and surface normal (frameAt), u pointing into the kept bone
+  function cutFrame(pw, keepDir, n0) {
+    // the cut's point on the bone surface, found along the seating normal; a cut past the angle of the jaw meets no bone
+    // on the guide axis itself (the bone turns up into the ramus), so the search climbs the cut plane sideways (±40 mm)
+    // and, failing that, steps a little into the kept bone
+    // Of the bone the plane meets, the piece sits on the most prominent point along the guide normal (the crest of the
+    // buccal face the body is wrapped from, as buildGuide measures its wrap from the bone's top), nearer the guide
+    // axis on a near tie; a point on the rounded lower border or up on the alveolar slope would give the piece a
+    // normal turned away from the face its screws must enter.
+    // (a cut turned far from the guide axis, as one across the chin for a guide on the body, can have the guide normal
+    // nearly along its own normal (within acos(CUT_STEEP)): a walk straight down the guide normal would leave the plane
+    // and meet the bone of the resected side, so for such a cut the search walks down the guide normal as seen in the
+    // cut plane and steps into the kept bone along the cut normal)
+    const vAx = V().crossVectors(n0, pw.N).normalize(); if (vAx.lengthSq() < 1e-6) return null;
+    const steep = Math.abs(pw.N.dot(n0)) > CUT_STEEP, nP = steep ? V().crossVectors(vAx, pw.N).normalize() : n0.clone(); if (nP.dot(n0) < 0) nP.negate();
+    const kIn = steep ? pw.N.clone().multiplyScalar(Math.sign(pw.N.dot(keepDir)) || 1) : keepDir;
+    let q = null, qScore = -Infinity;
+    for (const kk of [0, 3, 6]) {
+      for (let vv = -40; vv <= 40; vv += 2) {
+        const top = pw.p.clone().addScaledVector(vAx, vv).addScaledVector(kIn, kk).addScaledVector(nP, 20);
+        for (let t = 0; t < 70; t += 0.25) { const c = top.clone().addScaledVector(nP, -t); if (boneAt(c)) { const sc = -t - 0.15 * Math.abs(vv); if (sc > qScore) { qScore = sc; q = c; } break; } }
+      }
+      if (q) break;
+    }
+    if (!q) return null;
+    const f = frameAt(q, n0);
+    // the piece's normal is the bone surface normal where it sits (the density gradient over a few millimetres, so a
+    // cut on the turned face of the chin or at the angle gets a frame tangent to that face, not the body's), the
+    // ball-centre blend of frameAt when the gradient is flat; the piece is put on from the same side as the whole
+    // guide, so it keeps within PIECE_TURN deg of the guide normal (a long resection across the chin has its far stump
+    // facing up to 70-90 deg away from the guide's face: a tighter limit leaves the piece tilted against its own bone,
+    // its columns miss the stump turning away and no screw finds bone past that cut)
+    let nn = f.n.clone();
+    { const gr = V(), st = 1.5, e = V(); for (const off of [[0, 0, 0], [0, 0, 2], [0, 0, -2], [0, 2, 0], [0, -2, 0], [2, 0, 0], [-2, 0, 0]]) { const c = q.clone().add(V(...off)); e.set(boneField(c.clone().add(V(st, 0, 0))) - boneField(c.clone().add(V(-st, 0, 0))), boneField(c.clone().add(V(0, st, 0))) - boneField(c.clone().add(V(0, -st, 0))), boneField(c.clone().add(V(0, 0, st))) - boneField(c.clone().add(V(0, 0, -st)))); gr.add(e); } if (gr.lengthSq() > 1e-4) { gr.negate().normalize(); if (gr.dot(n0) < 0) gr.negate(); nn = gr.multiplyScalar(0.7).addScaledVector(n0, 0.3).normalize(); } }
+    const cs = Math.max(-1, Math.min(1, nn.dot(n0))), th = Math.acos(cs), lim = deg(PIECE_TURN);
+    if (th > lim) { const t = lim / th; nn = n0.clone().multiplyScalar(Math.sin((1 - t) * th)).addScaledVector(f.n, Math.sin(t * th)).normalize(); }
+    // the piece axis: of the directions across the kept half of the tangent plane, the one along which the bone itself
+    // runs furthest from the cut: stepping along the direction, bone must stay within the column under the step point
+    // (up to 14 mm below the surface along the normal, a little to either side). At the angle of the jaw this is up
+    // the ramus, where the local PCA axis (body and ramus in one ball) points anywhere between; on a curved jaw it is
+    // along the arch (a run up the alveolar face to the teeth ends at the crest, a run across the surface from a cut
+    // placed obliquely ends where the bone turns under)
+    // (the search starts square to the cut, into the kept bone: a cut proposed across the bone has the bone running on
+    // along its normal; what the screws need is distance from the cut on bone, so each direction scores the run times
+    // its component along the cut normal, up to PIECE_GAIN mm (the bridge plus the far screw stage), the one nearest
+    // square to the cut winning a tie: the bone turning away (up the ramus past a cut at the angle) still wins where
+    // the run along the normal is short, and a long run nearly along the cut (up the chin past a cut across it) does
+    // not, since it gains no distance from the slot)
+    const kd = pw.N.clone().multiplyScalar(Math.sign(pw.N.dot(keepDir)) || 1);
+    let k0 = kd.clone().sub(nn.clone().multiplyScalar(kd.dot(nn)));
+    if (k0.lengthSq() < 1e-6) k0 = f.axis.clone().sub(nn.clone().multiplyScalar(f.axis.dot(nn)));
+    if (k0.lengthSq() < 1e-6) return null;
+    k0.normalize();
+    const runOf = dir => {
+      const side = V().crossVectors(nn, dir).normalize(); let run = 0;
+      for (let st = 1; st <= 20; st++) {
+        const c = q.clone().addScaledVector(dir, 2 * st); let hit = false;
+        for (const sv of [0, 4, -4]) for (let t = 4; t >= -14 && !hit; t -= 1) if (boneAt(c.clone().addScaledVector(side, sv).addScaledVector(nn, t))) hit = true;
+        if (!hit) break; run += 2;
+      }
+      return run;
+    };
+    let u = k0, bestRun = -1;
+    for (let a = -80; a <= 80; a += 10) { const dir = k0.clone().applyAxisAngle(nn, deg(a)), run = Math.min(runOf(dir) * Math.max(0, dir.dot(kd)), PIECE_GAIN) - 0.05 * Math.abs(a); if (run > bestRun) { bestRun = run; u = dir; } }
+    u = u.clone().sub(nn.clone().multiplyScalar(u.dot(nn))).normalize();
+    return { P: q, u, v: V().crossVectors(nn, u), n: nn };
+  }
+  // angle (degrees) between the local bone axes at the first and last cut: a guide spanning the angle of the jaw (body
+  // and ramus) has no single frame that fits both ends
+  function cutsAngle() {
+    if (!S.anchor || S.planes.length < 2) return 0;
+    const pls = planesWorld().sort((a, b) => a.off - b.off), { u, n } = frameAxes();
+    const fa = cutFrame(pls[0], u.clone().negate(), n), fb = cutFrame(pls[pls.length - 1], u, n);
+    if (!fa || !fb) return 0;
+    return THREE.MathUtils.radToDeg(Math.acos(Math.min(1, Math.abs(fa.u.dot(fb.u)))));
+  }
+  // one call for any layout: split = 2 builds two guides, each on its own frame at its cut (body and ramus side), and
+  // merges them into one mesh / one result (pieces, contact, undercut, screws; seat = the worse of the two); every other
+  // layout is one buildGuide on the given frame
+  async function buildGuideSet(ctx) {
+    const g = ctx.g, pls = ctx.pls;
+    if (!(g.split === 2 && pls.length >= 2)) return buildGuide(ctx);
+    const sorted = pls.slice().sort((a, b) => (a.off ?? a.p.dot(ctx.u)) - (b.off ?? b.p.dot(ctx.u)));
+    const A = sorted[0], B = sorted[sorted.length - 1], mid = (A.p.dot(ctx.u) + B.p.dot(ctx.u)) / 2;
+    const pf = pieceFrames(), fa = pf ? pf.a : cutFrame(A, ctx.u.clone().negate(), ctx.n), fb = pf ? pf.b : cutFrame(B, ctx.u, ctx.n);
+    if (!fa || !fb) return buildGuide(Object.assign({}, ctx, { g: Object.assign({}, g, { split: 1 }) }));
+    const parts = [], meshes = [], infos = [], withBar = !!g.bar, defS = SCREW_DEFAULT[S.kind] || SCREW_DEFAULT.dicom, E = withBar ? resEnds() : null;
+    for (const [fr, side] of [[fa, -1], [fb, 1]]) {
+      // this piece: the cuts and screws on its side of the defect middle
+      const myPls = pls.filter(p => Math.sign(p.p.dot(ctx.u) - mid) === side || sorted.length === 2 && p === (side < 0 ? A : B));
+      const myScs = ctx.scs.filter(s => s.sc.part ? s.sc.part === side : s.entry && Math.sign(s.entry.clone().sub(ctx.P).dot(ctx.u) - mid) === side);
+      const cut = side < 0 ? A : B, half = cut.w / 2 + Math.abs(cut.shift || 0);
+      // extent along the piece's own u: the capture flange past the slot on the defect side, the screws on the kept side
+      let reach = 10;
+      for (const s of myScs) reach = Math.max(reach, (s.entry ? s.entry.clone().sub(fr.P).dot(fr.u) : s.sc.part ? s.sc.u : 0) + s.sc.D / 2 + 2);
+      const back = half + g.flange;
+      const pieceAt = reach => {
+        const L = Math.min(100, Math.max(16, Math.ceil(reach + back))), cShift = (reach - back) / 2;
+        const Pc = fr.P.clone().addScaledVector(fr.u, cShift);
+        // the piece's anchor lies on the bone surface at its centre (walk down the normal), so the wrap is measured from the bone
+        let Pq = null; const top = Pc.clone().addScaledVector(fr.n, 20);
+        for (let t = 0; t < 70; t += 0.25) { const c = top.clone().addScaledVector(fr.n, -t); if (boneAt(c)) { Pq = c; break; } }
+        const frame = { P: Pq || Pc, u: fr.u, v: fr.v, n: fr.n };
+        const auto = S.gAuto || AUTO_DEFAULT, sz = ctx.field ? sizeBody(frame, ctx.field, -L / 2, L / 2, g, { W: !!auto.W, wrap: !!auto.wrap }) : { W: g.W, vc: 0, wrap: g.wrap, wrapU: null };
+        return { frame, gi: Object.assign({}, g, { split: 0, L, W: sz.W, vc: sz.vc, wrap: Math.min(g.wrap, sz.wrap), wrapU: sz.wrapU }) };
+      };
+      let { frame, gi } = pieceAt(reach);
+      // (the connecting bar's lug stands on the piece like a screw sleeve, the drill through it; when the screws leave
+      // no room for it the piece reaches a lug's width further along its kept bone)
+      let lug = withBar ? placeLug(frame, gi, cut, myScs, E, defS, false) : null;
+      if (withBar && !lug) { const w = pieceAt(reach + BAR.lugD + 1), l2 = placeLug(w.frame, w.gi, cut, myScs, E, defS, false); if (l2) { ({ frame, gi } = w); lug = l2; } }
+      if (withBar && !lug) lug = placeLug(frame, gi, cut, myScs, E, defS, true);
+      const o = await buildGuide(Object.assign({}, ctx, frame, { g: gi, pls: myPls, scs: lug ? myScs.concat([lug]) : myScs }));
+      const li = lug && o.result.screwInfo.find(i => i.s === lug);
+      parts.push({ frame, g: gi, pls: myPls, scs: myScs, result: o.result, grid: o.grid, wrapProfile: o.result.wrapProfile, side, lug, lugOk: !!(li && li.ok) });
+      meshes.push(o.mesh); infos.push(...o.result.screwInfo);
+    }
+    // merged mesh (two bodies), screws back in their original order, the seat as the worse of the two pieces
+    const mesh = mergeMeshes(meshes, mat(COLORS.guide));
+    const screwInfo = ctx.scs.map(s => infos.find(i => i.s === s) || { s, ok: false, noBody: true });
+    const seats = parts.map(p => p.result.seat).filter(Boolean);
+    let seat = null;
+    if (seats.length === 2 && seats.every(s => s.ok)) {
+      const worse = seats[0].free <= seats[1].free ? seats[0] : seats[1];
+      seat = Object.assign({}, worse, { free: Math.min(seats[0].free, seats[1].free), worstSlide: seats.reduce((a, b) => (b.worstSlide.r < a.worstSlide.r ? b : a)).worstSlide, worstRot: seats.reduce((a, b) => (b.worstRot.r < a.worstRot.r ? b : a)).worstRot, parts: seats });
+    } else if (seats.length) seat = seats.find(s => s.ok) || seats[0];
+    const sum = k => parts.reduce((s, p) => s + p.result[k], 0);
+    const result = { pieces: sum('pieces'), contact: sum('contact'), undercut: sum('undercut'), volume: sum('volume'), screwInfo, pls, seat, wrapProfile: parts[0].wrapProfile, parts, ms: sum('ms'), T: parts[0].result.T };
+    // the connecting bar: a separate part, built only for the guide that is shown (the fit ladder asks for the route only)
+    let barMesh = null;
+    if (withBar) { result.bar = barPlan(parts, g); if (result.bar.ok && !ctx.noBarMesh) barMesh = buildBarMesh(result.bar.spec, 0.4); }
+    return { mesh, result, barMesh, grid: Object.assign(parts[0].grid, { parts: parts.map(p => p.grid) }) };
+  }
+  function mergeMeshes(meshes, material) {
+    let np = 0, ni = 0;
+    meshes.forEach(m => { np += m.geometry.attributes.position.count; ni += m.geometry.index ? m.geometry.index.count : m.geometry.attributes.position.count; });
+    const pos = new Float32Array(np * 3), idx = new Uint32Array(ni); let po = 0, io = 0;
+    for (const m of meshes) {
+      const p = m.geometry.attributes.position.array, c = m.geometry.attributes.position.count, ix = m.geometry.index && m.geometry.index.array;
+      pos.set(p, po * 3);
+      if (ix) for (let i = 0; i < ix.length; i++) idx[io + i] = ix[i] + po; else for (let i = 0; i < c; i++) idx[io + i] = i + po;
+      io += ix ? ix.length : c; po += c; m.geometry.dispose();
+    }
+    const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(pos, 3)); geo.setIndex(new THREE.BufferAttribute(idx, 1)); geo.computeVertexNormals();
+    return new THREE.Mesh(geo, material);
+  }
+  // two binary STL buffers -> one (the production STL of a two-frame guide comes from two server calls)
+  function mergeStl(a, b) {
+    const ca = new DataView(a.buffer, a.byteOffset).getUint32(80, true), cb = new DataView(b.buffer, b.byteOffset).getUint32(80, true);
+    const out = new Uint8Array(84 + (ca + cb) * 50); out.set(a.subarray(0, 84)); new DataView(out.buffer).setUint32(80, ca + cb, true);
+    out.set(a.subarray(84, 84 + ca * 50), 84); out.set(b.subarray(84, 84 + cb * 50), 84 + ca * 50);
+    return out;
+  }
+  // ---------- connecting bar between the two guides of a long resection (split 2 with g.bar) ----------
+  // Each piece carries a lug: a boss like a screw sleeve (BAR.lugD wide, one millimetre higher than the screw sleeves),
+  // towards the piece's inferior edge on its kept side of the slot, with a drill through it (a lug's width more piece
+  // when the screws leave no room; round a screw sleeve as a last resort). The bar is a separate part: a pad on
+  // each lug (the same hole through it) and a rod of radius BAR.r between the pads. The rod runs below the jaw where it
+  // can (inferior), else beside or behind it, buccally only when nothing else is free, always clear of the whole bone (the
+  // bar goes on before the cuts, so the resected piece is still there) and of both guide pieces. Pinned or screwed
+  // through the pads before the cuts it holds the two stumps where they are; it comes off after the cuts. The server
+  // builds the same bar from the same spec (path, radius, pads) with exact solids (yolmed_server.build_bar).
+  const BAR = { r: 2, padR: 3.5, padT: 4, gap: 0.3, lugD: 7, clearBone: 1.5, clearGuide: 0.8, maxD: 60, color: 0xc08a2e };
+  function placeLug(fr, gi, cut, scs, E, def, onScrew = true) {
+    const R = BAR.lugD / 2, H = def.sleeveH + 1, sInf = -(Math.sign(fr.v.z) || 1), vc = gi.vc || 0;
+    const body = screwBodyOn(fr, -gi.L / 2, gi.L / 2, gi.W, vc, gi.wrap, gi.wrapU, 0); if (!body) return null;
+    const pc = cut.pSlot || cut.p, keep = Math.sign(fr.P.clone().sub(pc).dot(cut.N)) || 1;
+    const ents = scs.filter(s => s.entry).map(s => { const q = s.entry.clone().sub(fr.P); return { uu: q.dot(fr.u), vv: q.dot(fr.v), R: s.sc.D / 2, r: s.sc.d / 2 }; });
+    // candidates over the whole piece on its kept side of the slot: the inferior lanes first, then the farther from the
+    // slot (the more bone under the lug). The lug may merge with a screw sleeve (both are part of the guide; the lug is a
+    // millimetre higher, so the pad above it clears the sleeve) but each drill hole stays outside the other boss.
+    const cands = [], half = gi.W / 2 - R - 1.5;
+    for (let vv = vc - half; vv <= vc + half + 1e-6; vv += 1) for (let uu = -gi.L / 2 + R + 0.5; uu <= gi.L / 2 - R - 0.5 + 1e-6; uu += 1) {
+      const q = fr.P.clone().addScaledVector(fr.u, uu).addScaledVector(fr.v, vv), sd = q.clone().sub(pc).dot(cut.N) * keep;
+      if (sd - cut.w / 2 - R < SCREW_SLOT_GAP) continue;
+      if (ents.some(e => Math.hypot(e.uu - uu, e.vv - vv) < Math.max(e.R + def.d / 2, R + e.r) + 0.8)) continue;
+      cands.push({ uu, vv, cost: -Math.round(sInf * (vv - vc)) * 100 - Math.min(sd, 30) });
+    }
+    cands.sort((a, b) => a.cost - b.cost);
+    for (const { uu, vv } of cands) {
+      const top = fr.P.clone().addScaledVector(fr.u, uu).addScaledVector(fr.v, vv).addScaledVector(fr.n, 20);
+      let entry = null; for (let t = 0; t < 60; t += 0.2) { const q = top.clone().addScaledVector(fr.n, -t); if (boneAt(q)) { entry = q; break; } }
+      if (!entry || !onBody(body, uu, vv, entry.clone().sub(fr.P).dot(fr.n))) continue;
+      if (entry.clone().sub(pc).dot(cut.N) * keep - cut.w / 2 - R < SCREW_SLOT_GAP) continue;
+      if (E && resectedAt(entry, E, 2)) continue;
+      if (!padRoom(entry, fr.n, H, false, gi)) continue;
+      return { sc: { d: def.d, D: BAR.lugD, sleeveH: H, len: 0, lug: true }, dir: fr.n.clone().negate(), entry, uu, vv };
+    }
+    // no free spot: the lug goes round a screw sleeve of the piece (same axis, a millimetre higher), the one whose pad
+    // has the most room around it, then the most inferior; the guide screw there passes through the bar's pad as well
+    const host = onScrew && scs.filter(sc => sc.entry && sc.dir).map(sc => { const q = sc.entry.clone().sub(fr.P); return { sc, uu: q.dot(fr.u), vv: q.dot(fr.v), room: padRoom(sc.entry, sc.dir.clone().negate(), Math.max(H, sc.sc.sleeveH + 1), true, gi) }; })
+      .filter(h => !(E && resectedAt(h.sc.entry, E, 2))).sort((x, y) => Math.min(y.room, 6) - Math.min(x.room, 6) || sInf * (y.vv - x.vv))[0];
+    if (host) return { sc: { d: host.sc.sc.d, D: Math.max(BAR.lugD, host.sc.sc.D + 2), sleeveH: Math.max(H, host.sc.sc.sleeveH + 1), len: 0, lug: true, onScrew: true }, dir: host.sc.dir.clone(), entry: host.sc.entry.clone(), uu: host.uu, vv: host.vv };
+    return null;
+  }
+  // room for the bar's pad above a lug at `entry` (sleeve height H, axis `ax` out of the bone): the bone distance at the
+  // pad centre; as a test, enough for the pad and a rod leaving it (BAR.padR + BAR.r + BAR.clearBone)
+  function padRoom(entry, ax, H, value, g = S.g) {
+    const cw = g.clear + (g.peri || 0) + g.wall, d = boneDist(entry.clone().addScaledVector(ax, cw + H + BAR.gap + BAR.padT / 2));
+    return value ? d : d >= BAR.padR + BAR.r + BAR.clearBone;
+  }
+  // distance (mm) from a point to the nearest bone voxel of the whole planning bone (resected piece included), from one
+  // distance transform of the work mask per segmentation
+  let bdCache = { mask: null, d: null };
+  function boneDist(q) {
+    const r = S.red; if (!r || !S.mask) return Infinity;
+    if (bdCache.mask !== S.mask) bdCache = { mask: S.mask, d: G.edt(S.mask, r.nx, r.ny, r.nz, r.sp) };
+    const ix = G.indexOf(r, [q.x, q.y, q.z]), i = Math.round(ix[0]), j = Math.round(ix[1]), k = Math.round(ix[2]);
+    if (i < 0 || j < 0 || k < 0 || i >= r.nx || j >= r.ny || k >= r.nz) return Infinity;
+    return bdCache.d[i + r.nx * (j + r.ny * k)] - Math.max(...r.sp) / 2;
+  }
+  // a guide voxel of either piece within rad of q (the pieces' own grids, a ball of 15 probes)
+  const BALL = [[0, 0, 0], [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1], ...[[1, 1, 1], [1, 1, -1], [1, -1, 1], [1, -1, -1], [-1, 1, 1], [-1, 1, -1], [-1, -1, 1], [-1, -1, -1]].map(a => a.map(x => x / Math.sqrt(3)))];
+  function guideNear(q, rad, grids) {
+    for (const gr of grids) {
+      const d = q.clone().sub(gr.P), x = d.dot(gr.u), y = d.dot(gr.v), z = d.dot(gr.n);
+      for (const b of BALL) {
+        const i = Math.round((x + b[0] * rad - gr.lo[0]) / gr.h), j = Math.round((y + b[1] * rad - gr.lo[1]) / gr.h), k = Math.round((z + b[2] * rad - gr.lo[2]) / gr.h);
+        if (i >= 0 && j >= 0 && k >= 0 && i < gr.nx && j < gr.ny && k < gr.nz && gr.Gm[i + gr.nx * (j + gr.ny * k)]) return true;
+      }
+    }
+    return false;
+  }
+  // the rod's path between the two pads: straight when that is free, else out from both pads by d mm along one
+  // direction across the chord, across, and back; of the free paths the cheapest (length, plus a penalty for passing
+  // buccally over the defect or over the teeth). Returns { path, w, d, route, clear } or null.
+  function barRoute(pads, grids, cw) {
+    // the rod meets each pad near its top (the attach point; the pad centre for a pad of the usual height)
+    const att = p => p.c.clone().addScaledVector(p.axis, Math.max(0, p.T / 2 - BAR.r - 0.2));
+    const PA = att(pads[0]), PB = att(pads[1]), ch = PB.clone().sub(PA), len = ch.length(); if (len < 2) return null;
+    const e1 = ch.clone().divideScalar(len), upW = V(0, 0, 1);
+    let a = upW.clone().addScaledVector(e1, -e1.z); if (a.lengthSq() < 1e-4) a = V(1, 0, 0).addScaledVector(e1, -e1.x); a.normalize();
+    const b = V().crossVectors(e1, a), outW = pads[0].axis.clone().add(pads[1].axis).normalize();
+    const needB = BAR.r + BAR.clearBone, needG = BAR.r + BAR.clearGuide, nearG = cw + 12 + BAR.r;
+    // the rod ends on each pad's rim, towards the next point of the path (the hole in the middle stays free)
+    const rim = (p, next) => { const a = att(p); let t = next.clone().sub(a); t.addScaledVector(p.axis, -t.dot(p.axis)); if (t.lengthSq() < 1e-6) t = V().crossVectors(p.axis, e1); return a.addScaledVector(t.normalize(), p.hole + BAR.r + 0.4); };
+    const pathOf = (w, d) => { const A1 = w ? PA.clone().addScaledVector(w, d) : PB, B1 = w ? PB.clone().addScaledVector(w, d) : PA; return w ? [rim(pads[0], A1), A1, B1, rim(pads[1], B1)] : [rim(pads[0], PB), rim(pads[1], PA)]; };
+    const free = path => {
+      let minB = Infinity;
+      for (let s = 0; s + 1 < path.length; s++) {
+        const p0 = path[s], seg = path[s + 1].clone().sub(p0), sl = seg.length(), n = Math.max(1, Math.ceil(sl / 0.5));
+        for (let k = 0; k <= n; k++) {
+          const q = p0.clone().addScaledVector(seg, k / n);
+          if (q.distanceTo(PA) < BAR.padR + 0.5 || q.distanceTo(PB) < BAR.padR + 0.5) continue;
+          const db = boneDist(q); if (db < needB) return -1;
+          minB = Math.min(minB, db);
+          if (db < nearG && guideNear(q, needG, grids)) return -1;
+        }
+      }
+      return minB;
+    };
+    let best = null;
+    const consider = (w, d) => {
+      const path = pathOf(w, d), c = free(path); if (c < 0) return false;
+      let L = 0; for (let s = 0; s + 1 < path.length; s++) L += path[s].distanceTo(path[s + 1]);
+      const cost = L + (w ? 30 * Math.max(0, w.dot(outW) - 0.3) + 40 * Math.max(0, w.dot(upW) - 0.3) : 0);
+      if (!best || cost < best.cost) best = { path, w, d, cost, len: L, clear: c - BAR.r };
+      return true;
+    };
+    consider(null, 0);
+    for (let k = 0; k < 12; k++) {
+      const ph = k * Math.PI / 6, w = a.clone().multiplyScalar(-Math.cos(ph)).addScaledVector(b, Math.sin(ph));   // k = 0: inferior
+      for (let d = 4; d <= BAR.maxD; d += 2) if (consider(w, d)) break;
+    }
+    if (!best) return null;
+    const w = best.w, route = !w ? 'direct' : w.z < -0.5 ? 'inferior' : w.dot(outW) > 0.5 ? 'buccal' : w.z > 0.5 ? 'superior' : w.dot(outW) < -0.5 ? 'lingual' : 'side';
+    return { path: best.path, w, d: best.d, len: best.len, route, clear: best.clear };
+  }
+  // the bar of a two-piece layout: pads on both lugs, the rod's route; ok only when both lugs stand on their piece
+  function barPlan(parts, g) {
+    const out = { ok: false, why: null, lugs: parts.map(p => !!p.lugOk) };
+    if (parts.length !== 2) { out.why = 'pieces'; return out; }
+    if (!parts.every(p => p.lug && p.lugOk)) { out.why = 'lug'; return out; }
+    const cw = g.clear + (g.peri || 0) + g.wall;
+    // a pad clear of the bone: its rim and axis sampled from the bottom (on the lug) to the top
+    const padFree = pd => {
+      const a = Math.abs(pd.axis.z) < 0.9 ? V(0, 0, 1) : V(1, 0, 0), e1 = V().crossVectors(pd.axis, a).normalize(), e2 = V().crossVectors(pd.axis, e1);
+      for (let h = -pd.T / 2; h <= pd.T / 2 + 1e-6; h += 1) for (let k = 0; k <= 8; k++) {
+        const q = pd.c.clone().addScaledVector(pd.axis, h); if (k < 8) q.addScaledVector(e1, pd.R * Math.cos(k * Math.PI / 4)).addScaledVector(e2, pd.R * Math.sin(k * Math.PI / 4));
+        if (boneDist(q) < 0.5) return false;
+      }
+      return true;
+    };
+    const grids = parts.map(p => Object.assign({}, p.grid, { h: p.grid.h }));
+    // the pads grow upwards (a taller pad on the same lug, part of the bar) until the rod finds a free way out of a
+    // hollow between the bone and the guide
+    let rt = null, pads = null, padOk = false;
+    for (const ext of [0, 4, 8, 12]) {
+      pads = parts.map(p => { const L = p.lug, ax = L.dir.clone().negate(), T = BAR.padT + ext; return { c: L.entry.clone().addScaledVector(ax, cw + L.sc.sleeveH + BAR.gap + T / 2), axis: ax, R: BAR.padR, T, hole: (L.sc.d + (g.fit || 0)) / 2 + 0.1 }; });
+      if (!pads.every(padFree)) continue;
+      padOk = true; rt = barRoute(pads, grids, cw); if (rt) break;
+    }
+    if (!rt) { out.why = padOk ? 'route' : 'lug'; return out; }
+    return Object.assign(out, { ok: true, route: rt.route, len: rt.len, clear: rt.clear, d: rt.d, spec: { path: rt.path, r: BAR.r, pads } });
+  }
+  // signed distance to the bar (negative inside): rod capsules and pads united, the pad holes taken out
+  function barSdf(spec) {
+    const segs = []; for (let i = 0; i + 1 < spec.path.length; i++) segs.push([spec.path[i], spec.path[i + 1]]);
+    const pads = spec.pads.map(p => ({ c: p.c, a: p.axis.clone().normalize(), R: p.R, T: p.T, hole: p.hole }));
+    return (x, y, z) => {
+      let f = Infinity;
+      for (const [A, B] of segs) {
+        const bx = B.x - A.x, by = B.y - A.y, bz = B.z - A.z, px = x - A.x, py = y - A.y, pz = z - A.z, l2 = bx * bx + by * by + bz * bz;
+        const t = l2 > 0 ? Math.max(0, Math.min(1, (px * bx + py * by + pz * bz) / l2)) : 0, dx = px - t * bx, dy = py - t * by, dz = pz - t * bz;
+        f = Math.min(f, Math.sqrt(dx * dx + dy * dy + dz * dz) - spec.r);
+      }
+      const cyl = pads.map(p => { const dx = x - p.c.x, dy = y - p.c.y, dz = z - p.c.z, t = dx * p.a.x + dy * p.a.y + dz * p.a.z; return [Math.sqrt(Math.max(0, dx * dx + dy * dy + dz * dz - t * t)), t]; });
+      pads.forEach((p, i) => { f = Math.min(f, Math.max(cyl[i][0] - p.R, Math.abs(cyl[i][1]) - p.T / 2)); });
+      pads.forEach((p, i) => { f = Math.max(f, -Math.max(cyl[i][0] - p.hole, Math.abs(cyl[i][1]) - (p.T / 2 + 1))); });
+      return f;
+    };
+  }
+  // the bar as a closed mesh: the distance field on a grid aligned with the bar's plane, marched once (as the guide)
+  function buildBarMesh(spec, h = 0.4) {
+    const P0 = spec.path[0], P1 = spec.path[spec.path.length - 1], e1 = P1.clone().sub(P0).normalize();
+    let e2 = spec.path.length > 2 ? spec.path[1].clone().sub(P0) : V().crossVectors(spec.pads[0].axis, e1);
+    e2.addScaledVector(e1, -e2.dot(e1)); if (e2.lengthSq() < 1e-6) e2 = Math.abs(e1.z) < 0.9 ? V(0, 0, 1).addScaledVector(e1, -e1.z) : V(1, 0, 0).addScaledVector(e1, -e1.x); e2.normalize();
+    const e3 = V().crossVectors(e1, e2), m = Math.max(spec.r, ...spec.pads.map(p => Math.max(p.R, p.T / 2 + 1))) + 2 * h + 1;
+    const pts = spec.path.concat(spec.pads.map(p => p.c)), co = q => { const d = q.clone().sub(P0); return [d.dot(e1), d.dot(e2), d.dot(e3)]; };
+    const lo = [0, 1, 2].map(a => Math.min(...pts.map(q => co(q)[a])) - m), hi = [0, 1, 2].map(a => Math.max(...pts.map(q => co(q)[a])) + m);
+    const nx = Math.ceil((hi[0] - lo[0]) / h) + 1, ny = Math.ceil((hi[1] - lo[1]) / h) + 1, nz = Math.ceil((hi[2] - lo[2]) / h) + 1;
+    const sdf = barSdf(spec), F = new Float32Array(nx * ny * nz);
+    for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      const a = lo[0] + i * h, b = lo[1] + j * h, c = lo[2] + k * h, id = i + nx * (j + ny * k);
+      F[id] = (i === 0 || j === 0 || k === 0 || i === nx - 1 || j === ny - 1 || k === nz - 1) ? h : sdf(P0.x + e1.x * a + e2.x * b + e3.x * c, P0.y + e1.y * a + e2.y * b + e3.y * c, P0.z + e1.z * a + e2.z * b + e3.z * c);
+    }
+    const net = G.marchTets(F, nx, ny, nz, 0);
+    const toW = (a, b, c) => { const x = lo[0] + a * h, y = lo[1] + b * h, z = lo[2] + c * h; return [P0.x + e1.x * x + e2.x * y + e3.x * z, P0.y + e1.y * x + e2.y * y + e3.y * z, P0.z + e1.z * x + e2.z * y + e3.z * z]; };
+    return meshFromNets(net, toW, mat(BAR.color));
+  }
+  // the server request for the bar: its spec and the bone mask around it (the server measures the bar's clearance
+  // from the full-resolution bone)
+  function barRequest(spec, c) {
+    const { vol } = c, arr = q => [q.x, q.y, q.z], pts = spec.path.concat(spec.pads.map(p => p.c));
+    const wlo = [0, 1, 2].map(a => Math.min(...pts.map(q => arr(q)[a])) - 8), whi = [0, 1, 2].map(a => Math.max(...pts.map(q => arr(q)[a])) + 8), ix = [];
+    for (const x of [wlo[0], whi[0]]) for (const y of [wlo[1], whi[1]]) for (const z of [wlo[2], whi[2]]) ix.push(G.indexOf(vol, [x, y, z]));
+    const dims = [vol.nx, vol.ny, vol.nz], lo = [0, 1, 2].map(a => Math.max(0, Math.floor(Math.min(...ix.map(q => q[a]))))), hi = [0, 1, 2].map(a => Math.min(dims[a] - 1, Math.ceil(Math.max(...ix.map(q => q[a])))));
+    const [nx, ny, nz] = [0, 1, 2].map(a => hi[a] - lo[a] + 1), req = { kind: 'bar', resolution: 0.2, bar: { path: spec.path.map(arr), r: spec.r, pads: spec.pads.map(p => ({ c: arr(p.c), axis: arr(p.axis), R: p.R, T: p.T, hole: p.hole })) } };
+    if (nx < 2 || ny < 2 || nz < 2 || nx * ny * nz > 60e6) return req;
+    const mask = new Uint8Array(nx * ny * nz), cut = c.thr == null ? 0.5 : 0.05;
+    for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      if (c.thr != null && vol.hu[lo[0] + i + vol.nx * (lo[1] + j + vol.ny * (lo[2] + k))] < c.thr) continue;
+      if (fieldAt(c.red, c.F, G.worldOf(vol, lo[0] + i, lo[1] + j, lo[2] + k)) > cut) mask[i + nx * (j + ny * k)] = 1;
+    }
+    let bin = ''; for (let i = 0; i < mask.length; i += 0x8000) bin += String.fromCharCode.apply(null, mask.subarray(i, i + 0x8000));
+    return Object.assign(req, { crop: { nx, ny, nz, sp: vol.sp.slice(), origin: G.worldOf(vol, ...lo), axes: vol.axes.map(q => q.slice()) }, mask_b64: btoa(bin) });
+  }
   // every edit bumps ver; a built guide is shown only if it is at least as new as the one on screen
   const live = { ver: 0, shown: 0, running: false, dirty: false, planes: false, resAt: 0 };
   async function regenerate() {
@@ -903,18 +2155,25 @@
     if (!S.guideOn) {
       // cuts only: no guide until the user asks for one
       live.shown = live.ver; S.liveScrews = null; S.result = null; S.grid = null;
-      setPart('guide', null, null); rebuildElementParts(planesWorld(), []); showResected();
+      setPart('guide', null, null); setPart('bar', null, null); rebuildElementParts(planesWorld(), []); showResected();
       applyExplode(); updatePanels(); busy(false); render(); emit('parts'); emit('changed');
       return;
     }
     const ver = live.ver;
-    busy(true, 'Guide üretiliyor…'); await sleep();
+    busy(true, pipeGuide ? 'Guide üretiliyor… 4/4' : 'Guide üretiliyor…'); await sleep();
     const pls = planesWorld(), scs = screwsWorld();
-    const out = await buildGuide(Object.assign({ g: S.g, P: S.anchor.p, pls, scs, bone: boneAt }, frameAxes()));
-    if (ver < live.shown) { disposeObj(out.mesh); return; }
+    const out = await buildGuideSet(Object.assign({ g: S.g, P: S.anchor.p, pls, scs, bone: boneAt, field: boneField }, frameAxes()));
+    if (ver < live.shown) { disposeObj(out.mesh); if (out.barMesh) disposeObj(out.barMesh); return; }
     live.shown = ver; S.liveScrews = null;
     setPart('guide', 'Guide', out.mesh, COLORS.guide);
-    S.result = out.result; S.grid = out.grid;
+    setPart('bar', out.barMesh ? 'Bağlantı köprüsü' : null, out.barMesh, BAR.color);
+    S.result = out.result; S.grid = out.grid; simplifyMesh(out.mesh);
+    // automatic width = the width of the body that was actually built (the box only bounds it): shown in the controls
+    // and used by the screw / cut checks; the lateral centre follows. Hand-set widths are left alone.
+    if (S.gAuto.W && S.g.split !== 2 && out.result.bodyV && out.result.bodyW > 0) {
+      const bw = Math.max(10, Math.min(40, Math.ceil(out.result.bodyW))), bc = Math.round((out.result.bodyV[0] + out.result.bodyV[1]) / 2 * 2) / 2;
+      if (bw < S.g.W - 1 || Math.abs(bc - (S.g.vc || 0)) > 1) { S.g.W = Math.min(S.g.W, bw); S.g.vc = bc; if (S.autoSize) S.autoSize.bodyW = out.result.bodyW; syncGuideInputs(); }
+    }
     const screwInfo = out.result.screwInfo;
     rebuildElementParts(pls, screwInfo); showResected();
     applyExplode(); updatePanels(); if (ver === live.ver) busy(false); render();
@@ -960,7 +2219,7 @@
     pt.obj.traverse(c => { if (!c.material) return; const m = c.material; if (m.userData.baseOpacity === undefined) m.userData.baseOpacity = m.opacity; m.opacity = m.userData.baseOpacity * a; m.transparent = m.opacity < 1; m.depthWrite = m.opacity >= 1 && m.userData.baseOpacity >= 1; m.needsUpdate = true; });
   }
   function renderParts() {
-    const row = pt => `<li><label><input type="checkbox" data-p="${pt.id}" ${pt.visible ? 'checked' : ''}><i style="background:#${pt.color.toString(16).padStart(6, '0')}"></i><span>${pt.label}</span></label><input type="range" min="0.1" max="1" step="0.05" value="${pt.opacity ?? 1}" data-o="${pt.id}" aria-label="${pt.label} saydamlığı" title="Saydamlık"><button class="ghost sm" data-iso="${pt.id}" title="Yalnız bunu göster" aria-label="${pt.label}: yalnız bunu göster"><svg class="i"><use href="#i-eye"/></svg></button></li>`;
+    const row = pt => `<li><label><input type="checkbox" data-p="${pt.id}" ${pt.visible ? 'checked' : ''}><i style="background:#${pt.color.toString(16).padStart(6, '0')}"></i><span>${esc(pt.label)}</span></label><input type="range" min="0.1" max="1" step="0.05" value="${pt.opacity ?? 1}" data-o="${pt.id}" aria-label="${esc(pt.label)} saydamlığı" title="Saydamlık"><button class="ghost sm" data-iso="${pt.id}" title="Yalnız bunu göster" aria-label="${esc(pt.label)}: yalnız bunu göster"><svg class="i"><use href="#i-eye"/></svg></button></li>`;
     // grouped so a long list reads by role: anatomy, the cuts, the guide and its screws, the reconstruction
     const GROUPS = [['Anatomi', id => /^(bone|resected|mirror|lesion|lesionPaint|postop|ctx_|layer)/.test(id)], ['Plan', id => /^(plane|anchor)/.test(id)], ['Guide', id => /^(guide|screw)/.test(id)], ['Rekonstrüksiyon', id => /^(grafts|implants|plate)/.test(id)], ['Diğer', () => true]];
     const all = Object.values(parts), seen = new Set();
@@ -975,7 +2234,7 @@
     }));
   }
   // cuts are edited in the resection step, screws in their own step; approval happens only in the review step
-  const apprText = o => o.ok ? `Onaylı${o.by ? ' · ' + esc(o.by) : ''}${o.at ? ' · ' + new Date(o.at).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }) : ''}. Değişiklik onayı kaldırır.` : 'Sistem önerisi; cerrah onayı İnceleme ve onay adımında verilir.';
+  const apprText = o => o.ok ? `${xl('Onaylı')}${o.by ? ' · ' + esc(o.by) : ''}${o.at ? ' · ' + new Date(o.at).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }) : ''}. ${xl('Değişiklik onayı kaldırır.')}` : 'Sistem önerisi; cerrah onayı İnceleme ve onay adımında verilir.';
   function renderElements() {
     const btn = (k, o, i, name) => `<button class="el ${S.sel === k + i ? 'on' : ''}" data-s="${k}${i}" aria-pressed="${S.sel === k + i}">${name} ${i + 1}<span class="dot ${o.ok ? 'ok' : ''}" title="${o.ok ? 'Onaylı' : 'Onay bekliyor'}"><span class="sr-only">${o.ok ? 'onaylı' : 'onay bekliyor'}</span></span></button>`;
     $('plList').innerHTML = S.planes.map((p, i) => btn('p', p, i, 'Kesi')).join('');
@@ -987,14 +2246,14 @@
     if (S.sel && !o) S.sel = null;
     if (!o) return;
     const box = $(isP ? 'plProps' : 'scProps');
-    const fields = isP ? [['off', 'Konum (guide ekseni boyunca)', -45, 45, 0.5, 'mm'], ['yaw', 'Yatay açı', -89, 89, 0.5, '°'], ['pitch', 'Dikey açı', -89, 89, 0.5, '°'], ['w', 'Yuva genişliği (testere + tolerans)', 0.6, 2.5, 0.1, 'mm']]
-      : [['u', 'Konum (eksen boyunca)', -45, 45, 0.5, 'mm'], ['v', 'Konum (yanal)', -15, 15, 0.5, 'mm'], ['tiltU', 'Eğim (eksen yönünde)', -89, 89, 1, '°'], ['tiltV', 'Eğim (yanal)', -89, 89, 1, '°'],
+    const fields = isP ? [['off', 'Konum (guide ekseni boyunca)', -80, 80, 0.5, 'mm'], ['yaw', 'Yatay açı', -89, 89, 0.5, '°'], ['pitch', 'Dikey açı', -89, 89, 0.5, '°'], ['w', 'Yuva genişliği (testere + tolerans)', 0.6, 2.5, 0.1, 'mm']]
+      : [['u', 'Konum (eksen boyunca)', -80, 80, 0.5, 'mm'], ['v', 'Konum (yanal)', -15, 15, 0.5, 'mm'], ['tiltU', 'Eğim (eksen yönünde)', -89, 89, 1, '°'], ['tiltV', 'Eğim (yanal)', -89, 89, 1, '°'],
          ['d', 'Matkap çapı', 1.2, 4, 0.1, 'mm'], ['D', 'Kovan dış çapı', 3, 8, 0.1, 'mm'], ['sleeveH', 'Kovan yüksekliği', 0, 12, 0.5, 'mm'], ['len', 'Vida boyu', 6, 40, 1, 'mm']];
     box.innerHTML = `<h3 class="sub">${isP ? 'Kesi' : 'Vida'} ${i + 1}</h3>` + fields.map(([k, t, mn, mx, st, unit]) => `<div class="ctl"><div class="ctl-row"><label for="f_${k}">${t}</label><output id="o_${k}">${fmt(o[k], st < 1 ? 1 : 0)} ${unit}</output></div><input type="range" id="f_${k}" min="${mn}" max="${mx}" step="${st}" value="${o[k]}"></div>`).join('') +
       `<p class="hint">${apprText(o)}</p><p class="hint more">3B görünümde kesiyi ya da vidayı tutup sürükleyebilir, tutamaçla da taşıyabilirsiniz (W taşı, E döndür).</p>` +
       `<div class="btns end"><button id="delEl" class="sm"><svg class="i"><use href="#i-trash"/></svg>${isP ? 'Kesiyi sil' : 'Vidayı sil'}</button></div>`;
-    fields.forEach(([k, , , , st, unit]) => $('f_' + k).addEventListener('input', e => { o[k] = +e.target.value; unapprove(o); $('o_' + k).textContent = `${fmt(o[k], st < 1 ? 1 : 0)} ${unit}`; schedule(isP, true); }));
-    $('delEl').addEventListener('click', () => { (isP ? S.planes : S.screws).splice(i, 1); S.sel = null; schedule(isP); });
+    fields.forEach(([k, , , , st, unit]) => $('f_' + k).addEventListener('input', e => { o[k] = +e.target.value; if (!isP && /^(u|v|tilt)/.test(k)) o.hand = 1; unapprove(o); $('o_' + k).textContent = `${fmt(o[k], st < 1 ? 1 : 0)} ${unit}`; schedule(isP, true); }));
+    $('delEl').addEventListener('click', () => { (isP ? S.planes : S.screws).splice(i, 1); S.sel = null; unapproveAll(); schedule(isP); });
   }
   function renderMeasures() {
     const R = S.result; if (!R) { $('measures').innerHTML = ''; return; }
@@ -1018,44 +2277,122 @@
     // every cut slot and screw sleeve has to be on the guide body, or the guide guides nothing there
     if (S.anchor) {
       const { u, v } = frameAxes(), half = S.g.L / 2;
-      planesWorld().forEach((pw, i) => {
-        const un = Math.max(0.2, Math.abs(pw.N.dot(u))), ext = Math.abs(pw.off) + S.g.W / 2 * Math.abs(pw.N.dot(v)) / un;
-        if (Math.abs(pw.off) > half - 1) out.push(['crit', 'Kritik', `Kesi ${i + 1} guide gövdesinin dışında (${fmt(pw.off, 1)} mm, guide ±${fmt(half, 1)} mm); guide'ı uzatın ya da iki guide seçin.`, 'p' + i]);
+      // (two guides on their own frames: each piece is sized around its cut, the common length does not apply)
+      if (S.g.split !== 2) planesWorld().forEach((pw, i) => {
+        if (S.bonelessCut === i) return;   // a cut past the condyle meets no bone: the guide need not reach it
+        const uc0 = S.g.uc || 0, un = Math.max(0.2, Math.abs(pw.N.dot(u))), ext = Math.abs(pw.off - uc0) + S.g.W / 2 * Math.abs(pw.N.dot(v)) / un;
+        if (Math.abs(pw.off - uc0) > half - 1) out.push(['crit', 'Kritik', `Kesi ${i + 1} guide gövdesinin dışında (${fmt(pw.off, 1)} mm, guide ±${fmt(half, 1)} mm); guide'ı uzatın ya da iki guide seçin.`, 'p' + i]);
         else if (ext > half) out.push(['warn', 'Uyarı', `Kesi ${i + 1} yuvası guide'ın bir kenarında dışarı taşıyor; guide'ı biraz uzatın.`, 'p' + i]);
       });
       S.screws.forEach((sc, i) => {
         if (!sc) return;
-        if (Math.abs(sc.u) + sc.D / 2 > half + 0.5 || Math.abs(sc.v) > S.g.W / 2) out.push(['crit', 'Kritik', `Vida ${i + 1} guide gövdesinin dışında; guide'ı uzatın ya da vidayı içeri alın.`, 's' + i]);
+        if (S.g.split !== 2 && (Math.abs(sc.u - (S.g.uc || 0)) + sc.D / 2 > half + 0.5 || Math.abs(sc.v - (S.g.vc || 0)) > S.g.W / 2)) out.push(['crit', 'Kritik', `Vida ${i + 1} guide gövdesinin dışında; guide'ı uzatın ya da vidayı içeri alın.`, 's' + i]);
       });
+      // a cut through no bone guides nothing (a condylar resection: only the cut nearest the kept bone is a real cut)
+      const E0 = resEnds(), realCuts = E0 && E0.condyle ? [S.planes.indexOf(E0.A.pl)] : S.planes.map((_, i) => i);
+      cutMisses().forEach(i => { if (realCuts.includes(i)) out.push(['crit', 'Kritik', `Kesi ${i + 1} kemiği kesmiyor (kesi düzleminde kemik yok); kesiyi kemiğin üstüne taşıyın ya da rezeksiyon sınırını kısaltın.`, 'p' + i]); });
+      // screws the automatic placement could not put anywhere, and a guide with none
+      (S.screwDrops || []).forEach(d => out.push(['crit', 'Kritik', (DROP_MSG[d.why] || DROP_MSG.none)(d.cut + 1), 'p' + d.cut]));
+      if (S.guideOn && !S.screws.length) out.push(['crit', 'Kritik', 'Guide\'da vida yok; guide kemiğe sabitlenemez. Vida ekleyin.', 'guide']);
+      // two guides: each piece is fixed on its own (the piece on the resected side of a condylar resection holds none)
+      else if (S.guideOn && S.g.split === 2 && S.planes.length >= 2) {
+        [-1, 1].forEach((part, k) => {
+          if (E0 && E0.condyle) { const f = pieceFrames(); if (f && (part < 0 ? f.A : f.B).pl !== E0.A.pl) return; }
+          if (!S.screws.some(sc => sc.part === part)) out.push(['crit', 'Kritik', `Guide ${k + 1} parçasında vida yok; o parça kemiğe sabitlenemez. Vida ekleyin ya da tek guide seçin.`, 'guide']);
+        });
+      }
+      else if (S.guideOn && S.g.split !== 2 && S.planes.length >= 2 && !(E0 && E0.condyle)) {
+        const pl = planesWorld().sort((x, y) => x.off - y.off), mid = (pl[0].off + pl[pl.length - 1].off) / 2, sides = new Set(S.screws.map(sc => Math.sign(sc.u - mid)));
+        if (S.screws.length && sides.size < 2) out.push(['warn', 'Uyarı', 'Vidalar yalnız bir uçta; guide öbür uçta kemiğe sabitlenmiyor. Öbür kesinin ötesine vida ekleyin.', 'guide']);
+      }
+      // a cut that runs along the bone instead of across it leaves no stump face and no bone for the screws past it
+      if (S.planes.length >= 2) {
+        const f = pieceFrames();
+        if (f) [[f.A, f.a], [f.B, f.b]].forEach(([cut, fr]) => {
+          const a = THREE.MathUtils.radToDeg(Math.acos(Math.min(1, Math.abs(fr.u.dot(cut.N)))));
+          if (a > CUT_ALONG_DEG) out.push(['warn', 'Uyarı', `Kesi ${S.planes.indexOf(cut.pl) + 1} kemik boyunca uzanıyor (kemiğin yönüne ${fmt(a, 0)}° eğik); güdükte vida için kemik kalmaz. Kesiyi kemiğe dik çevirin ("Kesileri sınıra göre koy" kesileri kemiğe dik önerir).`, 'p' + S.planes.indexOf(cut.pl)]);
+        });
+      }
+      // graft-to-stump gap at each end: the half slot the saw takes from the stump (0 when the kerf lies on the resected side)
+      const E = resEnds();
+      if (E) {
+        const ends = [E.A].concat(E.B && !E.B.virtual ? [E.B] : []), g1 = fmt(stumpGap(ends[0])), g2 = ends[1] ? fmt(stumpGap(ends[1])) : null, mx = Math.max(...ends.map(stumpGap));
+        // literature: gaps of ~2.5 mm went with non-union (1.3 mm healed); > 1 mm a warning, >= 2.5 mm critical
+        if (mx >= 2.5) out.push(['crit', 'Kritik', g2 == null ? `Greft ile güdük arasında planlı aralık ${g1} mm (hata eşiği 2,5 mm); kaynamama riski. Kesi yuvasını daraltın ya da testere payını rezeke tarafa alın.` : `Greft ile güdük arasında planlı aralık: kesi 1 ucunda ${g1} mm, kesi 2 ucunda ${g2} mm (hata eşiği 2,5 mm); kaynamama riski. Kesi yuvasını daraltın ya da testere payını rezeke tarafa alın.`, 'guide']);
+        else if (mx > 1.0) out.push(['warn', 'Uyarı', g2 == null ? `Greft ile güdük arasında planlı aralık ${g1} mm (eşik 1,0 mm). Kesi yuvasını daraltın ya da testere payını rezeke tarafa alın.` : `Greft ile güdük arasında planlı aralık: kesi 1 ucunda ${g1} mm, kesi 2 ucunda ${g2} mm (eşik 1,0 mm). Kesi yuvasını daraltın ya da testere payını rezeke tarafa alın.`, 'guide']);
+        else if (S.g.kerfSide) out.push(['info', 'Bilgi', g2 == null ? `Greft ile güdük arasında planlı aralık: kesi ucunda ${g1} mm (testere payı rezeke tarafta).` : `Greft ile güdük arasında planlı aralık: kesi 1 ucunda ${g1} mm, kesi 2 ucunda ${g2} mm (testere payı rezeke tarafta).`, 'guide']);
+        else out.push(['info', 'Bilgi', g2 == null ? `Greft ile güdük arasında planlı aralık: kesi ucunda ${g1} mm (testere payı kesi düzlemine ortalı).` : `Greft ile güdük arasında planlı aralık: kesi 1 ucunda ${g1} mm, kesi 2 ucunda ${g2} mm (testere payı kesi düzlemine ortalı).`, 'guide']);
+      }
+      // the automatic body size and the fit ladder: what was measured and what was tried
+      const az = S.autoSize;
+      if (az && S.gAuto.W && S.gAuto.wrap) out.push(['info', 'Bilgi', `Guide gövdesi kemiğe göre boyutlandı: kemik yüksekliği ${fmt(az.height, 0)} mm → genişlik ${fmt(S.g.W, 0)} mm, en geniş düzeye derinlik ${fmt(az.depth, 1)} mm → sarma ${fmt(S.g.wrap, 1)} mm (${az.n} kesit).`, 'guide']);
+      else if (az && S.gAuto.W) out.push(['info', 'Bilgi', `Guide gövdesi kemiğe göre boyutlandı: kemik yüksekliği ${fmt(az.height, 0)} mm → genişlik ${fmt(S.g.W, 0)} mm (${az.n} kesit).`, 'guide']);
+      else if (az && S.gAuto.wrap) out.push(['info', 'Bilgi', `Guide sarması kemiğe göre seçildi: en geniş düzeye derinlik ${fmt(az.depth, 1)} mm → sarma ${fmt(S.g.wrap, 1)} mm (${az.n} kesit).`, 'guide']);
+      // the insertion direction the body was built for (per piece in the two-guide layout), the bone surface left in
+      // its shadow, islands dropped from the footprint and the width of the body that was actually built
+      const sdParts = R.parts ? R.parts.map(p => p.result) : [R];
+      sdParts.forEach((pr, i) => {
+        const sd = pr.seatDir; if (!sd) return;
+        const many = sdParts.length > 1, k = i + 1, tot = sd.visible + sd.hidden, hid = fmt(tot > 0 ? 100 * sd.hidden / tot : 0, 0), bw = fmt(pr.bodyW || 0, 0), tl = fmt(sd.tilt, 0), azm = fmt(sd.az, 0);
+        out.push(['info', 'Bilgi', many
+          ? (sd.tilt ? `Guide ${k} gövdesi takma yönüne göre kuruldu: ${tl}° eğik (azimut ${azm}°); kemik yüzeyinin %${hid}'i bu yönde gölgede kalıyor (gövde oraya girmiyor). Kurulan gövde genişliği ${bw} mm.` : `Guide ${k} gövdesi takma yönüne göre kuruldu: oturma normaline dik; kemik yüzeyinin %${hid}'i bu yönde gölgede kalıyor (gövde oraya girmiyor). Kurulan gövde genişliği ${bw} mm.`)
+          : (sd.tilt ? `Guide gövdesi takma yönüne göre kuruldu: ${tl}° eğik (azimut ${azm}°); kemik yüzeyinin %${hid}'i bu yönde gölgede kalıyor (gövde oraya girmiyor). Kurulan gövde genişliği ${bw} mm.` : `Guide gövdesi takma yönüne göre kuruldu: oturma normaline dik; kemik yüzeyinin %${hid}'i bu yönde gölgede kalıyor (gövde oraya girmiyor). Kurulan gövde genişliği ${bw} mm.`), 'guide']);
+        if (pr.dropped && pr.dropped.length) { const nd = pr.dropped.length, ad = fmt(pr.dropped.reduce((a, b) => a + b, 0), 0); out.push(['info', 'Bilgi', many ? `Guide ${k} gövdesinden ${nd} küçük ada (toplam ${ad} mm², her biri 50 mm² altında) kaldırıldı: silüetin ya da kutunun dışında kalıyordu.` : `Guide gövdesinden ${nd} küçük ada (toplam ${ad} mm², her biri 50 mm² altında) kaldırıldı: silüetin ya da kutunun dışında kalıyordu.`, 'guide']); }
+      });
+      if (S.bonelessCut != null && S.planes.length >= 2) out.push(['info', 'Bilgi', S.bonelessCut ? 'Kesi 2 kalan tarafında kemikle karşılaşmıyor (kondil ötesi); bütün vidalar kesi 1 tarafında, guide tek parça.' : 'Kesi 1 kalan tarafında kemikle karşılaşmıyor (kondil ötesi); bütün vidalar kesi 2 tarafında, guide tek parça.', 'guide']);
+      if (S.fitLog && S.fitLog.some(x => x.step !== 'screws' && x.step !== 'kept')) {
+        const kept = S.fitLog.find(x => x.step === 'kept'), L = S.fitLog.filter(x => x.step !== 'screws' && x.step !== 'kept'), last = L[L.length - 1], first = L[0], n1 = L.filter(x => x.step === 'wrap').length, lo = fmt(Math.min(...L.map(x => x.wrap)), 1);
+        const scFail = S.fitLog.filter(x => x.step === 'screws' && x.split !== 2), scMax = scFail.length ? Math.max(...scFail.map(x => x.screws)) : 0;
+        if (scMax && last.ok && last.split === 2) out.push(['info', 'Bilgi', `Otomatik uyum: tek parça düzeninde ${scMax} vidanın altında kemik ya da guide gövdesi yoktu; iki guide düzeninde her vida kendi parçasının kemiğinde.`, 'guide']);
+        const w0 = fmt(first.wrap, 1), w1 = fmt(last.wrap, 1), ang = fmt(S.fitAngle || 0, 0), fl = fmt(last.flange, 1);
+        if (last.ok && last.step === 'wrap' && last.wrap < first.wrap) out.push(['info', 'Bilgi', `Otomatik uyum: sarma ${w0} mm ile takılamadı; ${w1} mm ile takılabiliyor.`, 'guide']);
+        else if (last.ok && last.step !== 'wrap' && last.step !== 'long' && last.split === 2) out.push(['info', 'Bilgi', last.step === 'flange' ? `Otomatik uyum: tek parça hiçbir sarmada takılamadı (${n1} deneme); iki guide, her kesi kendi kemik ekseninde (eksenler arası ${ang}°), kesi ötesi kenar ${fl} mm, sarma ${w1} mm ile takılabiliyor.` : `Otomatik uyum: tek parça hiçbir sarmada takılamadı (${n1} deneme); iki guide, her kesi kendi kemik ekseninde (eksenler arası ${ang}°), sarma ${w1} mm ile takılabiliyor.`, 'guide']);
+        else if (last.ok && last.step !== 'wrap' && last.step !== 'long') out.push(['info', 'Bilgi', last.step === 'flange' ? `Otomatik uyum: tek parça hiçbir sarmada takılamadı (${n1} deneme); iki guide (ortak eksen), kesi ötesi kenar ${fl} mm, sarma ${w1} mm ile takılabiliyor.` : `Otomatik uyum: tek parça hiçbir sarmada takılamadı (${n1} deneme); iki guide (ortak eksen), sarma ${w1} mm ile takılabiliyor.`, 'guide']);
+        if (!last.ok && kept) {
+          const kw = fmt(kept.wrap, 1), ks = String(kept.screws), kp = String(kept.pieces), kq = String(kept.want);
+          const lay = xl(kept.split === 2 ? 'iki guide (kendi eksenlerinde)' : kept.split ? 'iki guide (ortak eksen)' : 'tek parça');
+          out.push(['info', 'Bilgi', kept.pieces !== kept.want ? `Otomatik uyum: en yakın deneme tutuldu: ${lay}, sarma ${kw} mm; ${kp} parça (beklenen ${kq}), ${ks} vida sorunlu.` : kept.free === 0 ? `Otomatik uyum: en yakın deneme tutuldu: ${lay}, sarma ${kw} mm; takma yönü yok, ${ks} vida sorunlu.` : `Otomatik uyum: en yakın deneme tutuldu: ${lay}, sarma ${kw} mm; gövde oturuyor, ${ks} vida sorunlu.`, 'guide']);
+        }
+        if (!last.ok) out.push(['warn', 'Uyarı', L.some(x => x.step === 'flange') ? `Otomatik uyum: ${L.length} deneme (sarma ${w0} → ${lo} mm, iki guide ve kısa kenar dahil) takılabilir guide vermedi; kesileri ya da guide eksenini değiştirin.` : L.some(x => x.step !== 'wrap') ? `Otomatik uyum: ${L.length} deneme (sarma ${w0} → ${lo} mm, iki guide dahil) takılabilir guide vermedi; kesileri ya da guide eksenini değiştirin.` : `Otomatik uyum: ${L.length} deneme (sarma ${w0} → ${lo} mm) takılabilir guide vermedi; kesileri ya da guide eksenini değiştirin.`, 'guide']);
+      }
     }
     if (!R.pieces) out.push(['crit', 'Kritik', 'Guide oluşmadı (boş); guide merkezini, duvar ve boşluk değerlerini kontrol edin.', 'guide']);
-    if (R.pieces > want) out.push(['crit', 'Kritik', `Guide ${R.pieces} parçaya bölünüyor (beklenen ${want}); ${want === 1 ? 'köprüyü genişletin ya da kesileri taşıyın' : 'her guide\'ın kendi vidası ve yeterli boyu olmalı'}.`, 'guide']);
+    if (R.pieces > want) out.push(['crit', 'Kritik', want === 1 ? `Guide ${R.pieces} parçaya bölünüyor (beklenen ${want}); köprüyü genişletin ya da kesileri taşıyın.` : `Guide ${R.pieces} parçaya bölünüyor (beklenen ${want}); her guide'ın kendi vidası ve yeterli boyu olmalı.`, 'guide']);
     if (want === 2 && R.pieces < 2) out.push(['crit', 'Kritik', 'İki guide seçili ama guide ayrılmadı; dış kesiler birbirine yaklaşıyor olabilir. Kesileri ya da guide boyunu kontrol edin.', 'guide']);
     if (want === 2) {
       const g = splitGap(S.g, R.pls), cnt = [0, 0];
       if (g) R.screwInfo.forEach((si, i) => {
         if (!si.ok) return;
         const e = si.s.entry, a = e.clone().sub(g.A.p).dot(g.A.N), b = e.clone().sub(g.B.p).dot(g.B.N);
-        if (a < 0) cnt[0]++; else if (b > 0) cnt[1]++;
+        if (si.s.sc.part) cnt[si.s.sc.part < 0 ? 0 : 1]++;
+        else if (a < 0) cnt[0]++; else if (b > 0) cnt[1]++;
         else out.push(['crit', 'Kritik', `Vida ${i + 1} iki guide arasındaki rezeksiyon boşluğunda; hiçbir guide'ı sabitlemiyor.`, 's' + i]);
       });
-      if (g && (cnt[0] < 1 || cnt[1] < 1)) out.push(['crit', 'Kritik', `İki guide düzeninde her guide en az bir vidayla sabitlenmeli (şu an ${cnt[0]} + ${cnt[1]}).`, 'guide']);
+      // (a condylar resection: the piece on the resected side holds no screw, as above; only the kept one must)
+      const Ec = resEnds(), pw2 = planesWorld().sort((x, y) => x.off - y.off), need = Ec && Ec.condyle ? [pw2[0].pl === Ec.A.pl, pw2[pw2.length - 1].pl === Ec.A.pl] : [true, true];
+      if (g && ((need[0] && cnt[0] < 1) || (need[1] && cnt[1] < 1))) out.push(['crit', 'Kritik', `İki guide düzeninde her guide en az bir vidayla sabitlenmeli (şu an ${cnt[0]} + ${cnt[1]}).`, 'guide']);
     }
     const st = R.seat;
     if (st && st.ok) {
       if (!st.free) out.push(['crit', 'Kritik', `Guide hiçbir yönde takılamıyor; en iyi yönde bile ${fmt(st.best.block, 0)} mm² kemik guide'ın üstünde kalıyor. Sarma derinliğini azaltın ya da guide'ı taşıyın.`, 'guide']);
       else if (st.best.tilt > 0) out.push(['warn', 'Uyarı', `Guide dik oturtulamıyor; yalnız yaklaşık ${st.best.tilt}° eğik takılabilir (${st.free}/${st.dirs.length} yön uygun). Ameliyatta takma yönü açıklanmalı.`, 'guide']);
-      const sw = st.worstSlide, along = Math.abs(sw.dir[0]) > Math.abs(sw.dir[1]) ? 'kemik ekseni boyunca' : 'yanal yönde';
-      if (sw.r < 0.05) out.push(['warn', 'Uyarı', `Vidalar takılmadan önce guide ${along} kayabilir: temasın yalnız %${fmt(sw.r * 100, 0)}'i direnç gösteriyor. Belirgin bir anatomik çıkıntıya taşımayı ya da sarmayı artırmayı düşünün.`, 'guide']);
-      const wr = st.worstRot, rn = { u: 'kemik ekseni', v: 'yanal eksen', n: 'oturma ekseni' }[wr.axis];
-      if (wr.r < 0.05) out.push(['warn', 'Uyarı', `Guide ${rn} etrafında dönebilir: temasın yalnız %${fmt(wr.r * 100, 0)}'i direnç gösteriyor.`, 'guide']);
+      const sw = st.worstSlide, along = Math.abs(sw.dir[0]) > Math.abs(sw.dir[1]);
+      if (sw.r < 0.05) out.push(['warn', 'Uyarı', along ? `Vidalar takılmadan önce guide kemik ekseni boyunca kayabilir: temasın yalnız %${fmt(sw.r * 100, 0)}'i direnç gösteriyor. Belirgin bir anatomik çıkıntıya taşımayı ya da sarmayı artırmayı düşünün.` : `Vidalar takılmadan önce guide yanal yönde kayabilir: temasın yalnız %${fmt(sw.r * 100, 0)}'i direnç gösteriyor. Belirgin bir anatomik çıkıntıya taşımayı ya da sarmayı artırmayı düşünün.`, 'guide']);
+      const wr = st.worstRot;
+      if (wr.r < 0.05) out.push(['warn', 'Uyarı', wr.axis === 'u' ? `Guide kemik ekseni etrafında dönebilir: temasın yalnız %${fmt(wr.r * 100, 0)}'i direnç gösteriyor.` : wr.axis === 'v' ? `Guide yanal eksen etrafında dönebilir: temasın yalnız %${fmt(wr.r * 100, 0)}'i direnç gösteriyor.` : `Guide oturma ekseni etrafında dönebilir: temasın yalnız %${fmt(wr.r * 100, 0)}'i direnç gösteriyor.`, 'guide']);
     } else if (R.undercut > 4) out.push(['crit', 'Kritik', `Guide kemiğin altına sarıyor (${fmt(R.undercut, 0)} mm² alttan kesik); oturtulup çıkarılamaz. Sarma derinliğini azaltın.`, 'guide']);
-    if (R.contact < 150) out.push(['warn', 'Uyarı', `Temas alanı ${fmt(R.contact, 0)} mm²; oturma belirsiz olabilir (örnek eşik 150 mm²).`, 'guide']);
+    if (R.contact < 150) out.push(['warn', 'Uyarı', `Temas alanı ${fmt(R.contact, 0)} mm²; oturma belirsiz olabilir (örnek eşik 150 mm²). Sarmayı artırın ya da guide'ı daha geniş bir kemik yüzeyine taşıyın.`, 'guide']);
     R.screwInfo.forEach((si, i) => {
-      if (!si.ok) out.push(['crit', 'Kritik', `Vida ${i + 1} kemiğe ulaşmıyor.`, 's' + i]);
+      if (!si.ok && si.noBody) out.push(['crit', 'Kritik', `Vida ${i + 1} altında guide gövdesi yok: kemik girişi guide'ın sarma sınırının ${fmt(Math.max(0, -(si.depth || 0)), 1)} mm altında ya da gövdenin dışında; kovan boşlukta kalırdı. Vidayı kaydırın ya da sarmayı artırın.`, 's' + i]);
+      else if (!si.ok) out.push(['crit', 'Kritik', `Vida ${i + 1} kemiğe ulaşmıyor; vidayı kemiğin üstüne kaydırın.`, 's' + i]);
       else {
-        if (si.crossesPlane) out.push(['crit', 'Kritik', `Vida ${i + 1} kesi hattından geçiyor.`, 's' + i]);
-        if (si.exitAt !== null && si.exitAt < si.s.sc.len) out.push(['warn', 'Uyarı', `Vida ${i + 1} ${fmt(si.exitAt)} mm'de kemikten çıkıyor (bikortikal mi?).`, 's' + i]);
+        if (si.crossesPlane) out.push(['crit', 'Kritik', `Vida ${i + 1} matkap yolu (Ø${fmt(si.s.sc.d)}) kesi yuvasıyla kesişiyor; vidayı yuvadan uzaklaştırın.`, 's' + i]);
+        else if (si.slotGap < 0.5) out.push(['warn', 'Uyarı', `Vida ${i + 1} kovanı (Ø${fmt(si.s.sc.D)}) kesi yuvasına ${fmt(Math.max(0, si.slotGap))} mm yaklaşıyor (en az 0,5 mm); testere yoluna değebilir. Vidayı yuvadan uzaklaştırın.`, 's' + i]);
+        if (si.exitAt !== null && si.exitAt < si.s.sc.len) out.push(['warn', 'Uyarı', `Vida ${i + 1} ${fmt(si.exitAt)} mm'de kemikten çıkıyor, seçilen boydan kısa; vida boyunu kısaltın ya da vidayı kaydırın.`, 's' + i]);
+        // hole checks: bone along the hole, and the bone bridge between the hole and the cut (>= SCREW_CUT_GAP, our own inference)
+        if (si.inBone < SCREW_MIN_DEPTH) out.push(['warn', 'Uyarı', `Vida ${i + 1} deliği boyunca yalnız ${fmt(si.inBone)} mm kemik var (en az ${SCREW_MIN_DEPTH} mm); vida tutmayabilir. Vidayı daha kalın kemiğe kaydırın.`, 's' + i]);
+        if (!si.crossesPlane && Number.isFinite(si.cutGap) && si.cutGap < SCREW_CUT_GAP) out.push([si.cutGap < SCREW_CUT_WARN ? 'warn' : 'info', si.cutGap < SCREW_CUT_WARN ? 'Uyarı' : 'Bilgi', si.cutGap < SCREW_CUT_WARN ? `Vida ${i + 1} deliği kesiye ${fmt(Math.max(0, si.cutGap))} mm; ${SCREW_CUT_GAP} mm kesin kural değil, önerilen eşiktir, ${SCREW_CUT_WARN} mm altında kemik köprüsü kırılabilir. Vidayı kesiden uzaklaştırın.` : `Vida ${i + 1} deliği kesiye ${fmt(Math.max(0, si.cutGap))} mm; ${SCREW_CUT_GAP} mm önerilen bir eşiktir, kesin kural değildir. İsterseniz vidayı biraz uzaklaştırın.`, 's' + i]);
+        if (si.shadowed) out.push(['warn', 'Uyarı', `Vida ${i + 1} kovanının %${fmt(si.shadowed * 100, 0)}'i takma yönünde kemiğin gölgesine girer; o kısım bırakıldı. Vidayı kaydırın ya da eğimini azaltın.`, 's' + i]);
       }
     });
     R.pls.forEach((pw, i) => R.pls.forEach((pq, j) => { if (j > i && Math.abs(pw.off - pq.off) < 3 && Math.abs(pw.N.dot(pq.N)) > 0.95) out.push(['warn', 'Uyarı', `Kesi ${i + 1} ve ${j + 1} birbirine çok yakın.`, 'p' + i]); }));
@@ -1065,7 +2402,7 @@
     S.checkList = out.slice();
     const rank = { crit: 0, warn: 1, ok: 2 }, infos = out.filter(o => o[0] === 'info'), main = out.filter(o => o[0] !== 'info').sort((a, b) => (rank[a[0]] ?? 3) - (rank[b[0]] ?? 3));
     if (!main.length) main.push(['ok', 'Uygun', 'Tüm kontroller geçti.']);
-    const li = ([c, t, m, ref]) => `<li class="${c}"${ref ? ` data-go="${ref}" title="İlgili öğeye git" tabindex="0" role="button"` : ''}><b>${t}</b><span>${m}</span></li>`;
+    const li = ([c, t, m, ref]) => `<li class="${c}"${ref ? ` data-go="${ref}" title="İlgili öğeye git" tabindex="0" role="button"` : ''}><b>${t}</b><span>${esc(m)}</span></li>`;
     const n = c => out.filter(o => o[0] === c).length;
     $('chkSum').innerHTML = n('crit') || n('warn') ? (n('crit') ? `<span class="tag crit">${n('crit')} kritik</span>` : '') + (n('warn') ? `<span class="tag warn">${n('warn')} uyarı</span>` : '') + (infos.length ? `<span class="tag">${infos.length} bilgi</span>` : '') : '';
     $('chkSum').hidden = !$('chkSum').innerHTML;
@@ -1133,11 +2470,11 @@
     $('expZip').disabled = !ready; syncOne();
     if (S.prod && S.prod.key !== prodKey()) $('prodMsg').textContent = 'Plan değişti; üretim STL\'ini yeniden alın.';
     const why = [];
-    if (!name) why.push('onaylayan cerrahın adı girilmedi');
-    if (S.crit || qcCrit) why.push(`${S.crit + (qcCrit ? 1 : 0)} kritik kontrol var`);
-    if (missing.length) why.push(`onay bekleyen: ${missing.join(', ')}`);
-    $('expMsg').textContent = ready ? 'Plan onaylı; paket hazır.' : `Paket için: ${[!name && 'cerrah adı', (S.crit || qcCrit) && `${S.crit + (qcCrit ? 1 : 0)} kritik kontrol`, missing.length && `${missing.length} onay`].filter(Boolean).join(', ') || 'guide gerekli'}. Rapor taslak alınabilir.`;
-    $('expMsg').title = $('expZip').title = ready ? '' : `Üretim paketi için: ${why.join('; ') || 'guide henüz üretilmedi'}.`;
+    if (!name) why.push(xl('onaylayan cerrahın adı girilmedi'));
+    if (S.crit || qcCrit) why.push(xl(`${S.crit + (qcCrit ? 1 : 0)} kritik kontrol var`));
+    if (missing.length) why.push(`${xl('onay bekleyen:')} ${missing.map(xl).join(', ')}`);
+    $('expMsg').textContent = ready ? xl('Plan onaylı; paket hazır.') : `${xl('Paket için:')} ${[!name && xl('cerrah adı'), (S.crit || qcCrit) && xl(`${S.crit + (qcCrit ? 1 : 0)} kritik kontrol`), missing.length && xl(`${missing.length} onay`)].filter(Boolean).join(', ') || xl('guide gerekli')}. ${xl('Rapor taslak alınabilir.')}`;
+    $('expMsg').title = $('expZip').title = ready ? '' : `${xl('Üretim paketi için:')} ${why.join('; ') || xl('guide henüz üretilmedi')}.`;
   }
   // ---------- navigation from checks, review rows and 3D markers to the item ----------
   const STEP_OF = { data: 'st1', anat: 'st2', lesion: 'st3', res: 'st3', fib: 'st4', guide: 'st5', scr: 'st6' };
@@ -1165,7 +2502,12 @@
     const worst = {}; list.forEach(o => { if (!worst[o[3]] || o[0] === 'crit') worst[o[3]] = o; });
     const showMain = !camera.layers.isEnabled(1) || S.split;
     box.innerHTML = showMain ? Object.values(worst).map(o => `<span class="mk ${o[0]}" data-go="${o[3]}" title="${esc(o[2])}">${o[3] === 'guide' ? 'Guide' : o[3][0] === 'p' ? 'Kesi ' + (+o[3].slice(1) + 1) : o[3][0] === 's' ? 'Vida ' + (+o[3].slice(1) + 1) : 'Sınır'}</span>`).join('') : '';
-    box.querySelectorAll('.mk').forEach(el => el.addEventListener('click', () => goTo(el.dataset.go)));
+    box.querySelectorAll('.mk').forEach(el => {
+      // the marker sits right over its item: a press on it is handed to the 3D view so the item can still be dragged
+      // from there; a plain click (no movement) goes to the item as before
+      el.addEventListener('pointerdown', e => { if (e.button === 0 && e.isTrusted) renderer.domElement.dispatchEvent(new PointerEvent('pointerdown', e)); });
+      el.addEventListener('click', () => { if (!dd.moved) goTo(el.dataset.go); });
+    });
     placeMarkers();
   }
   function placeMarkers() {
@@ -1185,7 +2527,7 @@
   // Live preview: cut discs and screws follow the value at once, a coarse guide (0.8 mm grid, no seating
   // analysis) is rebuilt as fast as the machine allows, and the full guide, resection and checks follow
   // once the value rests.
-  let timer = null;
+  let timer = null, rebuildPending = false;   // rebuildPending: a scheduled guide / resection rebuild has not finished yet
   let previewRaf = 0;
   function previewElements() {
     if (!previewRaf) previewRaf = requestAnimationFrame(() => { previewRaf = 0; previewNow(); });
@@ -1203,8 +2545,8 @@
     if (!liveEdit) renderElements();
     previewElements();
     // while dragging only the cut discs and screws move; the resected piece and the guide follow on release
-    clearTimeout(timer);
-    timer = setTimeout(async () => {
+    clearTimeout(timer); rebuildPending = true;
+    timer = setTimeout(async () => { try {
       if (live.resDirty) { live.planes = live.resDirty = false; busy(true, 'Rezeksiyon güncelleniyor…'); await sleep(); await rebuildResection(); }
       if (S.screwRefit) { S.screwRefit = false; if (S.guideOn && S.anchor) { placeScrews(); S.sel = null; renderElements(); } }
       await regenerate();
@@ -1212,18 +2554,21 @@
       if (S.fitReport) {
         const f = S.fitReport, R = S.result, want = S.g.split && S.planes.length >= 2 ? 2 : 1; S.fitReport = null;
         const ok = R && R.pieces === want && !(R.seat && R.seat.ok && !R.seat.free);
-        if ($('guideStat')) $('guideStat').textContent = ok ? `Guide yeni konuma göre yeniden şekillendi (sarma ${fmt(S.g.wrap, 1)} mm${f.split ? ', iki parça' : ''}).` : 'Bu konumda guide kemiğe takılamıyor; açıyı ya da konumu değiştirin veya sarma derinliğini düşürün.';
+        if ($('guideStat')) $('guideStat').textContent = ok ? (f.split ? `Guide yeni konuma göre yeniden şekillendi (sarma ${fmt(S.g.wrap, 1)} mm, iki parça).` : `Guide yeni konuma göre yeniden şekillendi (sarma ${fmt(S.g.wrap, 1)} mm).`) : 'Bu konumda guide kemiğe takılamıyor; açıyı ya da konumu değiştirin veya sarma derinliğini düşürün.';
       }
       // a new angle or size: the guide is re-formed to seat on the bone where it now lies (wrap depth, one or two pieces)
       if (S.refit) {
         S.refit = false;
         const R = S.result, want = S.g.split && S.planes.length >= 2 ? 2 : 1;
-        if (S.guideOn && R && (R.pieces !== want || (R.seat && R.seat.ok && !R.seat.free))) {
+        if (S.guideOn && R && (R.pieces !== want || (R.seat && R.seat.ok && !R.seat.free) || floatingScrews(R).length)) {
           busy(true, 'Guide yeni açıda kemiğe oturtuluyor…'); await sleep();
           const f = await fitWrap(); if (f) S.fitReport = f;
+          // what the fit could not mend: a placed screw the built guide has no body under is removed and reported
+          if (dropFloating()) await regenerate();
         } else if (S.guideOn && R && $('guideStat')) $('guideStat').textContent = 'Guide yeni konumda kemiğe oturuyor.';
       }
-    }, liveEdit ? 400 : 120);
+    } finally { if (timer === t) rebuildPending = false; } }, liveEdit ? 400 : 120);
+    const t = timer;
   }
   const ray = new THREE.Raycaster(), mouse = new THREE.Vector2();
   let downAt = null;
@@ -1264,7 +2609,7 @@
       if (S.autoAfter) { S.autoAfter = false; autoPrep(); }
     } else if (S.mode === 'screw' && S.anchor) {
       const { u, v } = frameAxes(), d = hit.point.clone().sub(S.anchor.p);
-      S.screws.push(Object.assign({ u: Math.round(d.dot(u) * 2) / 2, v: Math.round(d.dot(v) * 2) / 2, tiltU: 0, tiltV: 0, ok: false }, SCREW_DEFAULT[S.kind] || SCREW_DEFAULT.dicom));
+      S.screws.push(Object.assign({ u: Math.round(d.dot(u) * 2) / 2, v: Math.round(d.dot(v) * 2) / 2, tiltU: 0, tiltV: 0, ok: false, hand: 1 }, SCREW_DEFAULT[S.kind] || SCREW_DEFAULT.dicom));
       S.sel = 's' + (S.screws.length - 1); setMode('orbit'); schedule(false);
     }
   });
@@ -1335,14 +2680,29 @@
     S.planes.forEach((pl, i) => {
       let { p: c, N } = before[i]; if (N.dot(u) < 0) N = N.clone().negate();
       if (N.dot(u) < 0.2) { turned++; return; }
-      pl.off = Math.max(-45, Math.min(45, N.dot(c.clone().sub(S.anchor.p)) / N.dot(u)));
+      pl.off = Math.max(-CUT_OFF_MAX, Math.min(CUT_OFF_MAX, N.dot(c.clone().sub(S.anchor.p)) / N.dot(u)));
       pl.yaw = THREE.MathUtils.radToDeg(Math.atan2(N.dot(v), N.dot(u))); pl.pitch = THREE.MathUtils.radToDeg(-Math.asin(Math.max(-1, Math.min(1, N.dot(n)))));
+      // a cut with its reference point on the bone keeps that point
+      if (pl.pv || pl.pn) { const d = c.clone().sub(S.anchor.p); pl.pv = +d.dot(v).toFixed(1); pl.pn = +d.dot(n).toFixed(1); }
     });
     // the lesion range is measured along the guide axis from the anchor
     const sh = p0.clone().addScaledVector(u0, (S.lesion.from + S.lesion.to) / 2).sub(S.anchor.p).dot(u) - (S.lesion.from + S.lesion.to) / 2;
     S.lesion.from += sh; S.lesion.to += sh;
     S.cutsTurned = turned;
     return turned;
+  }
+  // automatic screws whose sleeve the built guide has no body under (hand-set screws are the surgeon's and stay)
+  function floatingScrews(R) { return R && R.screwInfo ? R.screwInfo.filter(si => !si.ok && si.noBody && si.s && si.s.sc && !si.s.sc.hand) : []; }
+  function dropFloating() {
+    const bad = new Set(floatingScrews(S.result).map(si => si.s.sc)); if (!bad.size) return false;
+    const pls = planesWorld(); S.screwDrops = S.screwDrops || [];
+    S.screws.forEach(sc => {
+      if (!bad.has(sc)) return;
+      const pw = pls.reduce((b, x) => (!b || Math.abs(x.off - sc.u) < Math.abs(b.off - sc.u) ? x : b), null);
+      S.screwDrops.push({ cut: pw ? Math.max(0, S.planes.indexOf(pw.pl)) : 0, side: Math.sign(sc.u - (pw ? pw.off : 0)) || 1, why: 'noBody' });
+    });
+    S.screws = S.screws.filter(sc => !bad.has(sc));
+    return true;
   }
   function afterGuideMove() {
     unapproveAll(); updateLesionPart();
@@ -1388,14 +2748,14 @@
     const { so, p0, q0, o0 } = gz.start, o = so.o, { u, v, n } = frameAxes();
     const d = proxy.position.clone().sub(p0), dq = proxy.quaternion.clone().multiply(q0.clone().invert());
     if (so.isP) {
-      if (gz.mode === 'translate') o.off = clampR(o0.off + d.dot(u), -45, 45, 0.5);
+      if (gz.mode === 'translate') o.off = clampR(o0.off + d.dot(u), -CUT_OFF_MAX, CUT_OFF_MAX, 0.5);
       else {
         const N = gz.start.N0.clone().applyQuaternion(dq);
         o.yaw = clampR(THREE.MathUtils.radToDeg(Math.atan2(N.dot(v), N.dot(u))), -89, 89, 0.5);
         o.pitch = clampR(THREE.MathUtils.radToDeg(-Math.asin(Math.max(-1, Math.min(1, N.dot(n))))), -89, 89, 0.5);
       }
     } else {
-      if (gz.mode === 'translate') { o.u = clampR(o0.u + d.dot(u), -45, 45, 0.5); o.v = clampR(o0.v + d.dot(v), -15, 15, 0.5); }
+      if (gz.mode === 'translate') { o.u = clampR(o0.u + d.dot(u), -80, 80, 0.5); o.v = clampR(o0.v + d.dot(v), -40, 40, 0.5); }
       else {
         const D = gz.start.d0.clone().applyQuaternion(dq), a = Math.asin(Math.max(-1, Math.min(1, -D.dot(u))));
         o.tiltU = clampR(THREE.MathUtils.radToDeg(a), -89, 89, 1);
@@ -1405,6 +2765,7 @@
     const key = [o.off, o.yaw, o.pitch, o.u, o.v, o.tiltU, o.tiltV].join();
     if (key === gz.start.key) return;
     gz.start.key = key; gz.start.moved = true;
+    if (!so.isP) o.hand = 1;                                       // a screw the surgeon moved stays where it is
     unapprove(o); syncSliders(o); schedule(so.isP, true);
   }
   function syncSliders(o) {
@@ -1449,7 +2810,26 @@
     const off = N.dot(c.clone().sub(S.anchor.p)) / (N.dot(u) || 1e-6);
     o.off = clampR(off, -45, 45, 0.5); o.yaw = clampR(yaw, -89, 89, 0.5); o.pitch = clampR(pitch, -89, 89, 0.5);
   }
+  // the cut disc or screw under the pointer, when a direct drag may start there
+  function pickElement(e) {
+    if (e.button !== 0 || S.mode !== 'orbit' || !S.anchor || (window.SegEdit && SegEdit.tool()) || (window.Lesion && Lesion.active()) || (window.Masks && Masks.tool())) return null;
+    if (window.Fibula && Fibula.active && Fibula.active() && camera.layers.isEnabled(1)) return null;
+    const r = pickAt(e); if (!r) return null;
+    const els = Object.values(parts).filter(pt => pt.visible && /^(screw|plane)\d/.test(pt.id));
+    const hits = r.intersectObjects(els.map(pt => pt.obj), false);
+    const h = hits.find(x => els.find(pt => pt.obj === x.object).id.startsWith('screw')) || hits[0];
+    return h ? els.find(pt => pt.obj === h.object).id : null;
+  }
+  // the gizmo of the selected element reaches over its neighbours: a press on another cut or screw grabs that
+  // element, not the handle (the gizmo's own listener runs after this capture-phase one and finds itself disabled for this press)
   renderer.domElement.addEventListener('pointerdown', e => {
+    if (!gizmo || !gizmo.enabled || gizmo.dragging || !gizmo.axis) return;
+    const id = pickElement(e); if (!id) return;
+    const sel = S.sel && (S.sel[0] === 'p' ? 'plane' : 'screw') + S.sel.slice(1);
+    if (id !== sel) { gizmo.enabled = false; gizmo.axis = null; dd.gizmoOff = true; }
+  }, true);
+  renderer.domElement.addEventListener('pointerdown', e => {
+    if (dd.gizmoOff) { dd.gizmoOff = false; gizmo.enabled = true; }
     if (e.button !== 0 || S.mode !== 'orbit' || !S.anchor || (gizmo && (gizmo.dragging || gizmo.axis)) || (window.SegEdit && SegEdit.tool()) || (window.Lesion && Lesion.active()) || (window.Masks && Masks.tool())) return;
     if (window.Fibula && Fibula.active && Fibula.active() && camera.layers.isEnabled(1)) return;
     const r = pickAt(e); if (!r) return;
@@ -1473,7 +2853,8 @@
     if (!dd.moved && Math.hypot(e.clientX - dd.x, e.clientY - dd.y) < 4) return;
     if (!dd.moved) { dd.moved = true; select((dd.on.isP ? 'p' : 's') + dd.on.i); }
     const r = pickAt(e); if (!r) return;
-    const targets = ['bone', 'resected'].filter(k => parts[k] && parts[k].visible).map(k => parts[k].obj);
+    // the bone under the pointer, or the guide where it covers the bone (a screw dragged along the body)
+    const targets = ['bone', 'resected', 'guide'].filter(k => parts[k] && parts[k].visible).map(k => parts[k].obj);
     const hit = r.intersectObjects(targets, false)[0]; if (!hit) return;
     const { o, isP } = dd.on, { u, v } = frameAxes(), d = hit.point.clone().sub(S.anchor.p);
     if (isP) {
@@ -1481,10 +2862,10 @@
       // the bone direction turned by some angle about the vertical: turn the cut by the same angle
       if (a && dd.on.t0) planeFrom(a.c, dd.on.N0.clone().applyAxisAngle(V(0, 0, 1), Math.atan2(dd.on.t0.x * a.t.y - dd.on.t0.y * a.t.x, dd.on.t0.dot(a.t))), o);
       else o.off = clampR(d.dot(u), -45, 45, 0.5);
-    } else { o.u = clampR(d.dot(u), -45, 45, 0.5); o.v = clampR(d.dot(v), -15, 15, 0.5); }
+    } else { o.u = clampR(d.dot(u), -80, 80, 0.5); o.v = clampR(d.dot(v), -15, 15, 0.5); }
     const key = [o.off, o.yaw, o.pitch, o.u, o.v].join();
     if (key === dd.on.key) return;
-    dd.on.key = key; unapprove(o); syncSliders(o); syncGizmo(); schedule(isP, true);
+    dd.on.key = key; if (!isP) o.hand = 1; unapprove(o); syncSliders(o); syncGizmo(); schedule(isP, true);
   });
   const ddEnd = e => {
     if (!dd.on) return;
@@ -1504,7 +2885,16 @@
   bus.addEventListener('parts', syncGizmo);
   bus.addEventListener('planApplied', syncGizmo);
 
+  // picks (cut region, screw sites, brush strokes) are made on the mandible: with the fibula-only view on, the view goes back to the mandible
+  // and says so, instead of the click landing on the leg and opening the fibula step
+  function mandibleView() {
+    if (!(window.Fibula && Fibula.view && Fibula.view() === 'f')) return false;
+    Fibula.setView('m');
+    alertMsg('Seçim mandibulada yapılır: 3B görünüm mandibulaya alındı.');
+    return true;
+  }
   function setMode(m) {
+    if (m !== 'orbit') mandibleView();
     S.mode = m;
     $('modeBadge').hidden = m === 'orbit';
     $('modeBadge').textContent = m === 'anchor' ? 'Rezeksiyon bölgesinin ortasında kemik yüzeyine tıklayın (guide buraya oturur)' : m === 'screw' ? 'Vida yeri için guide üzerine tıklayın' : $('modeBadge').textContent;
@@ -1538,7 +2928,7 @@
   }
 
   // ---------- controls wiring ----------
-  const gFields = [['rot', 'Yüzeyde döndür', -180, 180, 1, '°'], ['roll', 'Kemik etrafında kaydır', -180, 180, 1, '°'], ['L', 'Uzunluk', 16, 100, 1, 'mm'], ['W', 'Genişlik', 10, 40, 1, 'mm'], ['wrap', 'Sarma derinliği', 2, 20, 0.5, 'mm'], ['wall', 'Duvar kalınlığı', 1.5, 5, 0.1, 'mm'], ['clear', 'Kemik aralığı', 0, 1, 0.05, 'mm'], ['bridge', 'Köprü genişliği', 2, 10, 0.5, 'mm'], ['flange', 'Kesi ötesi kenar', 2, 8, 0.5, 'mm'], ['peri', 'Periost payı', 0, 1, 0.05, 'mm']];
+  const gFields = [['rot', 'Yüzeyde döndür', -180, 180, 1, '°'], ['roll', 'Kemik etrafında kaydır', -180, 180, 1, '°'], ['L', 'Uzunluk', 16, 160, 1, 'mm'], ['W', 'Genişlik', 10, 40, 1, 'mm'], ['wrap', 'Sarma derinliği', 2, 20, 0.5, 'mm'], ['wall', 'Duvar kalınlığı', 1.5, 5, 0.1, 'mm'], ['clear', 'Kemik aralığı', 0, 1, 0.05, 'mm'], ['bridge', 'Köprü genişliği', 2, 10, 0.5, 'mm'], ['flange', 'Kesi ötesi kenar', 2, 8, 0.5, 'mm'], ['peri', 'Periost payı', 0, 1, 0.05, 'mm']];
   $('gCtl').innerHTML = gFields.map(([k, t, mn, mx, st]) => `<div class="ctl" id="gc_${k}"><div class="ctl-row"><label for="g_${k}">${t}</label><output id="go_${k}"></output></div><input type="range" id="g_${k}" min="${mn}" max="${mx}" step="${st}"></div>`).join('') +
     '<h3 class="sub">Gövde</h3><details class="sub-d" id="secGFine"><summary>İnce ayar: duvar, aralık, periost</summary><div class="col" id="gFine"></div></details>';
   // placement first, then body size; wall and clearances rarely change, so they sit folded at the end
@@ -1550,31 +2940,37 @@
     if ($('gRoll3')) { $('gRoll3').value = S.g.roll || 0; $('gRoll3O').textContent = `${fmt(S.g.roll || 0, 0)}°`; }
     if ($('gRot3')) { $('gRot3').value = S.g.rot; $('gRot3O').textContent = `${fmt(S.g.rot, 0)}°`; $('gRotBox').hidden = !S.guideOn; }
     gFields.forEach(([k, , , , st, unit]) => { $('g_' + k).value = S.g[k]; $('go_' + k).textContent = `${fmt(S.g[k], st < 1 ? (st < 0.1 ? 2 : 1) : 0)} ${unit}`; });
-    $('g_side').value = String(S.g.side); $('g_split').value = String(S.g.split ? 1 : 0);
-    $('g_stopT').checked = !!S.g.stopT; $('g_stopB').checked = !!S.g.stopB; $('stopBox').hidden = !(S.g.stopT || S.g.stopB);
+    $('g_side').value = String(S.g.side); $('g_split').value = String(S.g.split || 0);
+    if ($('g_kerf')) $('g_kerf').value = String(S.g.kerfSide ? 1 : 0);
+    // values still chosen from the bone are marked on their control
+    ['L', 'W', 'wrap'].forEach(k => { const el = $('gc_' + k); if (el && el.classList) el.classList.toggle('auto', !!S.gAuto[k]); });
+    $('g_stopT').checked = !!S.g.stopT; $('g_stopB').checked = !!S.g.stopB; $('stopBox').hidden = !(S.g.stopT || S.g.stopB || S.g.stopP); if ($('g_stopP')) $('g_stopP').checked = !!S.g.stopP; if ($('g_bar')) $('g_bar').checked = !!S.g.bar;
     ['stopL', 'stopD'].forEach(k => { $('g_' + k).value = S.g[k]; $('go_' + k).textContent = `${fmt(S.g[k], 1)} mm`; });
     $('gc_flange').hidden = !S.g.split; $('gc_bridge').hidden = !!S.g.split; $('g_side').closest('.ctl').hidden = !!S.g.split;
   }
   // the screws stay on the guide: a turned guide axis re-places them once the value rests, a shorter or narrower
   // guide pulls them back inside its body
   function clampScrews() {
+    if (S.g.split === 2) return;                    // each piece has its own frame and extent (buildGuideSet)
     const half = S.g.L / 2;
     S.screws.forEach(sc => {
-      const mu = Math.max(0, half - sc.D / 2 - 0.5), mv = Math.max(0, S.g.W / 2 - sc.D / 2 - 0.5);
+      const mu = Math.max(0, half - sc.D / 2 - 0.5), mv = Math.max(0, S.g.W / 2 - sc.D / 2 - 0.5), vc = S.g.vc || 0;
       if (Math.abs(sc.u) > mu) { sc.u = Math.sign(sc.u) * Math.floor(mu * 2) / 2; unapprove(sc); }
-      if (Math.abs(sc.v) > mv) { sc.v = Math.sign(sc.v) * Math.floor(mv * 2) / 2; unapprove(sc); }
+      if (Math.abs(sc.v - vc) > mv) { sc.v = vc + Math.sign(sc.v - vc) * Math.floor(mv * 2) / 2; unapprove(sc); }
     });
   }
   gFields.forEach(([k]) => $('g_' + k).addEventListener('input', e => {
     if (k === 'rot') { setGuideRot(+e.target.value); return; }
     if (k === 'roll') { setGuideRoll(+e.target.value); return; }
-    S.g[k] = +e.target.value;
+    S.g[k] = +e.target.value; unapproveAll();   // every guide body setting changes what was approved
+    // a value set by hand stays: the automatic sizing and the fit ladder leave it alone from now on
+    if (k === 'L' || k === 'W' || k === 'wrap') { S.gAuto[k] = 0; if (k === 'wrap') S.g.wrapU = null; if (k === 'W') S.g.vc = 0; }
     if (k === 'rot') { unapproveAll(); updateLesionPart(); if (S.guideOn && S.screws.length) S.screwRefit = true; }
     if (k === 'rot' || k === 'L' || k === 'W') S.refit = true;
     if ((k === 'L' || k === 'W') && S.guideOn) clampScrews();
     syncGuideInputs(); schedule(k === 'rot', true);
   }));
-  $('g_side').addEventListener('change', e => { S.g.side = +e.target.value; schedule(false); });
+  $('g_side').addEventListener('change', e => { S.g.side = +e.target.value; unapproveAll(); schedule(false); });
   $('gRot3').addEventListener('input', e => setGuideRot(+e.target.value));
   $('gRoll3').addEventListener('input', e => setGuideRoll(+e.target.value));
   // one drill diameter for every guide screw (and for screws placed later); each screw can still be changed on its own
@@ -1585,9 +2981,15 @@
     if (S.screws.length) schedule(false, true);
   });
   $('gScrewD').addEventListener('change', () => { if (S.screws.length) { schedule(false); emit('changed'); } });
-  ['stopT', 'stopB'].forEach(k => $('g_' + k).addEventListener('change', e => { S.g[k] = e.target.checked ? 1 : 0; syncGuideInputs(); unapproveAll(); schedule(false); }));
+  ['stopT', 'stopB', 'stopP'].forEach(k => $('g_' + k).addEventListener('change', e => { S.g[k] = e.target.checked ? 1 : 0; if (k === 'stopP') S.gAuto.stopP = 0; syncGuideInputs(); unapproveAll(); schedule(false); }));
+  // the connecting bar is the surgeon's call once touched: the automatic two-guide proposal leaves it alone from then on
+  $('g_bar').addEventListener('change', e => { S.g.bar = e.target.checked ? 1 : 0; S.gAuto.bar = 0; syncGuideInputs(); unapproveAll(); schedule(false); });
   [['stopL', 'mm'], ['stopD', 'mm']].forEach(([k, un]) => $('g_' + k).addEventListener('input', e => { S.g[k] = +e.target.value; $('go_' + k).textContent = `${fmt(S.g[k], 1)} ${un}`; schedule(false, true); }));
-  $('g_split').addEventListener('change', e => { S.g.split = +e.target.value; syncGuideInputs(); unapproveAll(); schedule(false); });
+  $('g_split').addEventListener('change', e => { const was = S.g.split; S.g.split = +e.target.value; S.gAuto.split = 0; if ((was === 2) !== (S.g.split === 2) && S.anchor && S.planes.length && S.guideOn) placeScrews(); syncGuideInputs(); unapproveAll(); schedule(false); });
+  // where the saw slot lies: on the resected side (the graft meets the stump flush) or centred on the planned plane
+  if ($('g_kerf')) $('g_kerf').addEventListener('change', e => { S.g.kerfSide = +e.target.value ? 1 : 0; unapproveAll(); if (S.anchor && S.planes.length && S.guideOn) placeScrews(); schedule(true); });
+  // the controls' automatic marks are reset with a new plan
+  $('gAutoReset') && $('gAutoReset').addEventListener('click', () => { Object.assign(S.gAuto, AUTO_DEFAULT); if (S.anchor && S.planes.length) { placeScrews(); S.sel = null; } S.refit = true; syncGuideInputs(); schedule(false); });
   $('resType').addEventListener('change', async e => {
     const side = e.target.value || null;
     if (side && window.Ref && !Ref.get()) await Ref.compute(false);
@@ -1597,7 +2999,7 @@
   syncGuideInputs();
 
   $('segMode').addEventListener('change', e => { const ai = e.target.value === 'ai'; $('aiBox').hidden = !ai; $('thrBox').hidden = ai; if (!ai && S.red) segment(false); });
-  $('aiRun').addEventListener('click', () => { if (S.red) segmentAI(); });
+  $('aiRun').addEventListener('click', async () => { if (!S.red) return; const before = S.labels; await segmentAI(); if (S.labels !== before) { unapproveAll(); renderAppr(); } });   // a new bone segmentation invalidates every approval
   $('suggest').addEventListener('click', suggest);
   $('perSide').addEventListener('change', () => { if (S.anchor && S.planes.length) { placeScrews(); S.sel = null; schedule(false); } });
   let surgTimer = null;
@@ -1624,8 +3026,11 @@
   $('showAll').addEventListener('click', () => { Object.values(parts).forEach(pt => { pt.visible = true; pt.obj.visible = true; }); renderParts(); render(); });
   $('guideOnly').addEventListener('click', () => { Object.values(parts).forEach(pt => { pt.visible = /guide/.test(pt.id) || pt.id.startsWith('screw'); pt.obj.visible = pt.visible; }); renderParts(); if (parts.guide) fitTo(parts.guide.obj); });
   $('fit').addEventListener('click', () => { if (parts.bone) fitTo(parts.bone.obj); });
-  $('sampleM').addEventListener('click', () => loadSample('mandible'));
-  $('sampleL').addEventListener('click', () => loadSample('leg'));
+  // the sample replaces the whole case: a plan (cuts, screws, guide, fibula plan) is lost and "undo" does not bring it back, so ask first
+  const planned = () => !!(S.anchor || S.planes.length || S.screws.length || (window.Fibula && Fibula.active && Fibula.active()));
+  const sampleClick = name => { if (loadBlocked()) return; if (planned() && !confirm('Örnek vaka yüklenince mevcut plan (kesiler, vidalar, guide) silinir. Devam edilsin mi?')) return; loadSample(name); };
+  $('sampleM').addEventListener('click', () => sampleClick('mandible'));
+  $('sampleL').addEventListener('click', () => sampleClick('leg'));
   $('dicomDir').addEventListener('change', e => { if (e.target.files.length) loadDicom([...e.target.files]); });
   $('dicomFiles').addEventListener('change', e => { if (e.target.files.length) loadDicom([...e.target.files]); });
   stage.addEventListener('dragover', e => e.preventDefault());
@@ -1694,7 +3099,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     const api = window.claude && window.claude.use ? await window.claude.use('downloads') : null;
     if (api) {
       try { await api.save({ filename, data: blob }); $('expMsg').textContent = `${filename} kaydedildi.`; }
-      catch (e) { $('expMsg').textContent = e.code === 'declined' ? 'Kaydetme iptal edildi.' : `Dosya kaydedilemedi (${e.code || e.message}).`; }
+      catch (e) { $('expMsg').textContent = e.code === 'declined' ? 'Kaydetme iptal edildi.' : `${xl('Dosya kaydedilemedi')} (${e.code || e.message}).`; }
       return;
     }
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename; a.click();
@@ -1720,11 +3125,13 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     return {
       crop: { nx, ny, nz, sp: vol.sp.slice(), origin: G.worldOf(vol, ...lo), axes: vol.axes.map(a => a.slice()) }, mask_b64: btoa(bin),
       frame: { p: arr(c.P), u: arr(c.u), v: arr(c.v), n: arr(c.n) }, g: Object.assign(clone(c.g), { clear: c.g.clear + (c.g.peri || 0) }), resolution: 0.2,
-      planes: c.pls.map(pl => ({ p: arr(pl.p), N: arr(pl.N), w: pl.w })),
+      planes: c.pls.map(pl => ({ p: arr(pl.pSlot || pl.p), N: arr(pl.N), w: pl.w })),
       gap: (gp => gp && { A: { p: arr(gp.A.p), N: arr(gp.A.N), w: gp.A.w }, B: { p: arr(gp.B.p), N: arr(gp.B.N), w: gp.B.w }, flange: c.g.flange })(splitGap(c.g, c.pls)),
       screws: c.scs.filter(s => s.entry).map(s => ({ entry: arr(s.entry), dir: arr(s.dir), d: s.sc.d + (c.g.fit || 0), D: s.sc.D, sleeveH: s.sc.sleeveH })),
       wrap_profile: c.wrapProfile || null,
       stops: ss.pos || ss.neg ? { pos: ss.pos ? [g.stopL || 6, g.stopD || 5] : null, neg: ss.neg ? [g.stopL || 6, g.stopD || 5] : null } : null,
+      // the insertion direction the preview body was built for: the server builds its envelope along the same one
+      seat_dir: c.seatDir ? { tilt: c.seatDir.tilt, az: c.seatDir.az } : null,
     };
   }
   async function serverGuide(c, outer) {
@@ -1736,36 +3143,76 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     catch (e) { if (outer && outer.aborted) throw new Error('Üretim STL\'i iptal edildi.'); throw new Error(`Sunucuya ulaşılamadı. Pakette önizleme STL'i vardır.`); }
     finally { clearTimeout(to); }
     const js = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(`Sunucu hatası: ${js.error || res.status}`);
+    if (!res.ok) throw new Error(`${xl('Sunucu hatası:')} ${js.error || res.status}`);
     const bin = atob(js.stl_b64), u8 = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
     return { stl: u8, watertight: js.watertight, bodies: js.bodies, volume: js.volume_mm3, faces: js.faces, ms: js.ms };
+  }
+  async function serverBar(spec, outer) {
+    const url = serverUrl(); if (!url) throw new Error('Bu işlem sunucu gerektirir; yayındaki sitede (sguide.up.railway.app) çalışır. Pakette önizleme STL\'i vardır.');
+    const ac = new AbortController(), to = setTimeout(() => ac.abort(), 180000);
+    if (outer) outer.addEventListener('abort', () => ac.abort());
+    let res;
+    try { res = await fetch(url + '/guide', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(barRequest(spec, { vol: S.vol, red: S.red, F: S.maskF, thr: segThr() })), signal: ac.signal }); }
+    catch (e) { if (outer && outer.aborted) throw new Error('Üretim STL\'i iptal edildi.'); throw new Error(`Sunucuya ulaşılamadı. Pakette önizleme STL'i vardır.`); }
+    finally { clearTimeout(to); }
+    const js = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(`${xl('Sunucu hatası:')} ${js.error || res.status}`);
+    const bin = atob(js.stl_b64), u8 = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    return { stl: u8, watertight: js.watertight, bodies: js.bodies, volume: js.volume_mm3, clear: js.bone_clear_mm, inBone: js.in_bone_verts };
   }
   const prodKey = () => JSON.stringify([S.source && S.source.fp, S.g, S.anchor && vec(S.anchor.p), S.anchor && vec(S.anchor.n), S.planes.map(p => [p.off, p.yaw, p.pitch, p.w]), S.screws.map(s => [s.u, s.v, s.tiltU, s.tiltV, s.d, s.D, s.sleeveH]), S.segMethod, $('thr').value, [...S.selected].sort((a, b) => a - b), window.SegEdit ? SegEdit.key() : '']);
   const segThr = () => (/^Eşik/.test(S.segMethod) && !(window.SegEdit && SegEdit.edited()) ? +$('thr').value : null);
   async function productionSTL() {
     if (!parts.guide || !S.anchor) return;
     const ac = new AbortController();
-    busy(true, 'Sunucuda üretim STL\'i hazırlanıyor…', { bar: true, cancel: () => ac.abort(), max: 180 }); await sleep();
+    const nSt = 1 + (S.result && S.result.bar && S.result.bar.ok ? 1 : 0) + (S.fib && S.fib.guide && window.Fibula ? 1 : 0), bo = { bar: true, cancel: () => ac.abort(), max: 180 };
+    let stN = 0; const stage = t => busy(true, `${t} ${++stN}/${nSt}`, bo);
+    stage('Sunucuda üretim STL\'i hazırlanıyor…'); await sleep();
     try {
-      const r = await serverGuide(Object.assign({ vol: S.vol, red: S.red, F: S.maskF, thr: segThr(), g: S.g, P: S.anchor.p, pls: planesWorld(), scs: screwsWorld(), wrapProfile: S.result && S.result.wrapProfile }, frameAxes()), ac.signal);
+      let r;
+      if (S.result && S.result.parts && S.result.parts.length === 2) {
+        // a two-frame guide: one server call per piece on its own frame, the two STLs joined into one file
+        const rs = [];
+        for (const pt of S.result.parts) rs.push(await serverGuide(Object.assign({ vol: S.vol, red: S.red, F: S.maskF, thr: segThr(), g: pt.g, P: pt.frame.P, pls: pt.pls, scs: pt.lug ? pt.scs.concat([pt.lug]) : pt.scs, wrapProfile: pt.wrapProfile, seatDir: pt.result.seatDir }, pt.frame), ac.signal));
+        r = { stl: mergeStl(rs[0].stl, rs[1].stl), watertight: rs.every(x => x.watertight), bodies: rs.reduce((s, x) => s + x.bodies, 0), volume: rs.reduce((s, x) => s + x.volume, 0), faces: rs.reduce((s, x) => s + x.faces, 0), ms: rs.reduce((s, x) => s + x.ms, 0) };
+      } else r = await serverGuide(Object.assign({ vol: S.vol, red: S.red, F: S.maskF, thr: segThr(), g: S.g, P: S.anchor.p, pls: planesWorld(), scs: screwsWorld(), wrapProfile: S.result && S.result.wrapProfile, seatDir: S.result && S.result.seatDir }, frameAxes()), ac.signal);
+      // the connecting bar: a separate part, its own server call (exact solids; the server also measures its bone clearance)
+      if (S.result && S.result.bar && S.result.bar.ok) stage('Sunucuda bağlantı köprüsü hazırlanıyor…');
+      if (S.result && S.result.bar && S.result.bar.ok) r.bar = await serverBar(S.result.bar.spec, ac.signal);
       S.prod = Object.assign(r, { key: prodKey() });
-      $('prodMsg').textContent = `Üretim STL'i hazır: ${r.watertight ? 'su geçirmez' : 'SU GEÇİRMEZ DEĞİL'}, ${r.bodies} parça${r.bodies > (S.g.split ? 2 : 1) ? ' (BEKLENENDEN FAZLA PARÇA, guide\'ı kontrol edin)' : ''}, ${fmt(r.volume / 1000, 2)} cm³, ${r.faces} üçgen. Pakete guide_uretim.stl olarak eklenir.`;
-      if (S.fib && S.fib.guide && window.Fibula && !ac.signal.aborted) try { await Fibula.production(ac.signal); } catch (e) { $('prodMsg').textContent += ` Fibula guide'ı: ${e.message}`; }
+      $('prodMsg').textContent = `${xl("Üretim STL'i hazır:")} ${r.watertight ? xl('su geçirmez') : xl('SU GEÇİRMEZ DEĞİL')}, ${xl(`${r.bodies} parça`)}${r.bodies > (S.g.split ? 2 : 1) ? ' ' + xl("(BEKLENENDEN FAZLA PARÇA, guide'ı kontrol edin)") : ''}, ${fmt(r.volume / 1000, 2)} cm³, ${xl(`${r.faces} üçgen`)}. ${xl('Pakete guide_uretim.stl olarak eklenir.')}`;
+      if (r.bar) $('prodMsg').textContent += ` ${xl("Köprü STL'i:")} ${r.bar.watertight ? xl('su geçirmez') : xl('SU GEÇİRMEZ DEĞİL')}${r.bar.clear != null ? ', ' + xl(`kemiğe en yakın ${fmt(r.bar.clear)} mm`) : ''}. ${xl('Pakete kopru_uretim.stl olarak eklenir.')}`;
+      if (S.fib && S.fib.guide && window.Fibula && !ac.signal.aborted) try { stage('Sunucuda fibula guide\'ı hazırlanıyor…'); await Fibula.production(ac.signal); } catch (e) { $('prodMsg').textContent += ` Fibula guide'ı: ${e.message}`; }
     } catch (e) { S.prod = null; $('prodMsg').textContent = e.message; }
     busy(false);
   }
   async function exportPackage() {
     if (!parts.guide) return;
+    // an edit was made moments ago and the guide / resection is still being rebuilt: the files would not match the approved plan
+    if (rebuildPending) {
+      busy(true, 'Guide güncelleniyor…');
+      for (let i = 0; i < 1200 && rebuildPending; i++) await new Promise(r => setTimeout(r, 50));
+      busy(false);
+      if (rebuildPending || $('expZip').disabled) { alertMsg('Plan yeni değişti; guide güncellenip onaylar yenilenmeden paket alınamaz.'); return; }
+    }
+    // the plate is planned but has no computed path (a stale state): recompute once, and warn if the plate files are still missing
+    if (window.Plate && Plate.missing()) { try { await Plate.update(); } catch (e) { /* warned below */ } }
+    const plateMissing = !!(window.Plate && Plate.missing());
     const prod = S.prod && S.prod.key === prodKey() ? S.prod : null;
     const files = [{ name: prod ? 'guide_onizleme.stl' : 'guide.stl', data: stlOf(parts.guide.obj) }, { name: 'kemik_kalan.stl', data: stlOf(parts.bone.obj) }];
     const fg = fullBoneGeo(); if (fg) files.push({ name: 'kemik_tam.stl', data: stlOf(new THREE.Mesh(fg)) });
     if (prod) files.unshift({ name: 'guide_uretim.stl', data: prod.stl });
+    // the connecting bar is printed as its own part
+    if (prod && prod.bar) files.push({ name: 'kopru_uretim.stl', data: prod.bar.stl }); else if (parts.bar) files.push({ name: 'kopru.stl', data: stlOf(parts.bar.obj) });
     if (window.Fibula) Fibula.exportFiles(files);
     (window.ExportHooks || []).forEach(f => { try { f(files); } catch (e) { /* optional files */ } });
     if (parts.resected) files.push({ name: 'rezeke_parca.stl', data: stlOf(parts.resected.obj) });
     files.push({ name: 'plan.json', data: $('json').textContent }, { name: 'rapor.html', data: reportHTML() });
-    if (window.Report) try { files.push({ name: 'cerrahi_rapor.pdf', data: new Uint8Array(await (await Report.build()).arrayBuffer()) }); } catch (e) { /* the HTML report is still in the package */ }
+    let pdfFailed = false;
+    if (window.Report) try { files.push({ name: 'cerrahi_rapor.pdf', data: new Uint8Array(await (await Report.build()).arrayBuffer()) }); } catch (e) { pdfFailed = true; console.warn('pdf report', e); }   // the HTML report is still in the package
     await offer('guide_paketi.zip', zip(files));
+    if (pdfFailed) alertMsg('UYARI: PDF rapor oluşturulamadı; pakette yalnız HTML rapor var.');
+    if (plateMissing) alertMsg('UYARI: Plak planlı ama plak hattı hesaplanamadı; pakette plak dosyaları YOK. Plak bölümünü kontrol edip paketi yeniden alın.');
     emit('exported');
   }
   // single files from the Teslim step: bone models any time, the guide only once the plan is ready for production
@@ -1791,7 +3238,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
       schema: 1, source: S.source ? clone(S.source) : null,
       seg: { thr: +$('thr').value, method: S.segMethod || '', sel: r ? S.comps.filter(c => S.selected.has(c.label)).map(c => G.worldOf(r, ...c.centroid).map(x => Math.round(x * 10) / 10)) : [] },
       anchor: S.anchor ? { p: vec(S.anchor.p), n: vec(S.anchor.n), axis: vec(S.anchor.axis), ...(S.anchor.base ? { base: { p: vec(S.anchor.base.p), n: vec(S.anchor.base.n), c: vec(S.anchor.base.c) } } : {}) } : null,
-      g: clone(S.g), lesion: clone(S.lesion), planes: clone(S.planes), screws: clone(S.screws),
+      g: clone(S.g), gAuto: clone(S.gAuto), lesion: clone(S.lesion), planes: clone(S.planes), screws: clone(S.screws),
       perSide: +$('perSide').value || 2, guideOn: !!S.guideOn, resRemoved: !!S.resRemoved, surgeon: $('surgeon').value.trim(), fibula: S.fib ? clone(S.fib.plan) : null,
       measures: clone(S.measures || []), ext: window.PlanExt ? Object.fromEntries(Object.entries(PlanExt).map(([k, f]) => [k, f.get()])) : {},
     };
@@ -1817,22 +3264,34 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
       if (ab && ab.p && ab.c && ab.n && ab.n.lengthSq() > 1e-6) S.anchor.base = { p: ab.p, n: ab.n.normalize(), c: ab.c };
       const num = (o, keys, d) => { const r = {}; keys.forEach(k => { const v = Number(o && o[k]); r[k] = Number.isFinite(v) ? v : d[k]; }); return r; };
       const who = o => ({ ok: !!(o && o.ok), ...(o && o.ok && typeof o.by === 'string' ? { by: o.by.slice(0, 120) } : {}), ...(o && o.ok && typeof o.at === 'string' ? { at: o.at.slice(0, 40) } : {}) });
-      const G0 = { rot: 0, roll: 0, L: 36, W: 22, wrap: 6, wall: 2.5, clear: 0.3, bridge: 4, side: 1, split: 0, flange: 3, peri: 0, fit: 0, stopT: 0, stopB: 0, stopL: 6, stopD: 5 };
+      const G0 = G_DEFAULT;
       Object.assign(S.g, num(plan.g, Object.keys(G0), G0));
+      // plans saved before the kerf setting existed had the slot centred on the plane: keep them as they were approved
+      if (!plan.g || plan.g.kerfSide === undefined) S.g.kerfSide = 0;
+      S.g.kerfSide = S.g.kerfSide ? 1 : 0;
+      S.g.wrapU = Array.isArray(plan.g && plan.g.wrapU) ? plan.g.wrapU.slice(0, 64).map(x => [Number(x[0]), Number(x[1])]).filter(x => x.every(Number.isFinite) && x[1] >= 1 && x[1] <= 20) : null;
+      if (S.g.wrapU && S.g.wrapU.length < 2) S.g.wrapU = null;
+      const ga = plan.gAuto && typeof plan.gAuto === 'object' ? plan.gAuto : {};
+      Object.keys(AUTO_DEFAULT).forEach(k => { S.gAuto[k] = ga[k] === undefined ? 1 : (ga[k] ? 1 : 0); });
       // keep every value inside the range its control allows (a hand-edited or damaged plan cannot hang the app)
       const clampTo = (o, k, a, b) => { o[k] = Math.max(a, Math.min(b, o[k])); };
       gFields.forEach(([k, , a, b]) => clampTo(S.g, k, a, b));
-      S.g.side = S.g.side < 0 ? -1 : 1; S.g.split = S.g.split ? 1 : 0; clampTo(S.g, 'fit', -0.5, 0.5);
+      clampTo(S.g, 'vc', -15, 15);
+      S.g.side = S.g.side < 0 ? -1 : 1; S.g.split = S.g.split === 2 ? 2 : S.g.split ? 1 : 0; clampTo(S.g, 'fit', -0.5, 0.5);
       S.g.stopT = S.g.stopT ? 1 : 0; S.g.stopB = S.g.stopB ? 1 : 0; clampTo(S.g, 'stopL', 2, 15); clampTo(S.g, 'stopD', 1, 15);
+      S.g.stopP = S.g.stopP ? 1 : 0; S.g.bar = S.g.bar ? 1 : 0;
       const L0 = { from: -6, to: 6, margin: 3 }, pl = plan.lesion || {};
       S.lesion = Object.assign(num(pl, ['from', 'to', 'margin'], L0), who(pl), { condyle: pl.condyle === 'R' || pl.condyle === 'L' ? pl.condyle : null });
       const P0 = { off: 0, yaw: 0, pitch: 0, w: 1.2 }, C0 = Object.assign({ u: 0, v: 0, tiltU: 0, tiltV: 0 }, SCREW_DEFAULT.mandible);
-      S.planes = (Array.isArray(plan.planes) ? plan.planes : []).slice(0, 8).map(p => Object.assign(num(p, Object.keys(P0), P0), who(p)));
+      // pv / pn: the cut's point moved within its plane (a cut turned with the bone, cutAlongBone). The plane is the same
+      // without them, but the cut point is where the defect, the graft ends and the plan hash start from: keep them
+      S.planes = (Array.isArray(plan.planes) ? plan.planes : []).slice(0, 8).map(p => Object.assign(num(p, Object.keys(P0), P0), who(p),
+        ...['pv', 'pn'].map(k => (p && p[k] !== undefined && p[k] !== null ? { [k]: Number(p[k]) } : {}))));
       // older versions could save an empty (null) screw when no position reached bone: drop it, re-place the screws
       const rawScrews = (Array.isArray(plan.screws) ? plan.screws : []).slice(0, 16), lostScrew = rawScrews.some(c => !c || typeof c !== 'object');
-      S.screws = rawScrews.filter(c => c && typeof c === 'object').map(c => Object.assign(num(c, Object.keys(C0), C0), who(c)));
-      S.planes.forEach(p => { clampTo(p, 'off', -45, 45); clampTo(p, 'yaw', -89, 89); clampTo(p, 'pitch', -89, 89); clampTo(p, 'w', 0.6, 2.5); });
-      S.screws.forEach(c => { clampTo(c, 'u', -45, 45); clampTo(c, 'v', -15, 15); clampTo(c, 'tiltU', -89, 89); clampTo(c, 'tiltV', -89, 89); clampTo(c, 'd', 0.5, 6); clampTo(c, 'D', c.d, 12); clampTo(c, 'sleeveH', 0, 20); clampTo(c, 'len', 2, 40); });
+      S.screws = rawScrews.filter(c => c && typeof c === 'object').map(c => Object.assign(num(c, Object.keys(C0), C0), who(c), c.plate === true ? { plate: true } : {}, c.hand === 1 || c.hand === true ? { hand: 1 } : {}));
+      S.planes.forEach(p => { clampTo(p, 'off', -80, 80); ['pv', 'pn'].forEach(k => { if (p[k] !== undefined) { if (typeof p[k] !== 'number' || !isFinite(p[k])) delete p[k]; else clampTo(p, k, -80, 80); } }); clampTo(p, 'yaw', -89, 89); clampTo(p, 'pitch', -89, 89); clampTo(p, 'w', 0.6, 2.5); });
+      S.screws.forEach(c => { if (c.part !== -1 && c.part !== 1) delete c.part; clampTo(c, 'u', -80, 80); clampTo(c, 'v', -40, 40); clampTo(c, 'tiltU', -89, 89); clampTo(c, 'tiltV', -89, 89); clampTo(c, 'd', 0.5, 6); clampTo(c, 'D', c.d, 12); clampTo(c, 'sleeveH', 0, 20); clampTo(c, 'len', 2, 40); });
       ['from', 'to'].forEach(k => clampTo(S.lesion, k, -45, 45)); clampTo(S.lesion, 'margin', 0, 15);
       if (plan.perSide === 1 || plan.perSide === 2) $('perSide').value = String(plan.perSide);
       // plans from before the explicit 'Guide oluştur' step always had a guide when they had screws
@@ -1841,7 +3300,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
       if (S.sel && !(S.sel[0] === 'p' ? S.planes : S.screws)[+S.sel.slice(1)]) S.sel = null;
       if (lostScrew && S.anchor && S.planes.length) { placeScrews(); alertMsg('Planda boş bir vida kaydı vardı; vidalar yeniden yerleştirildi. Kontrol edip onaylayın.'); }
       syncGuideInputs(); syncLesion(); showAnchor(); updateLesionPart(); if (S.anchor && S.mode === 'anchor') setMode('orbit');
-      if (!S.anchor) { ['guide', 'resected', 'lesion'].forEach(id => setPart(id, null, null)); clearElementParts(); S.result = null; }
+      if (!S.anchor) { ['guide', 'bar', 'resected', 'lesion'].forEach(id => setPart(id, null, null)); clearElementParts(); S.result = null; }
       const ext = plan.ext || {};
       // one damaged extension must not stop the rest of the plan from opening
       const setExt = async k => { try { await PlanExt[k].set(ext[k] || null); } catch (e) { console.warn('plan ext', k, e); try { await PlanExt[k].set(null); } catch (x) {} } };
@@ -1859,15 +3318,18 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     if (src && src.type === 'sample' && !(S.source && S.source.fp === src.fp)) { S.autoAnchor = false; S.restoring = true; await loadSample(src.name); }
     else if (src && src.type === 'dicom' && !(S.source && S.source.fp === src.fp)) {
       S.pendingPlan = plan;
-      alertMsg(`Bu vaka "${src.name}" serisine (${src.slices || '?'} kesit) ait. Planı açmak için aynı DICOM serisini yükleyin.`);
+      alertMsg(`${xl('Bu vaka')} "${src.name}" ${xl(`serisine (${src.slices || '?'} kesit) ait. Planı açmak için aynı DICOM serisini yükleyin.`)}`);
       return false;
     }
     await applyPlan(plan); return true;
   }
   function serverUrl() { return ($('aiUrl').value || '').trim().replace(/\/+$/, ''); }
   function select(sel) { if (sel) S.guideSel = false; S.sel = sel; emit('select', sel); renderElements(); rebuildElementParts(S.result ? S.result.pls : planesWorld(), S.result ? S.result.screwInfo : []); applyExplode(); render(); }
-  window.Studio = { renderComps, setGuideRot, setGuideRoll, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, resEnds, splitGap, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr };
+  window.Studio = { mandibleView, startLoad, loadStopped, loadBusy: () => committing, LOAD_CANCELLED, renderComps, setGuideRot, setGuideRoll, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, resEnds, splitGap, cutMisses, evalScrew, resectedAt, resectedNear, resPiece, boneTrack, cutAlongBone, bestScrew,
+    boneSections, sizeBody, autoBody, buildGuideSet, cutsAngle, cutFrame, pieceFrames, pieceBody, screwBodyOn, pieceWrapTop, frameAt, stumpGap, mergeStl, mergeMeshes, AUTO_DEFAULT, G_DEFAULT, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume, boneField, simplifyMesh, BAR, barPlan, barSdf, buildBarMesh, placeLug, longCase, axisOffBone, ramusAxis, stopSides, LONG_MM };
   bus.addEventListener('planeDragged', () => { renderElements(); schedule(true, true); });
+  // messages assembled at run time are written in the language that was active: write them again when it changes
+  if (window.addEventListener) window.addEventListener('langchange', () => { try { renderChecks(); renderAppr(); syncLesion(); } catch (e) { /* no case open yet */ } });
   emit('ready');
 
   try { await loadSample('mandible'); } catch (e) { busy(false); alertMsg('Örnek vaka açılamadı: ' + e.message); }

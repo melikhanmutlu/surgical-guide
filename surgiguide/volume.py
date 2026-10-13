@@ -18,13 +18,26 @@ class Volume:
         self.direction = np.eye(3) if direction is None else np.asarray(direction, float).reshape(3, 3)
 
     @classmethod
-    def from_dicom_dir(cls, path):
+    def from_dicom_dir(cls, path, series_name=None):
+        """Read one series of a folder: the one whose SeriesDescription contains `series_name` (case-insensitive) or
+        whose UID equals it; by default the series with the most slices (ties: the first by UID, so the result is stable)."""
         reader = sitk.ImageSeriesReader()
-        series = reader.GetGDCMSeriesIDs(path)
+        series = sorted(reader.GetGDCMSeriesIDs(path))
         if not series:
             raise FileNotFoundError(f"no DICOM series in {path}")
-        # pick the series with the most slices
-        files = max((reader.GetGDCMSeriesFileNames(path, s) for s in series), key=len)
+        all_files = {s: reader.GetGDCMSeriesFileNames(path, s) for s in series}
+        if series_name:
+            def desc(s):
+                try:
+                    return str(pydicom.dcmread(all_files[s][0], stop_before_pixels=True).get("SeriesDescription", ""))
+                except Exception:
+                    return ""
+            hit = [s for s in series if s == series_name or series_name.lower() in desc(s).lower()]
+            if not hit:
+                raise FileNotFoundError(f"no series matching {series_name!r} in {path}; found: " +
+                                        ", ".join(f"{desc(s)!r} ({len(all_files[s])})" for s in series))
+            series = hit
+        files = max((all_files[s] for s in series), key=len)
         reader.SetFileNames(files)
         img = reader.Execute()
         return cls(sitk.GetArrayFromImage(img).astype(np.float32), img.GetSpacing(),

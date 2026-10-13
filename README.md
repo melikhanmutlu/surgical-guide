@@ -13,7 +13,7 @@ Bu prototip aynı zinciri DICOM'dan STL'e kadar tek komutla, elle konumlandırma
 
 | Makaledeki adım | Makalede | Bu prototipte |
 |---|---|---|
-| CT/CTA'dan kemik segmentasyonu | 3D Slicer, yaşlı hastada yarı otomatik | `threshold` (HU eşik + morfoloji + bileşen seçimi) veya `totalseg` (TotalSegmentator, yapay zeka) |
+| CT/CTA'dan kemik segmentasyonu | 3D Slicer, yaşlı hastada yarı otomatik | `threshold` (HU eşik + morfoloji + bileşen seçimi; birleşik kemikler ince boyunlarından ayrılır: kafatası/üst çene/omurga mandibuladan, tibia/ayak/masa fibuladan; ayrılamazsa uyarı verilir, `--fibula-component N` eski boyut sıralı seçimi korur) veya `totalseg` (TotalSegmentator, yapay zeka) |
 | STL içe aktarma, birim ve yön düzeltme | Elle | Gerek yok: DICOM hasta koordinatları (LPS, mm) korunuyor, fibula ekseni PCA ile bulunuyor |
 | Segment sayısı | Kullanıcı seçiyor | Otomatik: arkı hedef sapmayla takip eden en az sayıda segment (min. 20 mm, hedef sapma ≤ 2.5 mm) ya da `--segments N` |
 | Greft konumlandırma | Kontrol nesneleriyle elle | Kırılma noktaları ark eğrisine en az sapmayla optimize ediliyor (Nelder-Mead) |
@@ -40,7 +40,10 @@ python3 run_pipeline.py \
 
 Çıktılar: `mandible.stl`, `fibula.stl`, `guide_mandible_a.stl`, `guide_mandible_b.stl`,
 `guide_fibula.stl`, `mandible_resected.stl`, `grafts_in_mandible.stl`, `grafts_in_fibula.stl`,
-`plan.json` (segment boyları, fibula üzerindeki yerleri, kesim açıları), `scene_*.glb` ve PNG önizlemeler.
+`plan.json` (segment boyları, fibula üzerindeki yerleri, kesim açıları, `warnings`), `scene_*.glb` ve PNG önizlemeler.
+Bir klasörde birden çok seri varsa `--mandible-series Bone` / `--fibula-series 1.25mm` (seri açıklaması ya da UID) seriyi seçer.
+Kemik seçimi tarayıcıyla aynı 0,8 mm çalışma ızgarasında yapılır (aynı mandibula / fibula); `--side` iki bacaklı serilerde bacağı seçer.
+Plan tolerans dışına çıkarsa (sapma, kısa segment, dik kesi, kısa fibula) ya da guide parçası düşerse uyarı hemen yazdırılır, sonda yeniden listelenir ve `plan.json`a girer.
 
 ## Kod yapısı
 
@@ -84,8 +87,12 @@ run_pipeline.py         uçtan uca komut
 - `web/`: tarayıcı stüdyosu (statik dosyalar; herhangi bir web sunucusundan açılır). Vaka kaydı, sürüm geçmişi,
   geri alma, aksiyel/koronal/sagittal kesitler, oturma analizi, sıkıştırılmış DICOM (codecs.js), fibula akışı (fibula.js).
 - `python3 yolmed_server.py --backend threshold --port 8800 --db ./yolmed_cases.sqlite`: segmentasyon,
-  vaka kaydı (`/cases`, yalnız plan JSON'u, görüntü saklanmaz) ve Manifold ile su geçirmez üretim STL'i (`/guide`).
-  Test: `python3 test_yolmed_server.py`.
+  vaka kaydı (`/cases`, yalnız plan JSON'u, görüntü saklanmaz) ve su geçirmez üretim STL'i (`/guide`). Üretim STL'i
+  tarayıcı önizlemesinin tasarımıdır (`web/app.js buildGuide`: takma yönüne göre zarf üzerinde gövde, konuma göre sarma,
+  kesi yuvaları, zarftan uzak vida kılıfları, delikler; iki parçalı guide'da parça başına bir istek) 0,2 mm ızgarada tek
+  marching cubes ile; aynı istek her zaman aynı STL'i verir.
+  Test: `python3 test_yolmed_server.py`; sunucu STL'i ile önizlemenin karşılaştırması (hacim, yüzey uzaklığı):
+  `python3 tests/test_server_preview.py` (örnek vaka ve sentetik kavisli çene; `--real <DICOM klasörü>` ile gerçek seri).
 - Stüdyo sunucuya ulaşırsa vakaları sunucuya, ulaşamazsa yayınlanan sayfanın kendi veritabanına ya da tarayıcıya kaydeder.
 
 ## Railway'e yayın

@@ -12,7 +12,7 @@
   // Turkish case endings after a number ("%8'i", "20 mm'ye") carry no meaning in English
   const SUF = /([\d#](?: ?mm)?)['’](?:[a-zçğıöşü]{1,4})(?![A-Za-zÇĞİÖŞÜçğıöşü])/g;
   // "1 screws" → "1 screw": the dictionary holds the plural, a lone 1 takes the singular
-  const ONE = /((?:^|[^\d.,])1 )(screw|segment|implant|position|cut|hole|file|item|version|warning|structure|approval|step|graft|plate|slice|series|piece|check|note|guide|vessel|point)s\b/g;
+  const ONE = /((?:^|[^\d.,])1 )(screw|segment|implant|position|cut|hole|file|item|version|warning|structure|approval|step|graft|plate|slice|series|piece|check|note|guide|vessel|point|day|week)s\b/g;
   let lang = 'tr';
   const miss = new Set();
   for (const k of Object.keys(D)) { const n = k.replace(SUF, '$1'); if (n !== k && D[n] == null) D[n] = D[k]; }   // Turkish keys with no English yet, for I18N.miss in the console

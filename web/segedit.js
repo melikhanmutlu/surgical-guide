@@ -3,6 +3,7 @@
    voxel sets on the 0.8 mm working grid, so a new threshold keeps them, and they are part of the plan
    (saved, versioned, undoable). */
 'use strict';
+var xl = s => (window.I18N ? I18N.t(s) : s);
 window.SegEdit = (function () {
   const St = window.Studio; if (!St) return null;
   const { S, V, fmt, bus } = St, $ = id => document.getElementById(id);
@@ -189,6 +190,7 @@ window.SegEdit = (function () {
   // ---------- panel ----------
   function setTool(t) {
     tool = tool === t ? null : t;
+    if (tool && St.mandibleView) St.mandibleView();
     if (tool && window.Measure && Measure.active()) $('toolMeasure').click();
     if (tool && window.Lesion) Lesion.off();
     if (tool && window.Masks) Masks.off();
@@ -200,7 +202,7 @@ window.SegEdit = (function () {
   }
   function status(msg) {
     const a = count(add), d = count(del), vox = S.red ? S.red.sp[0] * S.red.sp[1] * S.red.sp[2] / 1000 : 0;
-    $('seStat').innerHTML = (msg ? `${St.esc(msg.replace(/\.$/, ''))}. ` : '') + (a || d ? `Toplam: +${fmt(a * vox, 2)} cm³ eklendi, −${fmt(d * vox, 2)} cm³ çıkarıldı.` : '');
+    $('seStat').innerHTML = (msg ? `${St.esc(xl(msg.replace(/\.$/, '')))}. ` : '') + (a || d ? xl(`Toplam: +${fmt(a * vox, 2)} cm³ eklendi, −${fmt(d * vox, 2)} cm³ çıkarıldı.`) : '');
     $('seReset').disabled = !(a || d);
   }
   $('segEdit').innerHTML = `<details class="sub-d"><summary>Elle düzeltme</summary>

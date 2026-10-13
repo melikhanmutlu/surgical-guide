@@ -25,26 +25,55 @@ def log(msg, t0=[time.time()]):
     print(f"[{time.time() - t0[0]:6.1f}s] {msg}", flush=True)
 
 
+WARNINGS = []
+
+
+def warn(msg):
+    """A problem the surgeon must see: printed at once, listed again at the end and written to plan.json (never silent)."""
+    WARNINGS.append(msg)
+    print("WARNING: " + msg, flush=True)
+
+
 def seg(vol, structure, args, dicom_dir, component):
     if args.segmenter == "totalseg":
         return segment.totalseg_bone(vol, structure, dicom_dir=dicom_dir, fast=args.fast)
-    return segment.threshold_bone(vol, hu=args.hu, component=component)
+    if structure == "mandible":          # skull / upper jaw / spine joined to the mandible are cut off (surgiguide/bones.py)
+        mask, info = segment.mandible_bone(vol, hu=args.hu)
+    elif component is None:              # leg CT: the slender bone beside the tibia on the donor side, not the table or the whole leg
+        mask, info = segment.fibula_bone(vol, hu=args.hu, side=args.side)
+    else:                                # explicit --fibula-component N: the old size-rank choice
+        return segment.threshold_bone(vol, hu=args.hu, component=component)
+    extra = "".join(f", {k} {info[k]:.0f} mm" for k in ("length_mm", "radius_mm") if k in info)
+    log(f"{structure}: {info['status']} ({info['volume_cm3']:.1f} cm3{extra})")
+    if info.get("note"):
+        log(info["note"])
+    if info.get("warning"):
+        warn(info["warning"])
+    return mask
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--demo", action="store_true", help="generate synthetic DICOM phantoms and use them")
     ap.add_argument("--mandible-dicom"); ap.add_argument("--fibula-dicom")
+    ap.add_argument("--mandible-series", help="series description (substring) or UID to read from --mandible-dicom, e.g. 'Bone'; default: the series with most slices")
+    ap.add_argument("--fibula-series", help="same for --fibula-dicom")
     ap.add_argument("--segmenter", choices=["threshold", "totalseg"], default="threshold")
     ap.add_argument("--fast", action="store_true", help="TotalSegmentator --fast")
     ap.add_argument("--hu", type=float, default=250.0, help="bone threshold (threshold segmenter)")
-    ap.add_argument("--fibula-component", type=int, default=2,
-                    help="threshold segmenter: size rank of the fibula component (tibia is usually 1)")
+    ap.add_argument("--fibula-component", type=int, default=None,
+                    help="threshold segmenter: size rank of the fibula component (old behaviour). Default: automatic, "
+                         "the slender bone beside the tibia on the --side leg (CT table, tibia and foot are never taken)")
     ap.add_argument("--resect-from", type=float, default=-15.0, help="arch position mm (+ = patient left)")
     ap.add_argument("--resect-to", type=float, default=40.0)
     ap.add_argument("--segments", type=int, default=None, help="number of fibula segments (default: auto)")
     ap.add_argument("--side", choices=["right", "left"], default="right", help="donor leg")
-    ap.add_argument("--kerf", type=float, default=1.0, help="saw blade thickness + tolerance, mm")
+    ap.add_argument("--kerf", type=float, default=1.0, help="saw blade thickness (bone one cut takes), mm")
+    ap.add_argument("--slot-width", type=float, default=None,
+                    help="guide saw slot width, mm (default: the kerf, as before; never narrower than the blade; blade + 0.1-0.3 mm is advised)")
+    ap.add_argument("--kerf-side", choices=["resected", "centre"], default="resected",
+                    help="mandible saw slot relative to the planned cut plane: 'resected' = the slot lies on the resected side and the graft meets "
+                         "the stump flush (gap 0, default, the browser's default too); 'centre' = centred on the plane, kerf/2 lost from each stump")
     ap.add_argument("--clearance", type=float, default=0.3); ap.add_argument("--wall", type=float, default=2.5)
     ap.add_argument("--out", default="outputs/run")
     a = ap.parse_args()
@@ -57,7 +86,7 @@ def main():
         write_dicom_series(phantom.leg_phantom(), a.fibula_dicom, "LEG PHANTOM")
 
     log("reading DICOM")
-    vm, vf = Volume.from_dicom_dir(a.mandible_dicom), Volume.from_dicom_dir(a.fibula_dicom)
+    vm, vf = Volume.from_dicom_dir(a.mandible_dicom, a.mandible_series), Volume.from_dicom_dir(a.fibula_dicom, a.fibula_series)
     log(f"segmenting ({a.segmenter})")
     mm = seg(vm, "mandible", a, a.mandible_dicom, 1)
     fm = seg(vf, "fibula", a, a.fibula_dicom, a.fibula_component)
@@ -68,9 +97,18 @@ def main():
     log("planning")
     arch = planning.Arch(vm, mm)
     fib = planning.Fibula(vf, fm, side=a.side)
-    p = planning.make_plan(arch, fib, a.resect_from, a.resect_to, n_segments=a.segments, kerf=a.kerf)
+    p = planning.make_plan(arch, fib, a.resect_from, a.resect_to, n_segments=a.segments, kerf=a.kerf, kerf_side=a.kerf_side, slot_w=a.slot_width)
     summary = planning.plan_summary(p, fib)
     print(json.dumps(summary, indent=2))
+    for w in p.get("warnings", []):
+        warn("plan: " + w)
+    log(f"graft-to-stump gap: {p['stump_gap_mm'][0]:.2f} mm at each end (slot {p['slot_w']:.2f} mm, blade {p['kerf']:.2f} mm, on the {p['kerf_side']} side of the cut plane)")
+    if p.get("segment_decision"):
+        d = p["segment_decision"]
+        why = {"short": "defect shorter than one segment", "dev": "fewest segments within the deviation tolerance",
+               "len": "smallest deviation among the counts that keep every segment long enough"}[d["reason"]]
+        log(f"segment count {d['n']} ({why}); candidates: "
+            + ", ".join(f"{c['n']}: shortest {c['shortest_segment_mm']} mm / deviation {c['deviation_mm']} mm" for c in d["candidates"]))
 
     log("generating guides")
     fg, fplanes, frep = guides.fibula_guide(vf, fm, fib, p, clearance=a.clearance, wall=a.wall)
@@ -79,6 +117,19 @@ def main():
     for i, (m, _, _) in enumerate(mg):
         m.export(os.path.join(a.out, f"guide_mandible_{'ab'[i]}.stl"))
     summary["guides"] = [frep] + [r for _, _, r in mg]
+    for r in summary["guides"]:
+        if r.get("seat"):
+            st = r["seat"]
+            log(f"{r['name']}: seat check {st['free_directions']}/{st['directions']} directions free, best tilt {st['best_tilt_deg']:.0f} deg, "
+                f"{st['blocked_mm2_along_normal']:.0f} mm2 of bone over the guide along the buccal normal")
+        if r.get("slot_note"):
+            warn(r["slot_note"])
+        if r.get("note"):
+            log(r["note"])
+        if r.get("warning"):
+            warn(r["warning"])
+    if WARNINGS:
+        summary["warnings"] = list(WARNINGS)
     summary["guides_watertight"] = bool(fg.is_watertight and all(m.is_watertight for m, _, _ in mg))
 
     log("virtual surgery: resection + transplanted grafts")
@@ -125,6 +176,10 @@ def main():
     fib_crop = fib_mesh.slice_plane(lo - 15, [0, 0, 1]).slice_plane(hi + 15, [0, 0, -1])
     render.render(os.path.join(a.out, "3_fibula_guide.png"), [(fib_crop, bone, 1), (fg, guide, 1)],
                   "Fibula cutting guide (lateral view)", view=(15, 165))
+    if WARNINGS:
+        print(f"{len(WARNINGS)} WARNING(S):", flush=True)
+        for w in WARNINGS:
+            print("  - " + w, flush=True)
     log(f"done -> {a.out}")
 
 

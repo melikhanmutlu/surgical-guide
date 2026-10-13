@@ -4,6 +4,7 @@
    plan shows up (tamper-evident, not tamper-proof: whoever holds the file can rebuild a whole new chain; the last
    hash printed in the signed report is what anchors it). Undo never removes log entries. */
 'use strict';
+var xl = s => (window.I18N ? I18N.t(s) : s);
 window.Audit = (function () {
   const St = window.Studio; if (!St) return null;
   const { S, fmt, bus, esc } = St, $ = id => document.getElementById(id);
@@ -70,7 +71,7 @@ window.Audit = (function () {
     if (S.crit || qcCrit()) return 'Kritik kontrol varken onay verilemez.';
     if (role === 'sur') {
       if (!status('eng').ok) return 'Önce mühendis teknik onayı gerekli.';
-      const miss = others(); if (miss.length) return `Önce öğe onayları tamamlanmalı: ${miss.join(', ')}.`;
+      const miss = others(); if (miss.length) return xl('Önce öğe onayları tamamlanmalı:') + ' ' + miss.map(xl).join(', ') + '.';
     }
     return '';
   }
@@ -87,7 +88,7 @@ window.Audit = (function () {
   const when = iso => new Date(iso).toLocaleString('tr-TR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
   function stTxt(role, h) {
     const s = status(role, h);
-    return s.state === 'valid' ? `<span class="tag ok">Onaylı</span> ${esc(s.e.name)} · ${esc(when(s.e.at))}` : s.state === 'stale' ? `<span class="tag warn">Plan değişti</span> ${esc(s.e.name)} onayından sonra plan değişti; yeniden onay gerekli.`
+    return s.state === 'valid' ? `<span class="tag ok">Onaylı</span> ${esc(s.e.name)} · ${esc(when(s.e.at))}` : s.state === 'stale' ? `<span class="tag warn">Plan değişti</span> ${esc(s.e.name)} ${xl('onayından sonra plan değişti; yeniden onay gerekli.')}`
       : s.state === 'broken' ? '<span class="tag crit">Geçersiz</span> Kayıt zinciri bozuk.' : '<span class="tag">Bekliyor</span>';
   }
   function block(role, h) {
@@ -107,7 +108,7 @@ window.Audit = (function () {
       ${block('eng', h)}${block('sur', h)}
       <p class="hint" id="auMsg">${esc(note)}</p>
       <details class="sub-d"><summary>Onay geçmişi (${log.length})</summary>
-        <p class="hint">${chain.ok ? `Zincir doğrulandı${log.length ? ` · ${esc(String(lastH).slice(0, 8))}` : ''}` : `<b style="color:var(--crit)">Zincir ${chain.bad + 1}. kayıtta bozuk.</b>`} · plan ${h.slice(0, 8)}</p>
+        <p class="hint">${chain.ok ? `${xl('Zincir doğrulandı')}${log.length ? ` · <span>${esc(String(lastH).slice(0, 8))}</span>` : ''}` : `<b style="color:var(--crit)">Zincir ${chain.bad + 1}. kayıtta bozuk.</b>`} · plan <span>${h.slice(0, 8)}</span></p>
         <ol class="aulog">${log.slice().reverse().map(e => `<li>${esc(when(e.at))} · ${esc(ROLE[e.role] || '')} ${esc(e.name)} ${esc(ACT[e.action] || '')}${e.comment ? `: “${esc(e.comment)}”` : ''}<small>#${Number(e.n) || 0} ${esc(String(e.hash || '').slice(0, 12))} · plan ${esc(String(e.plan || '').slice(0, 8))}</small></li>`).join('') || '<li>Kayıt yok.</li>'}</ol>
       </details>`;
     box.querySelectorAll('[data-a]').forEach(b => b.addEventListener('click', () => act(b.dataset.r, b.dataset.a)));
@@ -135,7 +136,7 @@ window.Audit = (function () {
     d.table(['Aşama', 'Durum', 'Ad', 'Zaman'], ['eng', 'sur'].map(r => { const s = status(r, h); return [r === 'eng' ? 'Mühendis (teknik)' : 'Cerrah (klinik)', s.state === 'valid' ? 'Onaylı' : s.state === 'stale' ? 'Plan değişti' : s.state === 'broken' ? 'Geçersiz' : 'Bekliyor', s.e ? s.e.name : '–', s.e ? when(s.e.at) : '–']; }), [0.25, 0.2, 0.3, 0.25]);
     log.filter(e => e.comment).slice(-6).forEach(e => d.text(`${ROLE[e.role]} ${e.name} (${when(e.at)}): ${e.comment}`, { size: 20 }));
     d.text(`Plan özeti (SHA-256): ${h}`, { size: 18, mono: true, color: '#5b646e' });
-    d.text(`Onay kaydı: ${log.length} kayıt, zincir ${chain.ok ? 'doğrulandı' : 'BOZUK'}${log.length ? `, son özet ${log[log.length - 1].hash}` : ''}`, { size: 18, mono: true, color: '#5b646e' });
+    d.text(xl(`Onay kaydı: ${log.length} kayıt, zincir ${chain.ok ? 'doğrulandı' : 'BOZUK'}`) + (log.length ? `, ${xl('son özet')} ${log[log.length - 1].hash}` : ''), { size: 18, mono: true, color: '#5b646e' });
   });
   (window.ExportHooks = window.ExportHooks || []).push(files => { if (S.anchor) files.push({ name: 'onay_kaydi.json', data: JSON.stringify({ plan_ozeti: planHash(), zincir_dogru: chain.ok, kayitlar: log }, null, 2) }); });
   const same = (x, y) => JSON.stringify(x) === JSON.stringify(y), isPrefix = (a, b) => a.length <= b.length && a.every((e, i) => same(e, b[i]));

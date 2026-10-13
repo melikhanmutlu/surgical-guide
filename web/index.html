@@ -131,6 +131,7 @@ body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 var(--
 .ctl { display: grid; gap: 2px; }
 .ctl-row { display: flex; justify-content: space-between; gap: 8px; color: var(--fg); }
 .ctl-row output { font: 400 12.5px var(--font-mono); font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; }
+.ctl.auto .ctl-row output::after { content: ' · oto'; color: var(--muted); font-size: 11px; }
 input[type=range] { width: 100%; margin: 3px 0; accent-color: var(--accent); height: 16px; }
 button, select, .filebtn { font: 500 13px var(--font-body); color: var(--fg); background: var(--panel); border: 1px solid var(--control); border-radius: var(--r); padding: 0 10px; height: 30px; box-sizing: border-box; cursor: pointer; transition: background .12s, border-color .12s, color .12s; }
 .filebtn { display: inline-flex; align-items: center; }
@@ -337,6 +338,7 @@ button.primary:disabled { opacity: 1; background: var(--sunken); color: var(--mu
 .busy .pbar.det i { animation: none; left: 0; transition: width .3s; }
 .busy .pbar.det { width: 160px; flex: none; } #busyText { font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .busy { max-width: calc(100% - 32px); }
+body.is-busy { cursor: progress; }
 @keyframes slide { from { left: -35%; } to { left: 100%; } }
 @media (prefers-reduced-motion: reduce) { .busy .pbar i { animation: none; left: 0; } }
 /* dialogs */
@@ -605,6 +607,7 @@ button.ghost.danger { color: var(--crit); }
               <div class="btns"><button class="accent" id="pickAnchor"><svg class="i"><use href="#i-target"/></svg>Bölgeyi modelde seç</button></div>
               <div class="ctl"><label for="resType" class="lbl2">Rezeksiyon tipi</label><select id="resType"><option value="">Segment (iki kesi arası)</option><option value="R">Kondil dahil, sağ (tek kesi)</option><option value="L">Kondil dahil, sol (tek kesi)</option></select></div>
               <p class="hint" id="resTypeHint" hidden>Ramus ve kondil, kondile en uzak kesiden itibaren çıkarılır. Diğer kesiler yalnız guide yuvası olarak kalır. Kondil konumu Anatomi adımındaki referanstan gelir.</p>
+              <div id="neoBox" class="col" hidden></div>
               <div class="el-row"><div class="el-list" id="plList" role="group" aria-label="Kesiler"></div><button id="addPlane" class="ghost sm" title="Kesi ekle"><svg class="i"><use href="#i-plus"/></svg>Kesi</button></div>
               <div id="plProps" class="col"></div>
               <details class="sub-d" id="secLes"><summary>Lezyonu boya (isteğe bağlı)</summary><div id="lesPaint" class="col"></div></details>
@@ -644,7 +647,7 @@ button.ghost.danger { color: var(--crit); }
             <div class="btns"><button id="fibPick" aria-pressed="false"><svg class="i"><use href="#i-target"/></svg>Modelde seç</button><button id="fibSplit" aria-pressed="false"><svg class="i"><use href="#i-scissors"/></svg>Tibiadan ayır</button></div>
             <p class="hint" id="fibPickMsg" hidden></p>
             <h3 class="sub">Segmentler</h3>
-            <div class="ctl"><span class="lbl2">Segment sayısı</span><span class="seg" id="fibN" role="group" aria-label="Segment sayısı"><button data-n="1">1</button><button data-n="2">2</button><button data-n="3">3</button></span></div>
+            <div class="ctl"><span class="lbl2">Segment sayısı</span><span class="seg" id="fibN" role="group" aria-label="Segment sayısı"><button data-n="1">1</button><button data-n="2">2</button><button data-n="3">3</button><button data-n="4">4</button></span></div>
             <div id="fibKnots" class="col"></div>
             <div class="btns"><button id="fibOpt" class="accent"><svg class="i"><use href="#i-spark"/></svg>Kesileri öner</button></div>
             <details class="sec" id="secFibAng"><summary>Segment ve eklem açıları</summary>
@@ -657,7 +660,8 @@ button.ghost.danger { color: var(--crit); }
             </details>
             <h3 class="sub">Yerleşim</h3>
             <div class="ctl"><div class="ctl-row"><label for="fibVOff">Dikey kaydırma</label><output id="fibVOffO"></output></div><input type="range" id="fibVOff" min="-12" max="12" step="0.5"><p class="hint more" data-for="fibVOff">Greftleri yukarı (oklüzal düzleme) ya da aşağı (alt kenara) kaydırır.</p></div>
-            <div class="ctl"><div class="ctl-row"><label for="fibKerf">Testere payı</label><output id="fibKerfO"></output></div><input type="range" id="fibKerf" min="0.5" max="2" step="0.1"></div>
+            <div class="ctl"><div class="ctl-row"><label for="fibKerf">Testere payı</label><output id="fibKerfO"></output></div><input type="range" id="fibKerf" min="0.5" max="2" step="0.1"><p class="hint more" data-for="fibKerf">Testere bıçağının bir kesiyle aldığı kemik (bıçak kalınlığı).</p></div>
+            <div class="ctl"><div class="ctl-row"><label for="fibSlot">Yuva genişliği</label><output id="fibSlotO"></output></div><input type="range" id="fibSlot" min="0.5" max="2.5" step="0.05"><p class="hint more" data-for="fibSlot">Fibula guide'ındaki testere yuvası, testere payından dar olamaz. Bıçaktan 0,1–0,3 mm geniş olması önerilir; daha geniş yuva açı hatası biriktirir.</p></div>
             <div class="ctl"><div class="ctl-row"><label for="fibDistal">Distal koruma</label><output id="fibDistalO"></output></div><input type="range" id="fibDistal" min="40" max="140" step="1"></div>
             <label class="chk"><input type="checkbox" id="fibMirror"> Sağlam tarafı aynala</label>
             <p class="hint more" data-for="fibMirror">Tümör kemiği bozduysa greftler bozuk kemiğe değil, karşı taraftaki sağlam kemiğin aynadaki şekline göre dizilir.</p>
@@ -689,13 +693,20 @@ button.ghost.danger { color: var(--crit); }
           <div id="guideList" class="col"></div>
           <div class="btns end" id="guideDel2Box" hidden><button id="guideDel2" class="sm" title="Guide ve vidaları kaldırır; kesiler yerinde kalır"><svg class="i"><use href="#i-trash"/></svg>Guide'ı sil</button></div>
           <h3 class="sub">Yerleşim</h3>
-          <div class="ctl"><label for="g_split" class="lbl2">Düzen</label><select id="g_split" data-seg><option value="0" data-short="Tek parça">Tek parça (köprülü)</option><option value="1">İki parça</option></select></div>
+          <div class="ctl"><label for="g_split" class="lbl2">Düzen</label><select id="g_split" data-seg><option value="0" data-short="Tek parça">Tek parça (köprülü)</option><option value="1">İki parça</option><option value="2" data-short="İki eksen">İki parça, her kesi kendi ekseninde</option></select></div>
+          <label class="chk"><input type="checkbox" id="g_bar"> Bağlantı köprüsü</label>
+          <p class="hint more" data-for="g_bar">İki guide'ı rezeke bölgenin dışından, lingual ya da alt taraftan birbirine bağlayan çubuk. Ayrı bir parça olarak basılır, iki guide'daki kulaklara takılır ve kesilerden sonra çıkarılır. Lezyon 55 mm'den uzunsa ya da düz eksen kemiğin dışına çıkıyorsa kendiliğinden önerilir.</p>
+          <div class="ctl"><label for="g_kerf" class="lbl2">Testere payı</label><select id="g_kerf" data-seg><option value="1" data-short="Rezeke tarafta">Rezeke tarafta (greft güdüğe tam oturur)</option><option value="0" data-short="Ortalı">Kesi düzlemine ortalı (her uçta yarım yuva aralık)</option></select></div>
+          <p class="hint more">Uzunluk, genişlik ve sarma derinliği kemiğe göre kendiliğinden seçilir; bir kaydırıcıyı elle değiştirince o değer korunur.</p>
+          <div class="btns end"><button id="gAutoReset" class="sm" type="button" title="Elle değiştirilen uzunluk, genişlik ve sarmayı yeniden kemiğe göre seçer">Otomatiğe dön</button></div>
           <div class="ctl"><label for="g_side" class="lbl2">Köprü tarafı</label><select id="g_side" data-seg><option value="1" data-short="+ taraf">Bir kenar (+)</option><option value="-1" data-short="− taraf">Diğer kenar (−)</option></select></div>
           <div id="gCtl" class="col"></div>
           <details class="sec" id="secStop"><summary>Stoplar</summary>
           <p class="hint more">Guide'ın üst ya da alt kenarından kemiğin kenarına (kret, alt kenar) inen bir dudak. Guide'ın yukarı aşağı kaymasını engeller. Kemiğin en geniş yerinin altına girmez, guide yine takılabilir. Kemiği kavraması gerekmiyorsa kapalı bırakın.</p>
           <label class="chk"><input type="checkbox" id="g_stopT"> Üst stop</label>
           <label class="chk"><input type="checkbox" id="g_stopB"> Alt stop</label>
+          <label class="chk"><input type="checkbox" id="g_stopP"> Arka kenar stopu (ramus)</label>
+          <p class="hint more" data-for="g_stopP">Ramusa çıkan guide'ın arka kenarı ramusun arka kenarına dayanır; guide sigmoid çentiğe göre konumlanır.</p>
           <div id="stopBox" class="col" hidden>
             <div class="ctl"><div class="ctl-row"><label for="g_stopL">Stop boyu</label><output id="go_stopL">6 mm</output></div><input type="range" id="g_stopL" min="2" max="15" step="0.5" value="6"><p class="hint more" data-for="g_stopL">Guide kenarından öteye uzanan kısım.</p></div>
             <div class="ctl"><div class="ctl-row"><label for="g_stopD">Stop sarma derinliği</label><output id="go_stopD">5 mm</output></div><input type="range" id="g_stopD" min="1" max="15" step="0.5" value="5"></div>
@@ -850,6 +861,7 @@ button.ghost.danger { color: var(--crit); }
 
 <script src="config.js"></script>
 <script src="geom.js"></script>
+<script src="bones.js"></script>
 <script src="seat.js"></script>
 <script src="app.js"></script>
 <script src="store.js"></script>
@@ -862,6 +874,8 @@ button.ghost.danger { color: var(--crit); }
 <script src="report.js"></script>
 <script src="segedit.js"></script>
 <script src="ref.js"></script>
+<script src="condyle.js"></script>
+<script src="bridge.js"></script>
 <script src="plate.js"></script>
 <script src="ves.js"></script>
 <script src="fguide.js"></script>

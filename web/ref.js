@@ -2,6 +2,7 @@
    mirror image), a mirrored ghost of the healthy side over the defect side as the reconstruction target, and the
    condyles (found automatically, re-pickable by clicking) with their distances and asymmetry. */
 'use strict';
+var xl = s => (window.I18N ? I18N.t(s) : s);
 window.Ref = (function () {
   const St = window.Studio; if (!St) return null;
   const { S, V, fmt, bus } = St, $ = id => document.getElementById(id);
@@ -53,7 +54,8 @@ window.Ref = (function () {
     const n = nOf(best.yaw, best.roll);
     return { n, d: n[0] * c[0] + n[1] * c[1] + n[2] * c[2] + best.off, score: best.s, yaw: best.yaw, roll: best.roll };
   }
-  // condyle = the most posterior of the highest bone points on each side, away from the midline
+  // condyle = the most posterior summit of the upper bone on each side, away from the midline
+  const CONDYLE_BAND = 30;
   function findCondyles(pl) {
     const r = S.red, m = S.mask, nx = r.nx, nxy = r.nx * r.ny, side = { R: [], L: [] };
     for (let v = 0; v < m.length; v++) {
@@ -65,7 +67,18 @@ window.Ref = (function () {
     for (const k of ['R', 'L']) {
       const A = side[k]; if (!A.length) continue;
       let zmax = -Infinity; A.forEach(p => { if (p[2] > zmax) zmax = p[2]; });
-      const top = A.filter(p => p[2] > zmax - 8);
+      // the bone's summits (highest in a 4 mm column, none higher within 8 mm) in the upper CONDYLE_BAND mm: the
+      // condyle is the most posterior one. The single highest point is not it on a tilted head or when the coronoid
+      // process, or a stray bit of bone medial to the ramus, stands higher than the condylar head.
+      const cols = new Map(); A.forEach(p => { const key = Math.round(p[0] / 4) + ',' + Math.round(p[1] / 4), c = cols.get(key); if (!c || p[2] > c[2]) cols.set(key, p); });
+      let peak = null;
+      for (const [key, p] of cols) {
+        if (p[2] <= zmax - CONDYLE_BAND || (peak && p[1] <= peak[1])) continue;
+        const [i, j] = key.split(',').map(Number); let summit = true;
+        for (let a = -2; a <= 2 && summit; a++) for (let b = -2; b <= 2; b++) { const q = (a || b) && cols.get((i + a) + ',' + (j + b)); if (q && q[2] > p[2]) { summit = false; break; } }
+        if (summit) peak = p;
+      }
+      const top = peak ? A.filter(p => p[2] > peak[2] - 8 && (p[0] - peak[0]) ** 2 + (p[1] - peak[1]) ** 2 < 144) : A.filter(p => p[2] > zmax - 8);
       let post = top[0]; top.forEach(p => { if (p[1] > post[1]) post = p; });
       const near = top.filter(p => (p[0] - post[0]) ** 2 + (p[1] - post[1]) ** 2 + (p[2] - post[2]) ** 2 < 36);
       out[k] = near.reduce((s, p) => [s[0] + p[0], s[1] + p[1], s[2] + p[2]], [0, 0, 0]).map(x => Math.round(x / near.length * 100) / 100);
@@ -233,12 +246,18 @@ window.Ref = (function () {
   });
   (window.ExtraChecks = window.ExtraChecks || []).push(() => {
     const M = metrics(), out = [];
-    if (M && M.asym !== undefined && M.asym > 4) out.push(['info', 'Bilgi', `Kondiller ${fmt(M.asym)} mm asimetrik; ayna görüntüsünü hedef alırken bunu hesaba katın.`, 'anat']);
+    if (M && M.asym !== undefined && M.asym > 4) out.push(['info', 'Bilgi', xl(`Kondiller ${fmt(M.asym)} mm asimetrik; ayna görüntüsünü hedef alırken bunu hesaba katın.`), 'anat']);
     const E = M && ref && St.resEnds();
     if (E && !E.condyle) {
-      // a segment resection must not take a condyle; a condylar resection is chosen explicitly
-      for (const k of ['R', 'L']) { const p = ref.cond[k]; if (!p) continue; const q = V(...p);
-        if (q.clone().sub(E.A.p).dot(E.A.N) > 0 && q.clone().sub(E.B.p).dot(E.B.N) < 0 && q.distanceTo(S.anchor.p) < 70) out.push(['warn', 'Uyarı', `${k === 'R' ? 'Sağ' : 'Sol'} kondil rezeksiyon bölgesinde kalıyor; kondil dahil rezeksiyon tipini seçin.`, 'lesion']); }
+      // a segment resection must not take a condyle (the second cut would leave the bone and the defect has no stump
+      // there); a condylar resection is chosen explicitly, so this is critical, as the cut that misses bone is. The
+      // slab between two near-parallel planes crosses the whole jaw, so only a condyle near the plan (70 mm) counts
+      const dir = E.B.p.clone().sub(E.A.p).normalize(), NA = E.A.N.clone(), NB = E.B.N.clone(); if (NA.dot(dir) < 0) NA.negate(); if (NB.dot(dir) < 0) NB.negate();
+      // the two cut planes are infinite: on a curved jaw the slab between them also holds bone the resection leaves
+      // (the ramus beside a cut at the angle), so the condyle counts only when it lies in the resected piece itself
+      // (within 4 mm of it); the slab test stays as the fallback when no piece is known
+      for (const k of ['R', 'L']) { const p = ref.cond[k]; if (!p) continue; const q = V(...p), inPiece = St.resectedNear ? St.resectedNear(q, 4) : null;
+        if (inPiece === null ? q.clone().sub(E.A.p).dot(NA) > 0 && q.clone().sub(E.B.p).dot(NB) < 0 && q.distanceTo(S.anchor.p) < 70 : inPiece) out.push(['crit', 'Kritik', xl(`${k === 'R' ? 'Sağ' : 'Sol'} kondil rezeksiyon bölgesinde kalıyor; kondil dahil rezeksiyon tipini seçin ya da kesiyi kondilin altına alın.`), 'lesion']); }
     }
     return out;
   });

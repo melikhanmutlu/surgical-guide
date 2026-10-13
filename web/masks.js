@@ -4,6 +4,7 @@
    planning bone: cuts, resection, screws and the guide are computed from them only. The other layers are never
    deleted; they stay hidden and can be shown as context. Marks are part of the plan and survive a new threshold. */
 'use strict';
+var xl = s => (window.I18N ? I18N.t(s) : s);
 window.Masks = (function () {
   const St = window.Studio; if (!St) return null;
   const { S, fmt, bus } = St, $ = id => document.getElementById(id);
@@ -63,7 +64,7 @@ window.Masks = (function () {
     }
     if (add) { if (S.selected.has(label) && S.selected.size > 1) S.selected.delete(label); else S.selected.add(label); }
     else S.selected = new Set([label]);
-    msg = `Planlama kemiği: ${nameOf(label)}.`;
+    msg = `${xl('Planlama kemiği:')} ${nameOf(label)}.`;
     await selectionChanged();
   }
   async function selectionChanged() {
@@ -136,7 +137,7 @@ window.Masks = (function () {
   async function showCtx(label, on) {
     if (on) ctxOn.add(label); else ctxOn.delete(label);
     const pt = St.parts['ctx_' + label];
-    if (on && !pt) { St.busy(true, `${nameOf(label)} gösteriliyor…`); await St.sleep(); try { buildCtx(label); } finally { St.busy(false); } }
+    if (on && !pt) { St.busy(true, `${nameOf(label)} ${xl('gösteriliyor…')}`); await St.sleep(); try { buildCtx(label); } finally { St.busy(false); } }
     else if (pt) { pt.visible = on; pt.obj.visible = on; }
     St.renderParts(); St.render(); renderList();
   }
@@ -201,6 +202,7 @@ window.Masks = (function () {
   // ---------- panels ----------
   function setTool(t, force) {
     tool = force ? t : tool === t ? null : t;
+    if (tool && St.mandibleView) St.mandibleView();
     if (tool) {
       if (S.mode !== 'orbit') St.setMode('orbit');
       if (window.SegEdit) SegEdit.off();
@@ -215,15 +217,16 @@ window.Masks = (function () {
       b.hidden = false;
       b.textContent = tool === 'pick' ? 'Planlama kemiğini seç: 3B modelde ya da kesitte kemiğe tıklayın (Shift: ekle/çıkar) · Esc ile bitir'
         : tool === 'erase' ? 'İşaret silgisi: kesitlerde ya da 3B modelde sürükleyin · döndürmek için Alt · Esc ile bitir'
-          : `${layers[cur - 1].name} işaretleniyor: kesitlerde ya da 3B modelde sürükleyin · döndürmek için Alt · Esc ile bitir`;
-    } else if (/^(Planlama kemiğini|İşaret silgisi|Katman|.* işaretleniyor)/.test(b.textContent)) b.hidden = true;
+          : `${layers[cur - 1].name} ${xl('işaretleniyor: kesitlerde ya da 3B modelde sürükleyin · döndürmek için Alt · Esc ile bitir')}`;
+      shown = b.textContent;
+    } else if (/^(Planlama kemiğini|İşaret silgisi|Katman|.* işaretleniyor)/.test(b.textContent) || (shown && (b.textContent === shown || b.textContent === xl(shown)))) b.hidden = true;
   }
   function renderLayers() {
     const c = counts(), vox = S.red ? S.red.sp[0] * S.red.sp[1] * S.red.sp[2] / 1000 : 0;
     $('mkLayers').innerHTML = layers.map((L, i) => `<li class="lay${cur === i + 1 ? ' on' : ''}">
-      <label><input type="radio" name="mkCur" value="${i + 1}" ${cur === i + 1 ? 'checked' : ''} aria-label="${St.esc(L.name)} ile işaretle"><i style="background:${hex(L.color)}"></i>
+      <label><input type="radio" name="mkCur" value="${i + 1}" ${cur === i + 1 ? 'checked' : ''} aria-label="${St.esc(L.name)} ${xl('ile işaretle')}"><i style="background:${hex(L.color)}"></i>
       <input type="text" class="mk-name" data-n="${i + 1}" value="${St.esc(L.name)}" maxlength="40" aria-label="Kemik etiketi adı"></label>
-      <span class="hu">${c[i + 1] ? fmt(c[i + 1] * vox, 2) + ' cm³ işaret' : 'işaret yok'}</span>
+      <span class="hu">${c[i + 1] ? xl(`${fmt(c[i + 1] * vox, 2)} cm³ işaret`) : xl('işaret yok')}</span>
       ${layers.length > 1 ? `<button class="x" data-del="${i + 1}" title="Etiketi kaldır" aria-label="${St.esc(L.name)} etiketini kaldır">×</button>` : ''}</li>`).join('');
     $('mkLayers').querySelectorAll('input[type=radio]').forEach(el => el.addEventListener('change', () => { cur = +el.value; setTool('paint', true); renderLayers(); }));
     $('mkLayers').querySelectorAll('.mk-name').forEach(el => el.addEventListener('change', () => {
@@ -242,7 +245,7 @@ window.Masks = (function () {
   function status() {
     renderLayers();
     const c = counts();
-    $('mkStat').textContent = msg || (active ? 'Katmanlara ayrıldı.' : c.some((x, i) => i && x) ? 'İşaretler hazır; "Ayır"a basın.' : '');
+    $('mkStat').textContent = msg || (active ? 'Katmanlara ayrıldı.' : c.some((x, i) => i && x) ? xl('İşaretler hazır; "Ayır"a basın.') : '');
     $('mkRun').disabled = !hasSeeds(); $('mkClear').disabled = !hasSeeds() && !active;
     msg = '';
   }
@@ -253,7 +256,7 @@ window.Masks = (function () {
       <p class="hint more">İşaretli parçalar planlama kemiğidir: kesi, rezeksiyon, vida ve guide yalnız bunlardan hesaplanır. Diğerleri silinmez, gizlenir; göz düğmesiyle açılıp kapanır.</p>
       <ul class="layers">` + (S.comps.map(c => { const sel = S.selected.has(c.label), on = ctxOn.has(c.label);
       return `<li class="lay"><label><input type="checkbox" data-l="${c.label}" ${sel ? 'checked' : ''}><i style="background:${hex(sel ? St.COLORS.bone : colorOf(c.label))}"></i>${St.esc(nameOf(c.label))}</label>
-        <span class="hu">${fmt(c.size * vox)} cm³ <button class="eye" data-eye="${c.label}" aria-pressed="${sel || on}" ${sel ? 'disabled title="Planlama kemiği her zaman görünür"' : `title="${on ? 'Gizle' : 'Göster'}"`} aria-label="${St.esc(nameOf(c.label))} ${on ? 'gizle' : 'göster'}"><svg class="i"><use href="#i-eye"/></svg></button></span></li>`; }).join('')
+        <span class="hu">${fmt(c.size * vox)} cm³ <button class="eye" data-eye="${c.label}" aria-pressed="${sel || on}" ${sel ? 'disabled title="Planlama kemiği her zaman görünür"' : `title="${on ? 'Gizle' : 'Göster'}"`} aria-label="${St.esc(nameOf(c.label))} ${xl(on ? 'gizle' : 'göster')}"><svg class="i"><use href="#i-eye"/></svg></button></span></li>`; }).join('')
       || '<li class="hint">Eşiğin üstünde yapı bulunamadı.</li>') + '</ul>';
     $('comps').querySelectorAll('input[data-l]').forEach(el => el.addEventListener('change', async () => {
       const l = +el.dataset.l;

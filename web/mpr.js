@@ -2,6 +2,7 @@
    bone, resected piece, lesion and guide contours (mesh ∩ slice), cut planes with their real slot width,
    screw paths, and a shared crosshair. Cut lines can be dragged on the slice to move the cut. */
 'use strict';
+var xl = s => (window.I18N ? I18N.t(s) : s);
 (function () {
   const St = window.Studio; if (!St) return;
   const S = St.S, V = St.V, $ = id => document.getElementById(id);
@@ -161,7 +162,7 @@
   function wlLabel(ctx, w, h, dpr) { label(ctx, `P ${Math.round(st.win.W)} · S ${Math.round(st.win.L)}`, 8 * dpr, h - 8 * dpr, '#8fa39b', dpr); }
   // overlays drawn by other modules (measurements, segmentation edits, reference lines)
   const overlayAPI = () => ({ toIdx, idxToImg, label, st, dims, contour, planeLine });
-  function label(ctx, t, x, y, col, dpr) { ctx.font = `${12 * dpr}px "IBM Plex Mono", monospace`; ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillText(t, x + dpr, y + dpr); ctx.fillStyle = col; ctx.fillText(t, x, y); }
+  function label(ctx, t, x, y, col, dpr) { t = xl(t); ctx.font = `${12 * dpr}px "IBM Plex Mono", monospace`; ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillText(t, x + dpr, y + dpr); ctx.fillStyle = col; ctx.fillText(t, x, y); }
 
   let raf = 0;
   function redraw() { if (raf) return; raf = requestAnimationFrame(() => { raf = 0; if (st.mode === '3d') return; VIEWS.forEach(v => { v.lines = []; if (!v.cell.hidden && v.canvas.clientWidth) draw(v); }); }); }
@@ -238,7 +239,7 @@
     const T = xf(v), w = toWorld(imgToIdx(v, T.ix(X), T.iy(Y))), q = V(...w), pw = St.planesWorld()[i], { u } = St.frameAxes();
     const un = u.dot(pw.N); if (Math.abs(un) < 0.2) return;
     const off = Math.round(q.clone().sub(S.anchor.p).dot(pw.N) / un * 2) / 2;
-    S.planes[i].off = Math.max(-30, Math.min(30, off)); St.unapprove(S.planes[i]);
+    S.planes[i].off = Math.max(-45, Math.min(45, off)); St.unapprove(S.planes[i]);
     St.emit('planeDragged', i); redraw();
   }
 
@@ -264,7 +265,7 @@
   function customWin() {
     const sel = $('win'); let o = sel.querySelector('option[value="custom"]');
     if (!o) { o = document.createElement('option'); o.value = 'custom'; sel.appendChild(o); }
-    o.textContent = `Özel (P ${Math.round(st.win.W)} / S ${Math.round(st.win.L)})`; sel.value = 'custom';
+    o.textContent = xl(`Özel (P ${Math.round(st.win.W)} / S ${Math.round(st.win.L)})`); sel.value = 'custom';
   }
   document.addEventListener('keydown', e => {
     if (/INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName) && document.activeElement.type !== 'range') return;

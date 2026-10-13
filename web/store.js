@@ -3,6 +3,7 @@
    hospital server (REST, /cases) > this page's own database (artifact db) > this browser (localStorage).
    Only plan JSON is stored, never image data. */
 'use strict';
+var xl = s => (window.I18N ? I18N.t(s) : s);
 (function () {
   const St = window.Studio; if (!St) return;
   const $ = id => document.getElementById(id), S = St.S;
@@ -85,7 +86,12 @@
   let autosave = true, dirty = false;
   try { autosave = localStorage.getItem('yolmed.autosave') !== '0'; } catch (e) {}
   const H = { list: [], idx: -1 };   // entries: {plan, label, at, cp}
-  ['pointerdown', 'keydown', 'input', 'change'].forEach(t => document.addEventListener(t, e => { if (e.isTrusted) userAt = performance.now(); }, true));
+  // a trusted gesture marks "the person did something": the next plan change becomes an undo step. Asking for an
+  // undo / redo (Ctrl+Z, Ctrl+Y, the arrows, a history row) is not such a gesture: the rebuilds that follow a restore
+  // are derived updates of the restored entry, and counting the key press would let them truncate the redo list.
+  const isHistGesture = e => (e.type === 'keydown' && (e.ctrlKey || e.metaKey) && /^[zy]$/i.test(e.key))
+    || (e.type === 'pointerdown' && e.target && e.target.closest && e.target.closest('#undo, #redo, #histList'));
+  ['pointerdown', 'keydown', 'input', 'change'].forEach(t => document.addEventListener(t, e => { if (e.isTrusted && !isHistGesture(e)) userAt = performance.now(); }, true));
   const setSave = (text, cls) => { $('saveState').textContent = text; $('stSave').textContent = text; $('saveState').style.color = cls === 'err' ? 'var(--crit)' : ''; };
   function renderCaseHead() {
     $('caseName').disabled = !!caseId;
@@ -106,7 +112,7 @@
   function diffObj(a, b, names, prefix, out) {
     const ch = Object.keys(names).filter(k => a[k] !== b[k]);
     ch.forEach(k => out.push(`${prefix}${prefix ? ' ' : ''}${names[k]} ${num(a[k], k)} → ${num(b[k], k)}`));
-    if (!ch.length && !!a.ok !== !!b.ok) out.push(`${prefix || 'Rezeksiyon sınırı'} ${b.ok ? 'onaylandı' : 'onayı kaldırıldı'}`);
+    if (!ch.length && !!a.ok !== !!b.ok) out.push(`${xl(prefix || 'Rezeksiyon sınırı')} ${xl(b.ok ? 'onaylandı' : 'onayı kaldırıldı')}`);
   }
   function describe(a, b) {
     if (!a || !b) return 'Başlangıç';
@@ -142,7 +148,9 @@
     const plan = St.planOf(), js = JSON.stringify(plan);
     if (js === lastJSON) return;
     // a user step: the person did something since the last snapshot (slow rebuilds can finish long after the click)
-    const user = forceUser || performance.now() - userAt < 5000 || userAt > lastSnap;
+    // after a restore (redo entries ahead) only a gesture made since the restore counts; the recency window would
+    // otherwise let a late derived rebuild swallow the redo list
+    const user = forceUser || userAt > lastSnap || (H.idx >= H.list.length - 1 && performance.now() - userAt < 5000);
     lastSnap = performance.now();
     lastJSON = js;
     if (H.idx < 0) { H.list = [entry(plan, 'Başlangıç')]; H.idx = 0; }
@@ -154,14 +162,29 @@
     updUndo();
     if (caseId || (user && H.list.length > 1)) changedPlan(plan);
   }
-  async function goTo(i) {
+  async function restoreAt(i) {
     if (i < 0 || i >= H.list.length || i === H.idx || S.restoring) return;
     H.idx = i; updUndo();
     await St.applyPlan(H.list[i].plan);
     lastJSON = JSON.stringify(St.planOf());
+    // the rebuilds that follow a restore (automatic body size from the built guide, a re-fit, the fibula guide) are
+    // derived updates of this entry, not new user steps: the key press that asked for the restore must not count as
+    // "the person did something since", or the first such update would truncate the redo list
+    userAt = -1e9; lastSnap = performance.now();
     if (caseId) changedPlan(H.list[i].plan);
   }
-  const step = d => goTo(H.idx + d);
+  // restores run one at a time; a step asked for while one is still rebuilding (a quick Ctrl+Z, Ctrl+Y) is kept and
+  // served right after it instead of being dropped
+  let going = null, want = null;
+  function goTo(i) {
+    i = +i;
+    if (going) { want = i; return going; }
+    return going = (async () => {
+      try { await restoreAt(i); while (want !== null) { const w = want; want = null; await restoreAt(w); } }
+      finally { going = null; want = null; }
+    })();
+  }
+  const step = d => goTo((want !== null ? want : H.idx) + d);
   const ago = t => { const s = (Date.now() - t) / 1000; return s < 50 ? 'şimdi' : s < 3600 ? `${Math.round(s / 60)} dk önce` : new Date(t).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }); };
   function renderHist() {
     const ul = $('histList'); if (!ul) return;
@@ -192,7 +215,7 @@
   async function ensureCase() {
     if (caseId) return caseId;
     const src = S.source || {};
-    caseName = $('caseName').value.trim() || `${src.type === 'sample' ? 'Örnek' : src.name || 'Vaka'} · ${new Date().toLocaleDateString('tr-TR')}`;
+    caseName = $('caseName').value.trim() || `${src.type === 'sample' ? 'Örnek' : src.name || 'Vaka'} · ${new Date().toLocaleDateString('tr-TR')}`; // i18n-skip: default case name is stored data
     const r = await backend.create({ name: caseName, kind: S.kind || '', fingerprint: src.fp || '' });
     caseId = r.id; remember(); renderCaseHead(); refreshList();
     return caseId;
@@ -230,7 +253,7 @@
     if (!backend) return;
     try {
       const list = await backend.list();
-      $('caseList').innerHTML = list.slice(0, 12).map(c => `<li data-id="${esc(c.id)}"><span class="meta"><span>${esc(c.name)}</span><small>${when(c.updated_at)} · ${c.n_versions || 0} sürüm</small></span><span class="act"><button data-open="${esc(c.id)}">Aç</button></span></li>`).join('') || '<li class="hint">Kayıtlı vaka yok.</li>';
+      $('caseList').innerHTML = list.slice(0, 12).map(c => `<li data-id="${esc(c.id)}"><span class="meta"><span>${esc(c.name)}</span><small>${when(c.updated_at)} · ${xl(`${c.n_versions || 0} sürüm`)}</small></span><span class="act"><button data-open="${esc(c.id)}">Aç</button></span></li>`).join('') || '<li class="hint">Kayıtlı vaka yok.</li>';
       $('caseList').querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => openCase(b.dataset.open)));
       markCurrent();
     } catch (e) { $('caseList').innerHTML = `<li class="err">Liste alınamadı: ${esc(e.message)}</li>`; }
@@ -256,7 +279,7 @@
 
   // ---------- versions ----------
   let lastVersionN = 0;
-  function versionLabel() { const e = H.list[H.idx]; if (e && e.cp) return 'Sürüm ' + e.cp; return lastVersionN ? `Taslak (son sürüm S${lastVersionN})` : 'Taslak'; }
+  function versionLabel() { const e = H.list[H.idx]; if (e && e.cp) return xl('Sürüm') + ' ' + e.cp; return lastVersionN ? `${xl('Taslak')} (${xl('son sürüm')} S${lastVersionN})` : xl('Taslak'); }
   function renderVersions(vs) {
     lastVersionN = vs.length ? vs[0].n : 0;
     $('verList').innerHTML = vs.map(v => `<li><span class="meta"><span>S${v.n}${v.note ? ' · ' + esc(v.note) : ''}</span><small>${esc(v.author || '–')} · ${when(v.created_at)}</small></span><span class="act"><button data-v="${v.n}">Yükle</button></span></li>`).join('') || (caseId ? '<li class="hint">Henüz sürüm yok.</li>' : '');
@@ -267,7 +290,7 @@
     try {
       await ensureCase(); await flush();
       const plan = St.planOf(), r = await backend.addVersion(caseId, { plan, note: note || '', author: plan.surgeon || '' });
-      $('verMsg').textContent = `Sürüm S${r.n} oluşturuldu.`; $('verNote').value = ''; dirty = false;
+      $('verMsg').textContent = `${xl('Sürüm')} S${r.n} ${xl('oluşturuldu.')}`; $('verNote').value = ''; dirty = false;
       if (H.idx >= 0) { H.list[H.idx].cp = `S${r.n}${note ? ' · ' + note : ''}`; renderHist(); }
       loadVersions(); refreshList();
     } catch (e) { $('verMsg').textContent = 'Sürüm oluşturulamadı: ' + e.message; }
@@ -277,8 +300,8 @@
       const v = await backend.getVersion(caseId, n);
       const ok = await St.openPlan(v.plan);
       if (!ok) return;
-      lastJSON = null; snapshot(`Sürüm S${n}${v.note ? ' · ' + v.note : ''} yüklendi`, true); changedPlan(St.planOf());
-      $('verMsg').textContent = `S${n} yüklendi ve taslak oldu. Geri almak için Ctrl+Z.`;
+      lastJSON = null; snapshot(`${xl('Sürüm')} S${n}${v.note ? ' · ' + v.note : ''} ${xl('yüklendi')}`, true); changedPlan(St.planOf());
+      $('verMsg').textContent = `S${n} ${xl('yüklendi ve taslak oldu. Geri almak için Ctrl+Z.')}`;
     } catch (e) { $('verMsg').textContent = 'Sürüm yüklenemedi: ' + e.message; }
   }
   $('verSave').addEventListener('click', () => saveVersion($('verNote').value.trim()));
