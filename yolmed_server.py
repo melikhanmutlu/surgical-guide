@@ -527,6 +527,15 @@ def build_guide(req):
     max_sleeve = max([float(s["sleeveH"]) for s in screws] or [0.0])
     lo = np.array([uc - L / 2 - 4, vc - W / 2 - 4 - ext_neg, -max(wrap + 10, 30) - max(0.0, L / 2 - 15) * 0.6])
     hi = np.array([uc + L / 2 + 4, vc + W / 2 + 4 + ext_pos, cw + max(max_sleeve, bridge) + 6])
+    # grow the box around both ends of every sleeve (a tilted or wide sleeve near an edge would otherwise be clipped and
+    # capped by the grid); grown by whole grid steps so the nodes stay where the preview puts them
+    for s in screws:
+        el = to_f(s["entry"])
+        ol = -(R.T @ _unit(s["dir"]))
+        m = float(s["D"]) / 2 + 2
+        for q in (el, el + ol * (cw + float(s["sleeveH"]))):
+            lo = np.where(q - m < lo, lo - np.ceil((lo - (q - m)) / r) * r, lo)
+            hi = np.where(q + m > hi, hi + np.ceil(((q + m) - hi) / r) * r, hi)
     A = (axes * sp[:, None]).T                          # columns: world step per crop i, j, k
     Ainv = np.linalg.inv(A)
     P = np.array([[0, 0, 1], [0, 1, 0], [1, 0, 0]], float)
