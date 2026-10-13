@@ -487,7 +487,7 @@ window.Fibula = (function () {
   // body (entry inside the body width, no deeper below the bone's top than the wrap), the drill enters bone and stays
   // in it for SCREW_MIN_DEPTH mm, the sleeve keeps SCREW_SLOT_GAP mm from every saw slot along the whole hole, and a
   // hole SCREW_CUT_GAP mm or more from the cut scores better (bone bridge between the hole and the osteotomy).
-  const SCREW_MIN_DEPTH = 4, SCREW_SLOT_GAP = 2, SCREW_CUT_GAP = 5, SLOT_REACH = 45, SCREW_TIGHT_GAP = 0.5;
+  const SCREW_MIN_DEPTH = 4, SCREW_SLOT_GAP = 2, SCREW_CUT_GAP = 5, SCREW_CUT_WARN = 3, SLOT_REACH = 45, SCREW_TIGHT_GAP = 0.5;
   function screwSite(c, f, pls, body, minGap = SCREW_SLOT_GAP) {
     const st = screwAt(c, f); if (!st.entry) return null;
     const { entry, dir } = st, n = F.c.FA[1], v = V().crossVectors(n, F.c.FA[0]).normalize(), cw = body.clear + body.wall;
@@ -706,16 +706,16 @@ window.Fibula = (function () {
     if (R) {
       const shortSeg = c.segs.some(g => g.L < MIN_LEN), ad = R.adapt;
       if (R.pieces > 1) out.push(['crit', 'Kritik', xl(`Fibula guide'ı ${R.pieces} parçaya bölünüyor.`) + (shortSeg ? ' ' + xl('Segment 20 mm\'den kısa: iki kesi yuvası arasında guide tutunamıyor; segmenti uzatın ya da segment sayısını azaltın.') : '')]);
-      if (R.seat && R.seat.ok && !R.seat.free) out.push(['crit', 'Kritik', ad ? xl(`Fibula guide'ı hiçbir yönde takılamıyor; sarma derinliği ${fmt(ad.from, 1)} mm'den ${fmt(ad.to, 1)} mm'ye indirildi, yine de takılamıyor.`) + (shortSeg ? ' ' + xl('Segment 20 mm\'den kısa; kesileri kısa tutmak guide\'ın oturmasını bozuyor.') : '') : xl('Fibula guide\'ı hiçbir yönde takılamıyor; sarma derinliği fazla.')]);
+      if (R.seat && R.seat.ok && !R.seat.free) out.push(['crit', 'Kritik', ad ? xl(`Fibula guide'ı hiçbir yönde takılamıyor; sarma derinliği ${fmt(ad.from, 1)} mm'den ${fmt(ad.to, 1)} mm'ye indirildi, yine de takılamıyor.`) + (shortSeg ? ' ' + xl('Segment 20 mm\'den kısa; kesileri kısa tutmak guide\'ın oturmasını bozuyor.') : '') : xl('Fibula guide\'ı hiçbir yönde takılamıyor; sarma derinliği fazla. Sarma derinliğini azaltın.')]);
       else if (ad && ad.ok) out.push(['info', 'Bilgi', `Fibula guide'ı takılabilsin diye sarma derinliği ${fmt(ad.from, 1)} mm'den ${fmt(ad.to, 1)} mm'ye indirildi.`]);
-      if (R.contact < 100) out.push(['warn', 'Uyarı', xl(`Fibula guide'ı temas alanı ${fmt(R.contact, 0)} mm²; oturma belirsiz olabilir.`)]);
+      if (R.contact < 100) out.push(['warn', 'Uyarı', xl(`Fibula guide'ı temas alanı ${fmt(R.contact, 0)} mm²; oturma belirsiz olabilir.`) + ' ' + xl('Sarmayı artırın ya da guide\'ı daha geniş bir kemik yüzeyine taşıyın.')]);
       R.screwInfo.forEach((si, i) => {
-        if (!si.ok) out.push(['crit', 'Kritik', si.noBody ? `Fibula vidası ${i + 1} altında guide gövdesi yok; kovan boşlukta kalırdı.` : xl(`Fibula vidası ${i + 1} kemiğe ulaşmıyor.`)]);
-        else if (si.crossesPlane) out.push(['crit', 'Kritik', `Fibula vidası ${i + 1} matkap yolu kesi yuvasıyla kesişiyor.`]);
-        else if (si.slotGap < 0.5) out.push(['warn', 'Uyarı', `Fibula vidası ${i + 1} kovanı kesi yuvasına ${fmt(Math.max(0, si.slotGap))} mm yaklaşıyor (en az 0,5 mm); testere yoluna değebilir.`]);
+        if (!si.ok) out.push(['crit', 'Kritik', si.noBody ? xl(`Fibula vidası ${i + 1} altında guide gövdesi yok; kovan boşlukta kalırdı.`) + ' ' + xl('Vidayı kaydırın ya da sarmayı artırın.') : xl(`Fibula vidası ${i + 1} kemiğe ulaşmıyor.`) + ' ' + xl('Vidayı kemiğin üstüne kaydırın.')]);
+        else if (si.crossesPlane) out.push(['crit', 'Kritik', xl(`Fibula vidası ${i + 1} matkap yolu kesi yuvasıyla kesişiyor.`) + ' ' + xl('Vidayı yuvadan uzaklaştırın.')]);
+        else if (si.slotGap < 0.5) out.push(['warn', 'Uyarı', xl(`Fibula vidası ${i + 1} kovanı kesi yuvasına ${fmt(Math.max(0, si.slotGap))} mm yaklaşıyor (en az 0,5 mm); testere yoluna değebilir.`) + ' ' + xl('Vidayı yuvadan uzaklaştırın.')]);
         // hole checks: bone along the hole, bone bridge to the cut (>= SCREW_CUT_GAP mm, our own inference)
-        if (si.ok && si.inBone < SCREW_MIN_DEPTH) out.push(['warn', 'Uyarı', `Fibula vidası ${i + 1} deliği boyunca yalnız ${fmt(si.inBone)} mm kemik var (en az ${SCREW_MIN_DEPTH} mm); vida tutmayabilir.`]);
-        if (si.ok && !si.crossesPlane && Number.isFinite(si.cutGap) && si.cutGap < SCREW_CUT_GAP) out.push(['warn', 'Uyarı', `Fibula vidası ${i + 1} deliği kesiye ${fmt(Math.max(0, si.cutGap))} mm (en az ${SCREW_CUT_GAP} mm önerilir); delik ile kesi arasındaki kemik köprüsü kırılabilir.`]);
+        if (si.ok && si.inBone < SCREW_MIN_DEPTH) out.push(['warn', 'Uyarı', `Fibula vidası ${i + 1} deliği boyunca yalnız ${fmt(si.inBone)} mm kemik var (en az ${SCREW_MIN_DEPTH} mm); vida tutmayabilir. Vidayı daha kalın kemiğe kaydırın.`]);
+        if (si.ok && !si.crossesPlane && Number.isFinite(si.cutGap) && si.cutGap < SCREW_CUT_GAP) out.push([si.cutGap < SCREW_CUT_WARN ? 'warn' : 'info', si.cutGap < SCREW_CUT_WARN ? 'Uyarı' : 'Bilgi', si.cutGap < SCREW_CUT_WARN ? `Fibula vidası ${i + 1} deliği kesiye ${fmt(Math.max(0, si.cutGap))} mm; ${SCREW_CUT_GAP} mm kesin kural değil, önerilen eşiktir, ${SCREW_CUT_WARN} mm altında kemik köprüsü kırılabilir. Vidayı kesiden uzaklaştırın.` : `Fibula vidası ${i + 1} deliği kesiye ${fmt(Math.max(0, si.cutGap))} mm; ${SCREW_CUT_GAP} mm önerilen bir eşiktir, kesin kural değildir. İsterseniz vidayı biraz uzaklaştırın.`]);
       });
       // fixation: two screws on a segment of STUMP_MIN mm or more, at least three on the guide (screws that hold: on bone, clear of the slots)
       const fsc = S.fib.guide.ctx.fsc || [], held = R.screwInfo.map(si => si.ok && !si.crossesPlane);

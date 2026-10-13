@@ -11,9 +11,9 @@
   const xl = s => (window.I18N ? I18N.t(s) : s);
   const COLORS = { bone: 0xddd5bd, resected: 0xd67850, guide: 0x3c82dc, fguide: 0x2a9d8f, screw: 0x8c959c, plane: 0xe0533d, anchor: 0x22a06b, lesion: 0x8e6fd6 };
   // busy indicator; long server jobs get a running bar, elapsed time and a cancel button
-  let busyTick = null, busyCancelFn = null;
+  let busyTick = null, busyCancelFn = null, pipeGuide = false;   // pipeGuide: the guide build is the last stage (4/4) of a bone rebuild
   const busy = (on, text, opt = {}) => {
-    $('busy').hidden = !on; if (text) $('busyText').textContent = text;
+    $('busy').hidden = !on; $('busy').setAttribute('aria-busy', on ? 'true' : 'false'); document.body.classList.toggle('is-busy', !!on); if (text) $('busyText').textContent = text;
     $('busyBar').hidden = !(on && opt.bar); $('busyBar').classList.remove('det'); $('busyBar').firstElementChild.style.width = ''; $('busyCancel').hidden = !(on && opt.cancel); busyCancelFn = on ? opt.cancel || null : null;
     clearInterval(busyTick);
     if (on && opt.bar) { const t0 = Date.now(); busyTick = setInterval(() => { $('busyText').textContent = `${xl(text)} ${xl(`${Math.round((Date.now() - t0) / 1000)} sn`)}${opt.max ? ' ' + xl(`/ en çok ${opt.max} sn`) : ''}`; }, 1000); }
@@ -29,7 +29,7 @@
   function loadBlocked() { if (!committing) return false; alertMsg('Önceki yükleme sürüyor; bitince yeniden deneyin.'); return true; }
   function progress(ctl) {
     const t0 = performance.now(); let last = -1e9;
-    clearInterval(busyTick); $('busy').hidden = false; $('busyBar').hidden = false; $('busyBar').classList.add('det'); $('busyCancel').hidden = !ctl;
+    clearInterval(busyTick); $('busy').hidden = false; $('busy').setAttribute('aria-busy', 'true'); document.body.classList.add('is-busy'); $('busyBar').hidden = false; $('busyBar').classList.add('det'); $('busyCancel').hidden = !ctl;
     busyCancelFn = ctl ? () => { ctl.cancelled = ctl.byUser = true; $('busyCancel').hidden = true; $('busyText').textContent = 'Yükleme iptal ediliyor…'; } : null;
     return async (f, text) => {
       if (ctl && ctl.cancelled) throw LOAD_CANCELLED;
@@ -380,7 +380,7 @@
   async function setVolumeNow(vol, label, kind) {
     $('caseMsg').hidden = true;
     S.vol = vol; S.kind = kind;
-    busy(true, 'Hacim küçültülüyor…'); await sleep();
+    busy(true, 'Hacim küçültülüyor… 1/4'); await sleep();
     S.red = G.reduce(vol, 0.8);
     $('caseInfo').innerHTML = `<dt>Vaka</dt><dd>${esc(label)}</dd><dt>Boyut</dt><dd>${vol.nx}×${vol.ny}×${vol.nz}</dd><dt>Voksel</dt><dd>${vol.sp.map(s => fmt(s, 2)).join(' × ')} mm</dd><dt>Çalışma ızgarası</dt><dd>${S.red.sp.map(s => fmt(s, 2)).join(' × ')} mm</dd>`;
     S.qcBase = qualityCheck(vol); S.segWarn = []; syncQC();
@@ -441,7 +441,7 @@
 
   // ---------- segmentation ----------
   async function segment(autoSelect) {
-    busy(true, 'Kemik segmentasyonu (eşik + bileşen ayırma)…'); await sleep();
+    busy(true, 'Kemik ayrılıyor… 2/4'); await sleep();
     const r = S.red, thr = +$('thr').value;
     const m = G.threshold(r, thr);
     const { labels, comps, count } = G.components(m, r.nx, r.ny, r.nz, 200);
@@ -450,7 +450,7 @@
     // a head CT's threshold mask is one piece (skull + upper jaw + mandible + spine): cut it at its thin necks and take
     // the piece that is built like a mandible; when none is, keep the largest and say so (see segChecks)
     if (window.Bones && Bones.assess(r, labels, comps).cut) {
-      busy(true, 'Bitişik kemikler ayrılıyor (kafatası, çene, omurga)…'); await sleep();
+      busy(true, 'Bitişik kemikler ayrılıyor (kafatası, çene, omurga)… 2/4'); await sleep();
       const res = S.segInfo = Bones.pickMandible(r, labels, comps, count);
       if (res.status === 'split') {
         pick = res.picked; S.comps = res.comps.slice(0, 8);
@@ -496,7 +496,7 @@
     }
   }
   async function rebuildBone(frame) {
-    busy(true, 'Yüzey modeli oluşturuluyor…'); await sleep();
+    busy(true, 'Yüzey modeli oluşturuluyor… 3/4'); await sleep();
     const r = S.red, m = new Uint8Array(S.labels.length);
     for (let i = 0; i < m.length; i++) m[i] = S.selected.has(S.labels[i]) ? 1 : 0;
     if (window.SegEdit) SegEdit.applyTo(m);
@@ -504,8 +504,8 @@
     S.segWarn = segChecks(); syncQC();
     await rebuildResection();
     if (frame && parts.bone) fitTo(parts.bone.obj);
-    if (S.kind && !S.anchor && S.autoAnchor !== false) presetCase();
-    else if (S.anchor) await regenerate();
+    pipeGuide = true;
+    try { if (S.kind && !S.anchor && S.autoAnchor !== false) presetCase(); else if (S.anchor) await regenerate(); } finally { pipeGuide = false; }
     busy(false); render(); emit('bone');
   }
   const toWorldRed = (x, y, z) => G.worldOf(S.red, x, y, z);
@@ -674,8 +674,8 @@
   async function makeGuide() {
     if (!S.anchor || !S.planes.length) { alertMsg('Önce kesileri belirleyin.'); return; }
     S.guideOn = true; placeScrews(); S.sel = null;
-    busy(true, 'Rezeksiyon güncelleniyor…'); await sleep(); await rebuildResection();
-    busy(true, 'Guide oluşturuluyor…'); await sleep();
+    busy(true, 'Rezeksiyon güncelleniyor… 1/2'); await sleep(); await rebuildResection();
+    busy(true, 'Guide oluşturuluyor… 2/2'); await sleep();
     const f = await fitWrap();
     $('guideStat').textContent = !f ? '' : !f.ok ? 'Guide bu yerleşimde takılamıyor; kesileri ya da ayarları kontrol edin.'
       : `Guide hazır · ${S.screws.length} vida` + (f.split ? (S.g.split === 2 && S.g.bar ? ' · iki guide + bağlantı köprüsü' : S.g.split === 2 ? ' · iki parça, her kesi kendi ekseninde (açı bölgesi)' : ' · iki parça (kavisli kemik)') : '') + (f.wrap < (S.kind === 'leg' ? 6 : 5) ? ` · sarma ${fmt(f.wrap, 1)} mm'ye indirildi` : '');
@@ -861,7 +861,7 @@
   const SLOT_REACH = 45, CUT_OFF_MAX = 80, PIECE_RUN = 24, CUT_ALONG_DEG = 60;
   const SCREW_CREST_TOL = 6, SCREW_SLOT_GAP = 2, SCREW_MIN_DEPTH = 4, SCREW_GAP_MIN = 5, SCREW_GAP_MAX = 15, SCREW_GAP_FAR = 22, SCREW_CORE_R = 1.5, L_MAX = 160;
   // a screw hole closer than this to the osteotomy plane leaves a thin bone bridge that can break (checks only, a warning)
-  const SCREW_CUT_GAP = 5;
+  const SCREW_CUT_GAP = 5, SCREW_CUT_WARN = 3;   // 5 mm = recommended bone bridge (info below it); a warning only under 3 mm
   // wrap depth at uu from a per-position profile ([[uu, depth], ...]) capped by the global value, as buildGuide's wrapOf
   function wrapAtU(wrap, pr, uu) {
     if (!pr || !pr.length) return wrap;
@@ -2107,7 +2107,7 @@
       return;
     }
     const ver = live.ver;
-    busy(true, 'Guide üretiliyor…'); await sleep();
+    busy(true, pipeGuide ? 'Guide üretiliyor… 4/4' : 'Guide üretiliyor…'); await sleep();
     const pls = planesWorld(), scs = screwsWorld();
     const out = await buildGuideSet(Object.assign({ g: S.g, P: S.anchor.p, pls, scs, bone: boneAt, field: boneField }, frameAxes()));
     if (ver < live.shown) { disposeObj(out.mesh); if (out.barMesh) disposeObj(out.barMesh); return; }
@@ -2326,17 +2326,17 @@
       const wr = st.worstRot;
       if (wr.r < 0.05) out.push(['warn', 'Uyarı', wr.axis === 'u' ? `Guide kemik ekseni etrafında dönebilir: temasın yalnız %${fmt(wr.r * 100, 0)}'i direnç gösteriyor.` : wr.axis === 'v' ? `Guide yanal eksen etrafında dönebilir: temasın yalnız %${fmt(wr.r * 100, 0)}'i direnç gösteriyor.` : `Guide oturma ekseni etrafında dönebilir: temasın yalnız %${fmt(wr.r * 100, 0)}'i direnç gösteriyor.`, 'guide']);
     } else if (R.undercut > 4) out.push(['crit', 'Kritik', `Guide kemiğin altına sarıyor (${fmt(R.undercut, 0)} mm² alttan kesik); oturtulup çıkarılamaz. Sarma derinliğini azaltın.`, 'guide']);
-    if (R.contact < 150) out.push(['warn', 'Uyarı', `Temas alanı ${fmt(R.contact, 0)} mm²; oturma belirsiz olabilir (örnek eşik 150 mm²).`, 'guide']);
+    if (R.contact < 150) out.push(['warn', 'Uyarı', `Temas alanı ${fmt(R.contact, 0)} mm²; oturma belirsiz olabilir (örnek eşik 150 mm²). Sarmayı artırın ya da guide'ı daha geniş bir kemik yüzeyine taşıyın.`, 'guide']);
     R.screwInfo.forEach((si, i) => {
       if (!si.ok && si.noBody) out.push(['crit', 'Kritik', `Vida ${i + 1} altında guide gövdesi yok: kemik girişi guide'ın sarma sınırının ${fmt(Math.max(0, -(si.depth || 0)), 1)} mm altında ya da gövdenin dışında; kovan boşlukta kalırdı. Vidayı kaydırın ya da sarmayı artırın.`, 's' + i]);
-      else if (!si.ok) out.push(['crit', 'Kritik', `Vida ${i + 1} kemiğe ulaşmıyor.`, 's' + i]);
+      else if (!si.ok) out.push(['crit', 'Kritik', `Vida ${i + 1} kemiğe ulaşmıyor; vidayı kemiğin üstüne kaydırın.`, 's' + i]);
       else {
-        if (si.crossesPlane) out.push(['crit', 'Kritik', `Vida ${i + 1} matkap yolu (Ø${fmt(si.s.sc.d)}) kesi yuvasıyla kesişiyor.`, 's' + i]);
-        else if (si.slotGap < 0.5) out.push(['warn', 'Uyarı', `Vida ${i + 1} kovanı (Ø${fmt(si.s.sc.D)}) kesi yuvasına ${fmt(Math.max(0, si.slotGap))} mm yaklaşıyor (en az 0,5 mm); testere yoluna değebilir.`, 's' + i]);
-        if (si.exitAt !== null && si.exitAt < si.s.sc.len) out.push(['warn', 'Uyarı', `Vida ${i + 1} ${fmt(si.exitAt)} mm'de kemikten çıkıyor (bikortikal mi?).`, 's' + i]);
+        if (si.crossesPlane) out.push(['crit', 'Kritik', `Vida ${i + 1} matkap yolu (Ø${fmt(si.s.sc.d)}) kesi yuvasıyla kesişiyor; vidayı yuvadan uzaklaştırın.`, 's' + i]);
+        else if (si.slotGap < 0.5) out.push(['warn', 'Uyarı', `Vida ${i + 1} kovanı (Ø${fmt(si.s.sc.D)}) kesi yuvasına ${fmt(Math.max(0, si.slotGap))} mm yaklaşıyor (en az 0,5 mm); testere yoluna değebilir. Vidayı yuvadan uzaklaştırın.`, 's' + i]);
+        if (si.exitAt !== null && si.exitAt < si.s.sc.len) out.push(['warn', 'Uyarı', `Vida ${i + 1} ${fmt(si.exitAt)} mm'de kemikten çıkıyor, seçilen boydan kısa; vida boyunu kısaltın ya da vidayı kaydırın.`, 's' + i]);
         // hole checks: bone along the hole, and the bone bridge between the hole and the cut (>= SCREW_CUT_GAP, our own inference)
-        if (si.inBone < SCREW_MIN_DEPTH) out.push(['warn', 'Uyarı', `Vida ${i + 1} deliği boyunca yalnız ${fmt(si.inBone)} mm kemik var (en az ${SCREW_MIN_DEPTH} mm); vida tutmayabilir.`, 's' + i]);
-        if (!si.crossesPlane && Number.isFinite(si.cutGap) && si.cutGap < SCREW_CUT_GAP) out.push(['warn', 'Uyarı', `Vida ${i + 1} deliği kesiye ${fmt(Math.max(0, si.cutGap))} mm (en az ${SCREW_CUT_GAP} mm önerilir); delik ile kesi arasındaki kemik köprüsü kırılabilir.`, 's' + i]);
+        if (si.inBone < SCREW_MIN_DEPTH) out.push(['warn', 'Uyarı', `Vida ${i + 1} deliği boyunca yalnız ${fmt(si.inBone)} mm kemik var (en az ${SCREW_MIN_DEPTH} mm); vida tutmayabilir. Vidayı daha kalın kemiğe kaydırın.`, 's' + i]);
+        if (!si.crossesPlane && Number.isFinite(si.cutGap) && si.cutGap < SCREW_CUT_GAP) out.push([si.cutGap < SCREW_CUT_WARN ? 'warn' : 'info', si.cutGap < SCREW_CUT_WARN ? 'Uyarı' : 'Bilgi', si.cutGap < SCREW_CUT_WARN ? `Vida ${i + 1} deliği kesiye ${fmt(Math.max(0, si.cutGap))} mm; ${SCREW_CUT_GAP} mm kesin kural değil, önerilen eşiktir, ${SCREW_CUT_WARN} mm altında kemik köprüsü kırılabilir. Vidayı kesiden uzaklaştırın.` : `Vida ${i + 1} deliği kesiye ${fmt(Math.max(0, si.cutGap))} mm; ${SCREW_CUT_GAP} mm önerilen bir eşiktir, kesin kural değildir. İsterseniz vidayı biraz uzaklaştırın.`, 's' + i]);
         if (si.shadowed) out.push(['warn', 'Uyarı', `Vida ${i + 1} kovanının %${fmt(si.shadowed * 100, 0)}'i takma yönünde kemiğin gölgesine girer; o kısım bırakıldı. Vidayı kaydırın ya da eğimini azaltın.`, 's' + i]);
       }
     });
@@ -3110,7 +3110,9 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   async function productionSTL() {
     if (!parts.guide || !S.anchor) return;
     const ac = new AbortController();
-    busy(true, 'Sunucuda üretim STL\'i hazırlanıyor…', { bar: true, cancel: () => ac.abort(), max: 180 }); await sleep();
+    const nSt = 1 + (S.result && S.result.bar && S.result.bar.ok ? 1 : 0) + (S.fib && S.fib.guide && window.Fibula ? 1 : 0), bo = { bar: true, cancel: () => ac.abort(), max: 180 };
+    let stN = 0; const stage = t => busy(true, `${t} ${++stN}/${nSt}`, bo);
+    stage('Sunucuda üretim STL\'i hazırlanıyor…'); await sleep();
     try {
       let r;
       if (S.result && S.result.parts && S.result.parts.length === 2) {
@@ -3120,11 +3122,12 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
         r = { stl: mergeStl(rs[0].stl, rs[1].stl), watertight: rs.every(x => x.watertight), bodies: rs.reduce((s, x) => s + x.bodies, 0), volume: rs.reduce((s, x) => s + x.volume, 0), faces: rs.reduce((s, x) => s + x.faces, 0), ms: rs.reduce((s, x) => s + x.ms, 0) };
       } else r = await serverGuide(Object.assign({ vol: S.vol, red: S.red, F: S.maskF, thr: segThr(), g: S.g, P: S.anchor.p, pls: planesWorld(), scs: screwsWorld(), wrapProfile: S.result && S.result.wrapProfile, seatDir: S.result && S.result.seatDir }, frameAxes()), ac.signal);
       // the connecting bar: a separate part, its own server call (exact solids; the server also measures its bone clearance)
+      if (S.result && S.result.bar && S.result.bar.ok) stage('Sunucuda bağlantı köprüsü hazırlanıyor…');
       if (S.result && S.result.bar && S.result.bar.ok) r.bar = await serverBar(S.result.bar.spec, ac.signal);
       S.prod = Object.assign(r, { key: prodKey() });
       $('prodMsg').textContent = `${xl("Üretim STL'i hazır:")} ${r.watertight ? xl('su geçirmez') : xl('SU GEÇİRMEZ DEĞİL')}, ${xl(`${r.bodies} parça`)}${r.bodies > (S.g.split ? 2 : 1) ? ' ' + xl("(BEKLENENDEN FAZLA PARÇA, guide'ı kontrol edin)") : ''}, ${fmt(r.volume / 1000, 2)} cm³, ${xl(`${r.faces} üçgen`)}. ${xl('Pakete guide_uretim.stl olarak eklenir.')}`;
       if (r.bar) $('prodMsg').textContent += ` ${xl("Köprü STL'i:")} ${r.bar.watertight ? xl('su geçirmez') : xl('SU GEÇİRMEZ DEĞİL')}${r.bar.clear != null ? ', ' + xl(`kemiğe en yakın ${fmt(r.bar.clear)} mm`) : ''}. ${xl('Pakete kopru_uretim.stl olarak eklenir.')}`;
-      if (S.fib && S.fib.guide && window.Fibula && !ac.signal.aborted) try { await Fibula.production(ac.signal); } catch (e) { $('prodMsg').textContent += ` Fibula guide'ı: ${e.message}`; }
+      if (S.fib && S.fib.guide && window.Fibula && !ac.signal.aborted) try { stage('Sunucuda fibula guide\'ı hazırlanıyor…'); await Fibula.production(ac.signal); } catch (e) { $('prodMsg').textContent += ` Fibula guide'ı: ${e.message}`; }
     } catch (e) { S.prod = null; $('prodMsg').textContent = e.message; }
     busy(false);
   }
