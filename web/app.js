@@ -803,6 +803,8 @@
     if (S.g.split === 2 && sc.part) { const f = pieceFrames(); if (f) return sc.part < 0 ? f.a : f.b; }
     return Object.assign({ P: S.anchor.p }, frameAxes());
   }
+  // the drill direction of a screw: down the frame normal, tilted by tiltU about v and tiltV about u
+  function screwDir(sc) { const { u, v, n } = screwFrame(sc); return n.clone().negate().applyAxisAngle(v, deg(sc.tiltU)).applyAxisAngle(u, deg(sc.tiltV)).normalize(); }
   function screwWorld(sc) {
     const { P, u, v, n } = screwFrame(sc);
     {
@@ -858,8 +860,8 @@
   // of one cut passes the bone of the other side far from it. Screws keep their distance from a slot plane within
   // SLOT_REACH mm of the slot (in the plane), which covers the bone section the saw goes through (the cut-miss test
   // samples ±W/2 + 6 mm across and 45 mm down)
-  const SLOT_REACH = 45, CUT_OFF_MAX = 80, PIECE_RUN = 24, CUT_ALONG_DEG = 60;
-  const SCREW_CREST_TOL = 6, SCREW_SLOT_GAP = 2, SCREW_MIN_DEPTH = 4, SCREW_GAP_MIN = 5, SCREW_GAP_MAX = 15, SCREW_GAP_FAR = 22, SCREW_CORE_R = 1.5, L_MAX = 160;
+  const SLOT_REACH = 45, CUT_OFF_MAX = 80, PIECE_GAIN = 20, PIECE_TURN = 70, CUT_STEEP = 0.83, CUT_ALONG_DEG = 60;
+  const SCREW_CREST_TOL = 6, SCREW_SLOT_GAP = 2, SCREW_MIN_DEPTH = 4, SCREW_GAP_MIN = 5, SCREW_GAP_MAX = 15, SCREW_GAP_FAR = 22, SCREW_GAP_BACK = 12, SCREW_CORE_R = 1.5, L_MAX = 160;
   // a screw hole closer than this to the osteotomy plane leaves a thin bone bridge that can break (checks only, a warning)
   const SCREW_CUT_GAP = 5, SCREW_CUT_WARN = 3;   // 5 mm = recommended bone bridge (info below it); a warning only under 3 mm
   // wrap depth at uu from a per-position profile ([[uu, depth], ...]) capped by the global value, as buildGuide's wrapOf
@@ -888,8 +890,13 @@
     body.cache.set(key, ok);
     return ok;
   }
-  function evalScrew(sc, pls, body, E, why) {
-    const s = screwWorld(sc); if (!s.entry) { if (why) why.noBone++; return null; }
+  // thin: the graded fallback for thin bone (the upper ramus, a narrow chin): the plate is drilled through, so the core
+  // ring is only asked to stay in bone while the drill axis does (that run at least SCREW_MIN_DEPTH mm), not over the
+  // first 6 mm whatever the bone's thickness. Also returns cutGap: the bone bridge between the hole (radius d/2) and
+  // the nearest osteotomy plane over the part of the hole in bone, as buildGuide measures it for the checks.
+  // (entry: the screw's entry when the caller already has it; it depends on u, v and the frame only, not on the tilt)
+  function evalScrew(sc, pls, body, E, why, thin = false, entry) {
+    const s = entry !== undefined ? { sc, dir: screwDir(sc), entry } : screwWorld(sc); if (!s.entry) { if (why) why.noBone++; return null; }
     let below = 0;
     if (body) {
       const depth = s.entry.clone().sub(body.frame.P).dot(body.frame.n);
@@ -899,22 +906,32 @@
     // solid core: a ring of SCREW_CORE_R about the drill axis stays in bone over the first millimetres past the entry,
     // which a ray running along a surface turned away from the guide does not give
     const q = V(), d = V(), pa = Math.abs(s.dir.z) < 0.9 ? V(0, 0, 1) : V(1, 0, 0), ea = V().crossVectors(pa, s.dir).normalize(), eb = V().crossVectors(s.dir, ea).normalize();
+    let coreTo = Math.min(sc.len, 6);
+    if (thin) {
+      let run = 0; while (run + 0.25 <= sc.len && boneAt(q.copy(s.entry).addScaledVector(s.dir, run + 0.25))) run += 0.25;
+      if (run < SCREW_MIN_DEPTH) { if (why) why.shallow++; return null; }
+      coreTo = Math.min(coreTo, run - 0.75);
+    }
     let core = 0, coreN = 0;
-    for (let t = 1.5; t <= Math.min(sc.len, 6); t += 0.75) for (const [a, b] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    for (let t = 1.5; t <= coreTo; t += 0.75) for (const [a, b] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
       q.copy(s.entry).addScaledVector(s.dir, t).addScaledVector(ea, a * SCREW_CORE_R).addScaledVector(eb, b * SCREW_CORE_R); coreN++; if (boneAt(q)) core++;
     }
-    if (core < 0.85 * coreN) { if (why) why.shallow++; return null; }
-    let inBone = 0, slotGap = Infinity, res = false;
+    if (!coreN || core < 0.85 * coreN) { if (why) why.shallow++; return null; }
+    let inBone = 0, slotGap = Infinity, cutGap = Infinity, res = false;
     for (let t = 0; t <= sc.len; t += 0.25) {
       q.copy(s.entry).addScaledVector(s.dir, t);
-      if (boneAt(q)) { inBone += 0.25; if (!res && resectedAt(q, E, SCREW_SLOT_GAP)) res = true; }
-      for (const pw of pls) { d.copy(q).sub(pw.pSlot || pw.p); const a = d.dot(pw.N); if (d.lengthSq() - a * a > SLOT_REACH * SLOT_REACH) continue; slotGap = Math.min(slotGap, Math.abs(a) - pw.w / 2 - sc.D / 2); }
+      const bone = boneAt(q);
+      if (bone) { inBone += 0.25; if (!res && resectedAt(q, E, SCREW_SLOT_GAP)) res = true; }
+      for (const pw of pls) {
+        d.copy(q).sub(pw.pSlot || pw.p); const a = d.dot(pw.N); if (d.lengthSq() - a * a > SLOT_REACH * SLOT_REACH) continue; slotGap = Math.min(slotGap, Math.abs(a) - pw.w / 2 - sc.D / 2);
+        if (bone) cutGap = Math.min(cutGap, Math.abs(d.copy(q).sub(pw.p).dot(pw.N)) - sc.d / 2);
+      }
     }
     if (res) { if (why) why.resected++; return null; }
     if (slotGap < SCREW_SLOT_GAP) { if (why) why.nearSlot++; return null; }
     if (inBone < SCREW_MIN_DEPTH) { if (why) why.shallow++; return null; }
     inBone = Math.min(inBone, sc.len);
-    return { inBone, slotGap, score: 10 * inBone - 0.15 * (Math.abs(sc.tiltU) + Math.abs(sc.tiltV)) - 1.0 * below };
+    return { inBone, slotGap, cutGap, score: 10 * inBone - 0.15 * (Math.abs(sc.tiltU) + Math.abs(sc.tiltV)) - 1.0 * below };
   }
   function screwScore(sc, pls, body) { const r = evalScrew(sc, pls, body || null, resEnds(), null); return r ? r.score : -Infinity; }
   // the reason no screw position was found: the furthest stage any candidate reached in evalScrew (a lane off the bone
@@ -934,7 +951,15 @@
   // and tilts (±20°), each judged by evalScrew; a position nearer the cut and the lane wins a tie. Straight screws are
   // tried first; when none fits, tilted ones over the whole grid; when still none, up to SCREW_GAP_FAR mm from the slot.
   // `taken` = screws already there (hand-set or placed before), kept clear by D + 1 mm. Returns the screw or null.
-  function bestScrew(def, uAt, side, scale, vLane, vc, lim, pls, body, E, taken, why, extra = {}) {
+  // Graded: the stages above keep a bone bridge of SCREW_CUT_GAP mm between the hole and the osteotomy (measured on
+  // the drill path in bone, as the checks measure it); when no position past the cut has that, one with at least
+  // SCREW_CUT_WARN mm (3-4 mm from the slot edge included; the checks add a note), then any the slot clearance allows
+  // (the checks warn). On thin bone (the upper ramus, a narrow chin), where no straight or tilted drill keeps the core
+  // ring in bone over 6 mm, the plate is drilled through (evalScrew thin) with the same order of bridges.
+  // (cut: the slot this screw holds past, when known: on a cut pitched against the frame the slot edge on the bone
+  // lies well before or after uAt, which is measured in the frame plane, so positions from SCREW_GAP_BACK mm before it are
+  // tried too, every one with its entry on the kept side of the slot)
+  function bestScrew(def, uAt, side, scale, vLane, vc, lim, pls, body, E, taken, why, extra = {}, cut = null) {
     const mk = (uu, vv, tu, tv) => Object.assign({ u: uu, v: vv, tiltU: tu, tiltV: tv, ok: false }, def, extra);
     const blocked = S.screwBlocked || [];
     const clear = sc => taken.every(o => (o.part || 0) !== (sc.part || 0) || Math.hypot(o.u - sc.u, o.v - sc.v) >= Math.max(o.D, sc.D) + 1)
@@ -942,25 +967,42 @@
     const pen = (dist, vv) => Math.max(0, dist - 7) + 0.3 * Math.abs(vv - vLane);
     const tilts = [[0, 0]], more = [];
     for (let tu = -20; tu <= 20; tu += 10) for (let tv = -20; tv <= 20; tv += 10) if (tu || tv) more.push([tu, tv]);
-    const grid = (d0, d1, tl, w) => {
+    // the entry depends on (u, v) only: found once per position (a column that meets no bone skips every tilt)
+    const entries = new Map(), entryAt = (uu, vv) => { const k = uu + '|' + vv; if (!entries.has(k)) entries.set(k, screwWorld(mk(uu, vv, 0, 0)).entry); return entries.get(k); };
+    const seen = new Map(), kIn = cut && cut.keep, kept = e => !kIn || e.clone().sub(cut.pSlot || cut.p).dot(kIn) >= cut.w / 2 + def.d / 2;
+    const grid = (d0, d1, tl, w, thin = false, dstep = 1, vstep = 1) => {
       const out = [];
-      for (let dist = d0; dist <= d1; dist += 1) for (let k = -Math.floor(lim); k <= Math.floor(lim); k++) for (const [tu, tv] of tl) {
+      for (let dist = d0; dist <= d1; dist += dstep) for (let k = -Math.floor(lim); k <= Math.floor(lim); k += vstep) for (const [tu, tv] of tl) {
         const vv = vc + k, uu = Math.round((uAt(vv) + side * dist * scale) * 2) / 2, sc = mk(uu, vv, tu, tv);
+        const key = [uu, vv, tu, tv, thin ? 1 : 0].join('|'); if (seen.has(key)) continue; seen.set(key, 1);
         if (!clear(sc)) continue;
-        const r = evalScrew(sc, pls, body, E, w); if (r) out.push({ sc, score: r.score - pen(dist, vv), dist });
+        const e = entryAt(uu, vv); if (e && !kept(e)) continue;
+        const r = evalScrew(sc, pls, body, E, w, thin, e); if (r) out.push({ sc, r, score: r.score - pen(Math.abs(dist), vv), dist, thin });
       }
-      return out.sort((a, b) => b.score - a.score);
+      return out;
     };
-    let first = grid(SCREW_GAP_MIN, SCREW_GAP_MAX, tilts, why);
+    // the best candidate whose bridge is at least gMin
+    const pick = (cands, gMin) => cands.filter(c => c.r.cutGap >= gMin).sort((a, b) => b.score - a.score);
     // (every stage counts towards the reason reported when nothing fits: the furthest any candidate got)
-    if (!first.length) first = grid(SCREW_GAP_MIN, SCREW_GAP_MAX, more, why);
-    if (!first.length) first = grid(SCREW_GAP_MAX + 1, SCREW_GAP_FAR, tilts.concat(more), why);
+    let all = grid(SCREW_GAP_MIN, SCREW_GAP_MAX, tilts, why), gMin = SCREW_CUT_GAP, first = pick(all, gMin);
+    if (!first.length) { all = all.concat(grid(SCREW_GAP_MIN, SCREW_GAP_MAX, more, why)); first = pick(all, gMin); }
+    if (!first.length) { all = all.concat(grid(SCREW_GAP_MAX + 1, SCREW_GAP_FAR, tilts.concat(more), why)); first = pick(all, gMin); }
+    // a pitched cut: the bone past it may start before the slot edge in the frame plane
+    if (!first.length && kIn) { all = all.concat(grid(-SCREW_GAP_BACK, SCREW_GAP_MIN - 1, tilts.concat(more), why)); first = pick(all, gMin); }
+    // a narrower bone bridge: 3-5 mm (the checks note it), then whatever clears the slot (the checks warn)
+    if (!first.length) { if (!kIn) all = all.concat(grid(SCREW_CUT_WARN, SCREW_GAP_MIN - 1, tilts.concat(more), why)); gMin = SCREW_CUT_WARN; first = pick(all, gMin); }
+    if (!first.length) { gMin = -Infinity; first = pick(all, gMin); }
+    // thin bone, drilled through
+    if (!first.length) {
+      const th = grid(kIn ? -SCREW_GAP_BACK : SCREW_CUT_WARN, SCREW_GAP_FAR, tilts.concat(more), why, true, 1, 2);
+      for (const g of [SCREW_CUT_GAP, SCREW_CUT_WARN, -Infinity]) { first = pick(th, g); if (first.length) { gMin = g; break; } }
+    }
     let best = first[0] || null;
-    // fine tilt around the best few
+    // fine tilt around the best few (same bridge and bone test as the stage that found them)
     for (const c of first.slice(0, 5)) for (let tu = -20; tu <= 20; tu += 5) for (let tv = -20; tv <= 20; tv += 5) {
       if (tu === c.sc.tiltU && tv === c.sc.tiltV) continue;
-      const sc = mk(c.sc.u, c.sc.v, tu, tv), r = evalScrew(sc, pls, body, E, null);
-      if (r && r.score - pen(c.dist, sc.v) > best.score) best = { sc, score: r.score - pen(c.dist, sc.v), dist: c.dist };
+      const sc = mk(c.sc.u, c.sc.v, tu, tv), r = evalScrew(sc, pls, body, E, null, c.thin, entryAt(c.sc.u, c.sc.v));
+      if (r && r.cutGap >= gMin && r.score - pen(c.dist, sc.v) > best.score) best = { sc, score: r.score - pen(c.dist, sc.v), dist: c.dist };
     }
     return best ? best.sc : null;
   }
@@ -1074,7 +1116,8 @@
     updateLesionPart(); schedule(true);
   }
   // Screws outside the two outer cuts (one or two per side, 'Vida / taraf'), each where the drill reaches the most bone
-  // (bestScrew: along the axis 5-15 mm past the slot, across the body, tilted up to 20°), never on the resected side,
+  // (bestScrew: along the axis 5-15 mm past the slot, across the body, tilted up to 20°, then the graded fallbacks:
+  // further out, before the frame-plane slot edge on a pitched cut, a 3-5 mm bone bridge, thin bone), never on the resected side,
   // never within 2 mm of a slot. A side with no usable position gets no screw and a critical check says why
   // (S.screwDrops). Screws the surgeon placed or moved (sc.hand) are kept and the automatic ones fill up around them.
   // The guide is made long enough to hold the screws and the slots (up to L_MAX, from the plan, no fixed 100 mm).
@@ -1113,7 +1156,7 @@
       const have = out.filter(sc => Math.sign(sc.u - uAt(sc.v)) === side).length;
       for (let k = have; k < perEnd; k++) {
         const why = { noBone: 0, noBody: 0, resected: 0, nearSlot: 0, shallow: 0 };
-        const best = bestScrew(def, uAt, side, scale, lanes[k % lanes.length], vc, lim, pls, body, E, out, why);
+        const best = bestScrew(def, uAt, side, scale, lanes[k % lanes.length], vc, lim, pls, body, E, out, why, {}, { p: pw.p, pSlot: pw.pSlot, w: pw.w, keep: pw.N.clone().multiplyScalar(Math.sign(pw.N.dot(u) * side) || side) });
         if (best) out.push(best); else S.screwDrops.push({ cut: Math.max(0, S.planes.indexOf(pw.pl)), side, why: screwWhy(why) });
       }
     }
@@ -1162,7 +1205,7 @@
       const have = out.filter(sc => sc.part === part).length;
       for (let k = have; k < per; k++) {
         const why = { noBone: 0, noBody: 0, resected: 0, nearSlot: 0, shallow: 0 };
-        const best = bestScrew(def, uAt, 1, scale, lanes[k % lanes.length], pb.vc, lim, pls, pb.body, E, out, why, { part });
+        const best = bestScrew(def, uAt, 1, scale, lanes[k % lanes.length], pb.vc, lim, pls, pb.body, E, out, why, { part }, { p: cut.p, pSlot: cut.pSlot, w: cut.w, keep: cut.N.clone().multiplyScalar(Math.sign(c) || 1) });
         if (best) out.push(best); else S.screwDrops.push({ cut: Math.max(0, S.planes.indexOf(cut.pl)), side: part, why: screwWhy(why) });
       }
     }
@@ -1767,12 +1810,18 @@
     // buccal face the body is wrapped from, as buildGuide measures its wrap from the bone's top), nearer the guide
     // axis on a near tie; a point on the rounded lower border or up on the alveolar slope would give the piece a
     // normal turned away from the face its screws must enter.
+    // (a cut turned far from the guide axis, as one across the chin for a guide on the body, can have the guide normal
+    // nearly along its own normal (within acos(CUT_STEEP)): a walk straight down the guide normal would leave the plane
+    // and meet the bone of the resected side, so for such a cut the search walks down the guide normal as seen in the
+    // cut plane and steps into the kept bone along the cut normal)
     const vAx = V().crossVectors(n0, pw.N).normalize(); if (vAx.lengthSq() < 1e-6) return null;
+    const steep = Math.abs(pw.N.dot(n0)) > CUT_STEEP, nP = steep ? V().crossVectors(vAx, pw.N).normalize() : n0.clone(); if (nP.dot(n0) < 0) nP.negate();
+    const kIn = steep ? pw.N.clone().multiplyScalar(Math.sign(pw.N.dot(keepDir)) || 1) : keepDir;
     let q = null, qScore = -Infinity;
     for (const kk of [0, 3, 6]) {
       for (let vv = -40; vv <= 40; vv += 2) {
-        const top = pw.p.clone().addScaledVector(vAx, vv).addScaledVector(keepDir, kk).addScaledVector(n0, 20);
-        for (let t = 0; t < 70; t += 0.25) { const c = top.clone().addScaledVector(n0, -t); if (boneAt(c)) { const sc = -t - 0.15 * Math.abs(vv); if (sc > qScore) { qScore = sc; q = c; } break; } }
+        const top = pw.p.clone().addScaledVector(vAx, vv).addScaledVector(kIn, kk).addScaledVector(nP, 20);
+        for (let t = 0; t < 70; t += 0.25) { const c = top.clone().addScaledVector(nP, -t); if (boneAt(c)) { const sc = -t - 0.15 * Math.abs(vv); if (sc > qScore) { qScore = sc; q = c; } break; } }
       }
       if (q) break;
     }
@@ -1781,10 +1830,12 @@
     // the piece's normal is the bone surface normal where it sits (the density gradient over a few millimetres, so a
     // cut on the turned face of the chin or at the angle gets a frame tangent to that face, not the body's), the
     // ball-centre blend of frameAt when the gradient is flat; the piece is put on from the same side as the whole
-    // guide, so it keeps within 50 deg of the guide normal
+    // guide, so it keeps within PIECE_TURN deg of the guide normal (a long resection across the chin has its far stump
+    // facing up to 70-90 deg away from the guide's face: a tighter limit leaves the piece tilted against its own bone,
+    // its columns miss the stump turning away and no screw finds bone past that cut)
     let nn = f.n.clone();
     { const gr = V(), st = 1.5, e = V(); for (const off of [[0, 0, 0], [0, 0, 2], [0, 0, -2], [0, 2, 0], [0, -2, 0], [2, 0, 0], [-2, 0, 0]]) { const c = q.clone().add(V(...off)); e.set(boneField(c.clone().add(V(st, 0, 0))) - boneField(c.clone().add(V(-st, 0, 0))), boneField(c.clone().add(V(0, st, 0))) - boneField(c.clone().add(V(0, -st, 0))), boneField(c.clone().add(V(0, 0, st))) - boneField(c.clone().add(V(0, 0, -st)))); gr.add(e); } if (gr.lengthSq() > 1e-4) { gr.negate().normalize(); if (gr.dot(n0) < 0) gr.negate(); nn = gr.multiplyScalar(0.7).addScaledVector(n0, 0.3).normalize(); } }
-    const cs = Math.max(-1, Math.min(1, nn.dot(n0))), th = Math.acos(cs), lim = deg(50);
+    const cs = Math.max(-1, Math.min(1, nn.dot(n0))), th = Math.acos(cs), lim = deg(PIECE_TURN);
     if (th > lim) { const t = lim / th; nn = n0.clone().multiplyScalar(Math.sin((1 - t) * th)).addScaledVector(f.n, Math.sin(t * th)).normalize(); }
     // the piece axis: of the directions across the kept half of the tangent plane, the one along which the bone itself
     // runs furthest from the cut: stepping along the direction, bone must stay within the column under the step point
@@ -1793,9 +1844,11 @@
     // along the arch (a run up the alveolar face to the teeth ends at the crest, a run across the surface from a cut
     // placed obliquely ends where the bone turns under)
     // (the search starts square to the cut, into the kept bone: a cut proposed across the bone has the bone running on
-    // along its normal; a run of PIECE_RUN mm is all the screws need, so of the directions that reach it the one
-    // nearest square to the cut wins, and the bone turning away (up the ramus past a cut at the angle) still wins
-    // where the run along the normal is short)
+    // along its normal; what the screws need is distance from the cut on bone, so each direction scores the run times
+    // its component along the cut normal, up to PIECE_GAIN mm (the bridge plus the far screw stage), the one nearest
+    // square to the cut winning a tie: the bone turning away (up the ramus past a cut at the angle) still wins where
+    // the run along the normal is short, and a long run nearly along the cut (up the chin past a cut across it) does
+    // not, since it gains no distance from the slot)
     const kd = pw.N.clone().multiplyScalar(Math.sign(pw.N.dot(keepDir)) || 1);
     let k0 = kd.clone().sub(nn.clone().multiplyScalar(kd.dot(nn)));
     if (k0.lengthSq() < 1e-6) k0 = f.axis.clone().sub(nn.clone().multiplyScalar(f.axis.dot(nn)));
@@ -1811,7 +1864,7 @@
       return run;
     };
     let u = k0, bestRun = -1;
-    for (let a = -80; a <= 80; a += 10) { const dir = k0.clone().applyAxisAngle(nn, deg(a)), run = Math.min(runOf(dir), PIECE_RUN) - 0.1 * Math.abs(a); if (run > bestRun) { bestRun = run; u = dir; } }
+    for (let a = -80; a <= 80; a += 10) { const dir = k0.clone().applyAxisAngle(nn, deg(a)), run = Math.min(runOf(dir) * Math.max(0, dir.dot(kd)), PIECE_GAIN) - 0.05 * Math.abs(a); if (run > bestRun) { bestRun = run; u = dir; } }
     u = u.clone().sub(nn.clone().multiplyScalar(u.dot(nn))).normalize();
     return { P: q, u, v: V().crossVectors(nn, u), n: nn };
   }
@@ -2315,7 +2368,9 @@
         else if (a < 0) cnt[0]++; else if (b > 0) cnt[1]++;
         else out.push(['crit', 'Kritik', `Vida ${i + 1} iki guide arasındaki rezeksiyon boşluğunda; hiçbir guide'ı sabitlemiyor.`, 's' + i]);
       });
-      if (g && (cnt[0] < 1 || cnt[1] < 1)) out.push(['crit', 'Kritik', `İki guide düzeninde her guide en az bir vidayla sabitlenmeli (şu an ${cnt[0]} + ${cnt[1]}).`, 'guide']);
+      // (a condylar resection: the piece on the resected side holds no screw, as above; only the kept one must)
+      const Ec = resEnds(), pw2 = planesWorld().sort((x, y) => x.off - y.off), need = Ec && Ec.condyle ? [pw2[0].pl === Ec.A.pl, pw2[pw2.length - 1].pl === Ec.A.pl] : [true, true];
+      if (g && ((need[0] && cnt[0] < 1) || (need[1] && cnt[1] < 1))) out.push(['crit', 'Kritik', `İki guide düzeninde her guide en az bir vidayla sabitlenmeli (şu an ${cnt[0]} + ${cnt[1]}).`, 'guide']);
     }
     const st = R.seat;
     if (st && st.ok) {
