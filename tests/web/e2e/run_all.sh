@@ -19,11 +19,11 @@ start_server() {
   bash -c "$SERVER_CMD" & export SERVER_PID=$!
   for i in $(seq 1 30); do curl -s -o /dev/null "$BASE/health" && break; sleep 0.5; done
 }
-ONLY="${ONLY:-A1 A2 A3 C D B}"
+ONLY="${ONLY:-A1 A2 A3 C D F B}"
 for s in $ONLY; do
   start_server
   case $s in
-    A1) f=A1_flow.js ;; A2) f=A2_persist.js ;; A3) f=A3_i18n_ui.js ;; B) f=B_real.js ;; C) f=C_edge.js ;; D) f=D_small_live.js ;;
+    A1) f=A1_flow.js ;; A2) f=A2_persist.js ;; A3) f=A3_i18n_ui.js ;; B) f=B_real.js ;; C) f=C_edge.js ;; D) f=D_small_live.js ;; F) f=F_small_screen.js ;;
     *) echo "bilinmeyen senaryo $s"; continue ;;
   esac
   echo "=== $s ($f) ==="
