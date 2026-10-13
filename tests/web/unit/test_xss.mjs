@@ -20,6 +20,8 @@ test('renderQC: a DICOM kernel string is escaped in #qc (reportHTML escapes the 
 });
 
 test('renderQC: a non-CT Modality string is also escaped (critical-check message)', async () => {
+  // the first load may still be committing its volume; a second load then is refused (loadBlocked), so wait it out
+  assert.ok(await until(() => !St.loadBusy(), 60000), 'first load finished');
   const files = [0, 1, 2].map(k => new File([dicom({ rows: 8, cols: 8, pixels: Array.from({ length: 64 }, () => 1500), ipp: [0, 0, k], ps: [0.5, 0.5], sop: `1.2.4.${k + 50}`, series: '1.2.3.99', icpt: -1024, slope: 1, thickness: 1, modality: '<b>X</b>' })], `m${k}.dcm`));
   const el = $('dicomFiles'); el.files = files; el.dispatchEvent({ type: 'change', target: el });
   assert.ok(await until(() => ($('qc').innerHTML || '').includes('Modalite')), 'quality list rendered');
