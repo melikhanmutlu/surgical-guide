@@ -3,6 +3,7 @@
    check: does the pedicle from the graft's proximal end (where the vessels leave it) reach the recipient vessels?
    Vessel positions are anatomical estimates on a non-contrast CT; the surgeon confirms them (Doppler / CTA). */
 'use strict';
+var xl = s => (window.I18N ? I18N.t(s) : s);
 window.Vessels = (function () {
   const St = window.Studio; if (!St) return null;
   const { S, V, G, fmt, bus } = St, $ = id => document.getElementById(id);
@@ -133,19 +134,19 @@ window.Vessels = (function () {
   }
   (window.ExtraChecks = window.ExtraChecks || []).push(() => {
     const R = last, out = []; if (!R) return out;
-    if (R.avail < 0) out.push(['crit', 'Kritik', 'Greftin proksimal ucu peroneal arter çıkışının üstünde; greft distale kaydırılmalı.', 'fib']);
-    else if (R.need != null && R.avail < R.need) out.push(['crit', 'Kritik', `Pedikül yetmiyor: ${fmt(R.avail, 0)} mm mevcut, alıcı damara ${fmt(R.need, 0)} mm gerekli. Greft dizilimini ters çevirin, distal korunan boyu azaltın ya da ven grefti planlayın.`, 'fib']);
-    else if (R.need != null && R.avail < R.need + 15) out.push(['warn', 'Uyarı', `Pedikül payı az: ${fmt(R.avail, 0)} mm mevcut, ${fmt(R.need, 0)} mm gerekli (gerilimsiz anastomoz için ≥ 15 mm pay önerilir).`, 'fib']);
+    if (R.avail < 0) out.push(['crit', 'Kritik', xl('Greftin proksimal ucu peroneal arter çıkışının üstünde; greft distale kaydırılmalı.'), 'fib']);
+    else if (R.need != null && R.avail < R.need) out.push(['crit', 'Kritik', xl(`Pedikül yetmiyor: ${fmt(R.avail, 0)} mm mevcut, alıcı damara ${fmt(R.need, 0)} mm gerekli. Greft dizilimini ters çevirin, distal korunan boyu azaltın ya da ven grefti planlayın.`), 'fib']);
+    else if (R.need != null && R.avail < R.need + 15) out.push(['warn', 'Uyarı', xl(`Pedikül payı az: ${fmt(R.avail, 0)} mm mevcut, ${fmt(R.need, 0)} mm gerekli (gerilimsiz anastomoz için ≥ 15 mm pay önerilir).`), 'fib']);
     if (R.perfSeg < 0) out.push(['warn', 'Uyarı', 'Perforatör greft segmentlerinin dışında kalıyor; deri adası kemikle birlikte taşınamaz.', 'fib']);
-    if (!R.rp) out.push(['info', 'Bilgi', 'Alıcı damar noktası bulunamadı; elle seçin.', 'fib']);
-    const st = fib(); if (st && P.donor && (st.F.c.FC.x > 0 ? 'L' : 'R') !== P.donor) out.push(['info', 'Bilgi', `Verici bacak ${side(P.donor)} seçili, BT'deki fibula ${side(st.F.c.FC.x > 0 ? 'L' : 'R')} tarafta görünüyor.`, 'fib']);
+    if (!R.rp) out.push(['info', 'Bilgi', xl('Alıcı damar noktası bulunamadı; elle seçin.'), 'fib']);
+    const st = fib(); if (st && P.donor && (st.F.c.FC.x > 0 ? 'L' : 'R') !== P.donor) out.push(['info', 'Bilgi', xl(`Verici bacak ${side(P.donor)} seçili, BT'deki fibula ${side(st.F.c.FC.x > 0 ? 'L' : 'R')} tarafta görünüyor.`), 'fib']);
     return out;
   });
   (window.ReportSections = window.ReportSections || []).push(d => {
     const s = summary(); if (!s) return;
     if (d.keep) d.keep(330); d.h2('Damar ve pedikül planı');
-    d.table(['Ölçü', 'Değer'], [['Verici bacak / alıcı taraf', `${s.verici_bacak} / ${s.alici_taraf}`], ['Pedikül (mevcut / gerekli)', `${s.pedikul_mevcut_mm} / ${s.pedikul_gerekli_mm ?? '–'} mm`], ['Perforatör', `distal uçtan ${s.perforator_distalden_mm} mm${s.perforator_segmenti ? `, segment ${s.perforator_segmenti}` : ', greft dışında'}`], ['Deri adası', `${s.deri_adasi_mm[0]} × ${s.deri_adasi_mm[1]} mm`], ['Peroneal arter çıkışı', `fibula başından ${s.arter_cikisi_fibula_basindan_mm} mm (tahmini)`]], [0.45, 0.55]);
-    d.text('Damar konumları kontrastsız BT üzerinde anatomik tahmindir; perforatör Doppler ya da BT anjiyografi ile doğrulanmalıdır.', { size: 20, color: '#5b646e' });
+    d.table(['Ölçü', 'Değer'], [['Verici bacak / alıcı taraf', `${s.verici_bacak} / ${s.alici_taraf}`], ['Pedikül (mevcut / gerekli)', `${s.pedikul_mevcut_mm} / ${s.pedikul_gerekli_mm ?? '–'} mm`], ['Perforatör', xl(`distal uçtan ${s.perforator_distalden_mm} mm`) + (s.perforator_segmenti ? xl(`, segment ${s.perforator_segmenti}`) : xl(', greft dışında'))], ['Deri adası', `${s.deri_adasi_mm[0]} × ${s.deri_adasi_mm[1]} mm`], ['Peroneal arter çıkışı', xl(`fibula başından ${s.arter_cikisi_fibula_basindan_mm} mm (tahmini)`)]], [0.45, 0.55]);
+    d.text(xl('Damar konumları kontrastsız BT üzerinde anatomik tahmindir; perforatör Doppler ya da BT anjiyografi ile doğrulanmalıdır.'), { size: 20, color: '#5b646e' });
   });
   (window.ExportHooks = window.ExportHooks || []).push(files => { const s = summary(); if (s) files.push({ name: 'damar_pedikul_plani.json', data: JSON.stringify(s, null, 2) }); });
 

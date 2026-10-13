@@ -3,11 +3,12 @@
    bone as possible (Studio.planFromLesion). The painted voxels live on the 0.8 mm working grid, show as a red
    overlay on the slices and a red body in 3D, and are part of the plan (saved, versioned, undoable). */
 'use strict';
+var xl = s => (window.I18N ? I18N.t(s) : s);
 window.Lesion = (function () {
   const St = window.Studio; if (!St) return null;
   const { S, V, fmt, bus } = St, $ = id => document.getElementById(id);
   const COLOR = 0xd9363e;
-  let tool = null, mask = null, radius = 4, stroke = null, lastPaint = null, planMsg = '', planning = false;
+  let shown = '', tool = null, mask = null, radius = 4, stroke = null, lastPaint = null, planMsg = '', planning = false;
 
   const n = () => S.red ? S.red.nx * S.red.ny * S.red.nz : 0;
   const ensure = () => { const N = n(); if (!mask || mask.length !== N) mask = new Uint8Array(N); };
@@ -122,14 +123,14 @@ window.Lesion = (function () {
     St.controls.enabled = !tool;
     document.querySelectorAll('#lsTools [data-t]').forEach(b => b.setAttribute('aria-pressed', b.dataset.t === tool));
     const b = $('modeBadge');
-    if (tool) { b.hidden = false; b.textContent = `Lezyon ${tool === 'erase' ? 'silgisi' : 'fırçası'}: kesitlerde ya da 3B görünümde sürükleyin · döndürmek için Alt · Esc ile bitir`; }
-    else if (/^Lezyon/.test(b.textContent)) b.hidden = true;
+    if (tool) { b.hidden = false; b.textContent = shown = `Lezyon ${tool === 'erase' ? 'silgisi' : 'fırçası'}: kesitlerde ya da 3B görünümde sürükleyin · döndürmek için Alt · Esc ile bitir`; }
+    else if (/^Lezyon/.test(b.textContent) || (shown && (b.textContent === shown || b.textContent === xl(shown)))) b.hidden = true;
   }
   function status() {
     const c = count(), r = S.red, vol = r ? c * r.sp[0] * r.sp[1] * r.sp[2] / 1000 : 0;
     let ext = '';
-    if (c && S.anchor) { const { u } = St.frameAxes(), o = points().map(q => q.sub(S.anchor.p).dot(u)); ext = ` · eksende ${fmt(Math.max(...o) - Math.min(...o))} mm`; }
-    $('lsStat').textContent = c ? `Boyanan lezyon ${fmt(vol, 2)} cm³${ext}.${planMsg}` : '';
+    if (c && S.anchor) { const { u } = St.frameAxes(), o = points().map(q => q.sub(S.anchor.p).dot(u)); ext = xl(` · eksende ${fmt(Math.max(...o) - Math.min(...o))} mm`); }
+    $('lsStat').textContent = c ? `${xl(`Boyanan lezyon ${fmt(vol, 2)} cm³`)}${ext}.${planMsg}` : '';
     $('lsPlan').disabled = !c || planning; $('lsClear').disabled = !c;
   }
   let wrapNote = '';
@@ -142,18 +143,18 @@ window.Lesion = (function () {
     St.busy(true, 'Kesiler lezyona göre hesaplanıyor…'); await St.sleep();
     try {
       // the guide is centred over the lesion
-      if (!St.anchorFromLesion(pts)) { if (!S.anchor) { St.busy(false); St.alertMsg('Lezyonun üzerinde kemik yüzeyi bulunamadı; "Bölgeyi modelde seç" ile bölgeyi modelde seçin.'); return; } }
+      if (!St.anchorFromLesion(pts)) { if (!S.anchor) { St.busy(false); St.alertMsg(xl('Lezyonun üzerinde kemik yüzeyi bulunamadı; "Bölgeyi modelde seç" ile bölgeyi modelde seçin.')); return; } }
       St.planFromLesion(pts);
       // with a guide already on, it follows the new cuts and is checked again for fit
       if (S.guideOn) {
         St.busy(true, 'Guide\'ın takılabilirliği kontrol ediliyor…');
         const f = await St.fitWrap();
-        wrapNote = !f ? '' : !f.ok ? ' Guide bu yerleşimde takılamıyor; kontrolleri inceleyin.' : (f.split ? ' Kavisli kemik nedeniyle iki ayrı guide seçildi.' : '') + (f.wrap < (S.kind === 'leg' ? 6 : 5) ? ` Guide takılabilsin diye sarma derinliği ${fmt(f.wrap, 1)} mm'ye indirildi.` : '');
+        wrapNote = !f ? '' : !f.ok ? xl(' Guide bu yerleşimde takılamıyor; kontrolleri inceleyin.') : (f.split ? xl(' Kavisli kemik nedeniyle iki ayrı guide seçildi.') : '') + (f.wrap < (S.kind === 'leg' ? 6 : 5) ? xl(` Guide takılabilsin diye sarma derinliği ${fmt(f.wrap, 1)} mm'ye indirildi.`) : '');
       } else wrapNote = '';
     } finally { St.busy(false); }
     // say what changed: cut positions and angles, screw count
-    const pl = S.planes.slice().sort((a, b) => a.off - b.off), ang = q => (q.yaw || q.pitch ? `, açı ${fmt(Math.hypot(q.yaw, q.pitch), 0)}°` : '');
-    if (pl.length) planMsg = ` Kesiler ${pl.map(q => `${fmt(q.off, 1)} mm${ang(q)}`).join(' ve ')}.${S.guideOn ? ` ${S.screws.length} vida yerleştirildi.` : ''}${wrapNote}`;
+    const pl = S.planes.slice().sort((a, b) => a.off - b.off), ang = q => (q.yaw || q.pitch ? xl(`, açı ${fmt(Math.hypot(q.yaw, q.pitch), 0)}°`) : '');
+    if (pl.length) planMsg = ` ${xl('Kesiler')} ${pl.map(q => `${fmt(q.off, 1)} mm${ang(q)}`).join(` ${xl('ve')} `)}.${S.guideOn ? xl(` ${S.screws.length} vida yerleştirildi.`) : ''}${wrapNote}`;
     status();
   }
   $('lesPaint').innerHTML = `<p class="hint more">Fırça lezyonu kırmızıyla boyar: kesitlerde ya da 3B görünümde görünen yüzeyin (cilt, yumuşak doku, kemik) üstünde. Kemiği Anatomi adımındaki Katmanlar'dan kapatabilirsiniz. Silgi boyamayı geri alır. Boyadıktan sonra kesiler lezyonu güvenlik payı kadar dışarıda bırakacak şekilde konur.</p>

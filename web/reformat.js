@@ -6,6 +6,7 @@
      within the cut), so the cut is a vertical line with its real slot width; the wheel moves the slice sideways.
    Clicking either view moves the shared 3D cursor, so the standard slices follow. */
 'use strict';
+var xl = s => (window.I18N ? I18N.t(s) : s);
 window.Reformat = (function () {
   const St = window.Studio; if (!St || !window.MPR) return null;
   const { S, V } = St, $ = id => document.getElementById(id);
@@ -84,7 +85,7 @@ window.Reformat = (function () {
       if (S.anchor) St.planesWorld().forEach((pw, i) => line(ctx, T, dpr, crossings(W, H, (x, y) => pano.world(x, y), pw.p, pw.N), `K${i + 1}`, S.sel === 'p' + i));
       cursorMark(ctx, T, dpr, (x, y) => pano.world(x, y), W, H);
       MPR.label(ctx, `Panoramik · ${pano.depth > 0 ? '+' : ''}${pano.depth} mm ${pano.depth >= 0 ? 'bukkal' : 'lingual'}`, 8 * dpr, 16 * dpr, '#cfd8d4', dpr);
-      MPR.label(ctx, `yay ${Math.round(a.L)} mm · kalınlık ${SLAB} mm`, 8 * dpr, 32 * dpr, '#8fa39b', dpr);
+      MPR.label(ctx, xl(`yay ${Math.round(a.L)} mm · kalınlık ${SLAB} mm`), 8 * dpr, 32 * dpr, '#8fa39b', dpr);
       MPR.label(ctx, 'Sağ', 6 * dpr, ctx.canvas.height / 2, '#8fa39b', dpr); MPR.label(ctx, 'Sol', ctx.canvas.width - 28 * dpr, ctx.canvas.height / 2, '#8fa39b', dpr);
     },
     wheel(v, n) { pano.depth = Math.max(-15, Math.min(15, pano.depth + n)); },
@@ -121,7 +122,7 @@ window.Reformat = (function () {
         line(ctx, T, dpr, pts, `K${i + 1}`, i === F.i);
       });
       cursorMark(ctx, T, dpr, (x, y) => obl.world(F, x, y), W, H);
-      MPR.label(ctx, `Kesi ${F.i + 1}'e dik · yanal ${obl.off > 0 ? '+' : ''}${obl.off} mm`, 8 * dpr, 16 * dpr, '#cfd8d4', dpr);
+      MPR.label(ctx, xl(`Kesi ${F.i + 1}'e dik · yanal ${obl.off > 0 ? '+' : ''}${obl.off} mm`), 8 * dpr, 16 * dpr, '#cfd8d4', dpr);
       MPR.label(ctx, 'Üst', ctx.canvas.width / 2, 30 * dpr, '#8fa39b', dpr);
     },
     wheel(v, n) { obl.off = Math.max(-30, Math.min(30, obl.off + n)); },

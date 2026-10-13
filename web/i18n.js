@@ -8,7 +8,7 @@
   const D = window.I18N_EN || {};
   const NUM = /(?<![A-Za-z0-9ÇĞİÖŞÜçğıöşü])[-−+]?\d+(?:[.,]\d+)*(?![A-Za-zÇĞİÖŞÜçğıöşü])/g;
   // "1 screws" → "1 screw": the dictionary holds the plural, a lone 1 takes the singular
-  const ONE = /((?:^|[^\d.,])1 )(screw|segment|implant|position|cut|hole|file|item|version|warning|structure|approval|step|graft|plate|slice|series|piece|check|note|guide|vessel|point)s\b/g;
+  const ONE = /((?:^|[^\d.,])1 )(screw|segment|implant|position|cut|hole|file|item|version|warning|structure|approval|step|graft|plate|slice|series|piece|check|note|guide|vessel|point|day|week)s\b/g;
   let lang = 'tr';
   try { lang = localStorage.getItem(KEY) === 'en' ? 'en' : 'tr'; } catch (e) { /* storage blocked */ }
 

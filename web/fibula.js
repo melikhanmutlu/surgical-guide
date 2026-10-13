@@ -3,6 +3,7 @@
    cutting guide is generated on the fibula with the same voxel guide builder as the mandible guide.
    The fibula plan is part of the case plan (saved, versioned, undoable) and needs its own surgeon approval. */
 'use strict';
+var xl = s => (window.I18N ? I18N.t(s) : s);
 window.Fibula = (function () {
   const St = window.Studio; if (!St) return null;
   const { S, V, G, fmt, bus } = St, $ = id => document.getElementById(id);
@@ -141,7 +142,7 @@ window.Fibula = (function () {
     F = { source, label, vol, red, labels, cands: fibs, c: null, warn };
     $('fibCand').innerHTML = fibs.map((c, i) => `<option value="${i}" title="Taraf tahminidir">Aday ${i + 1} · ${fmt(c.len, 0)} mm · Ø${fmt(2 * c.rad, 0)} · ${c.C.x > 0 ? 'sol' : 'sağ'}</option>`).join('');
     if (!fibs.some(c => c.rad <= FIB_R[1])) warn.push(`En ince aday bile Ø${fmt(2 * fibs[0].rad, 0)} mm; bu fibula değil, tibia ya da tüm alt bacak. Fibula planı güvenilmez.`);
-    St.busy(false); msg(warn[0] || (fibs[0].tibia ? '' : 'Tibia ayırt edilemedi; fibula guide\'ının yanal yönü tahmini.'));
+    St.busy(false); msg(warn[0] || (fibs[0].tibia ? '' : xl('Tibia ayırt edilemedi; fibula guide\'ının yanal yönü tahmini.')));
     $('sceneSeg').hidden = false; $('fibBody').hidden = false;
     return true;
   }
@@ -692,24 +693,24 @@ window.Fibula = (function () {
     const ch = S.fib.choice;
     if (ch && ch.table && ch.table.length && P0.nAuto && Math.abs(ch.L - c.D.L) < 0.5) {
       const tbl = ch.table.map(r => `${r.n}: ${fmt(r.min)}/${fmt(r.dev)}`).join('; ');
-      out.push(['info', 'Bilgi', ch.reason === 'short' ? `Segment sayısı otomatik seçildi: ${ch.n} (defekt bir segmentten kısa). Denenen sayılar (en kısa segment mm / sapma mm): ${tbl}.`
-        : ch.reason === 'dev' ? `Segment sayısı otomatik seçildi: ${ch.n} (en az segmentle sapma ≤ ${DEV_WARN} mm). Denenen sayılar (en kısa segment mm / sapma mm): ${tbl}.`
-          : `Segment sayısı otomatik seçildi: ${ch.n} (sapma hedefi tutmuyor; ${MIN_LEN} mm altı segment vermeyen sayılar içinde en küçük sapma, ${fmt(DEV_TIE)} mm içindeki sapmalarda az segment ve güdük segmentleri ${STUMP_MIN} mm üstü olan sayı). Denenen sayılar (en kısa segment mm / sapma mm): ${tbl}.`]);
+      out.push(['info', 'Bilgi', ch.reason === 'short' ? `${xl(`Segment sayısı otomatik seçildi: ${ch.n} (defekt bir segmentten kısa).`)} ${xl('Denenen sayılar (en kısa segment mm / sapma mm):')} ${tbl}.`
+        : ch.reason === 'dev' ? `${xl(`Segment sayısı otomatik seçildi: ${ch.n} (en az segmentle sapma ≤ ${DEV_WARN} mm).`)} ${xl('Denenen sayılar (en kısa segment mm / sapma mm):')} ${tbl}.`
+          : `${xl(`Segment sayısı otomatik seçildi: ${ch.n} (sapma hedefi tutmuyor; ${MIN_LEN} mm altı segment vermeyen sayılar içinde en küçük sapma, ${fmt(DEV_TIE)} mm içindeki sapmalarda az segment ve güdük segmentleri ${STUMP_MIN} mm üstü olan sayı).`)} ${xl('Denenen sayılar (en kısa segment mm / sapma mm):')} ${tbl}.`]);
     }
-    c.segs.forEach(g => [['başlangıç', g.a0], ['bitiş', g.a1]].forEach(([w, a]) => { if (a > ANGLE_WARN) out.push(['warn', 'Uyarı', `Fibula segmenti ${g.i + 1} ${w} kesisi ${fmt(a)}°; ${ANGLE_WARN}° üstü temas yüzeyini azaltır.`]); }));
-    if (c.dev > DEV_WARN) out.push(['warn', 'Uyarı', `Greftler defekt hattından ${fmt(c.dev)} mm sapıyor (eşik ${DEV_WARN} mm). Segment ekleyin ya da "Kesileri öner"i kullanın.`]);
-    if (P0.distal < DISTAL_MIN) out.push(['crit', 'Kritik', `Distal korunan fibula ${fmt(P0.distal, 0)} mm; ayak bileği stabilitesi için en az ${DISTAL_MIN} mm.`]);
-    if (c.proxLeft < PROX_KEEP) out.push(['crit', 'Kritik', `Fibula yetmiyor: proksimalde ${fmt(Math.max(c.proxLeft, 0), 0)} mm kalıyor, en az ${PROX_KEEP} mm gerekli.`]);
+    c.segs.forEach(g => [['başlangıç', g.a0], ['bitiş', g.a1]].forEach(([w, a]) => { if (a > ANGLE_WARN) out.push(['warn', 'Uyarı', xl(`Fibula segmenti ${g.i + 1} ${w} kesisi ${fmt(a)}°; ${ANGLE_WARN}° üstü temas yüzeyini azaltır.`)]); }));
+    if (c.dev > DEV_WARN) out.push(['warn', 'Uyarı', xl(`Greftler defekt hattından ${fmt(c.dev)} mm sapıyor (eşik ${DEV_WARN} mm). Segment ekleyin ya da "Kesileri öner"i kullanın.`)]);
+    if (P0.distal < DISTAL_MIN) out.push(['crit', 'Kritik', xl(`Distal korunan fibula ${fmt(P0.distal, 0)} mm; ayak bileği stabilitesi için en az ${DISTAL_MIN} mm.`)]);
+    if (c.proxLeft < PROX_KEEP) out.push(['crit', 'Kritik', xl(`Fibula yetmiyor: proksimalde ${fmt(Math.max(c.proxLeft, 0), 0)} mm kalıyor, en az ${PROX_KEEP} mm gerekli.`)]);
     const R = S.fib.guide && S.fib.guide.result;
     if (!R && !building && S.fib.guideFail) out.push(['warn', 'Uyarı', 'Fibula guide\'ı üretilemedi; fibula yüzeyi bulunamadı.']);
     if (R) {
       const shortSeg = c.segs.some(g => g.L < MIN_LEN), ad = R.adapt;
-      if (R.pieces > 1) out.push(['crit', 'Kritik', `Fibula guide'ı ${R.pieces} parçaya bölünüyor.${shortSeg ? ' Segment 20 mm\'den kısa: iki kesi yuvası arasında guide tutunamıyor; segmenti uzatın ya da segment sayısını azaltın.' : ''}`]);
-      if (R.seat && R.seat.ok && !R.seat.free) out.push(['crit', 'Kritik', ad ? `Fibula guide'ı hiçbir yönde takılamıyor; sarma derinliği ${fmt(ad.from, 1)} mm'den ${fmt(ad.to, 1)} mm'ye indirildi, yine de takılamıyor.${shortSeg ? ' Segment 20 mm\'den kısa; kesileri kısa tutmak guide\'ın oturmasını bozuyor.' : ''}` : 'Fibula guide\'ı hiçbir yönde takılamıyor; sarma derinliği fazla.']);
+      if (R.pieces > 1) out.push(['crit', 'Kritik', xl(`Fibula guide'ı ${R.pieces} parçaya bölünüyor.`) + (shortSeg ? ' ' + xl('Segment 20 mm\'den kısa: iki kesi yuvası arasında guide tutunamıyor; segmenti uzatın ya da segment sayısını azaltın.') : '')]);
+      if (R.seat && R.seat.ok && !R.seat.free) out.push(['crit', 'Kritik', ad ? xl(`Fibula guide'ı hiçbir yönde takılamıyor; sarma derinliği ${fmt(ad.from, 1)} mm'den ${fmt(ad.to, 1)} mm'ye indirildi, yine de takılamıyor.`) + (shortSeg ? ' ' + xl('Segment 20 mm\'den kısa; kesileri kısa tutmak guide\'ın oturmasını bozuyor.') : '') : xl('Fibula guide\'ı hiçbir yönde takılamıyor; sarma derinliği fazla.')]);
       else if (ad && ad.ok) out.push(['info', 'Bilgi', `Fibula guide'ı takılabilsin diye sarma derinliği ${fmt(ad.from, 1)} mm'den ${fmt(ad.to, 1)} mm'ye indirildi.`]);
-      if (R.contact < 100) out.push(['warn', 'Uyarı', `Fibula guide'ı temas alanı ${fmt(R.contact, 0)} mm²; oturma belirsiz olabilir.`]);
+      if (R.contact < 100) out.push(['warn', 'Uyarı', xl(`Fibula guide'ı temas alanı ${fmt(R.contact, 0)} mm²; oturma belirsiz olabilir.`)]);
       R.screwInfo.forEach((si, i) => {
-        if (!si.ok) out.push(['crit', 'Kritik', si.noBody ? `Fibula vidası ${i + 1} altında guide gövdesi yok; kovan boşlukta kalırdı.` : `Fibula vidası ${i + 1} kemiğe ulaşmıyor.`]);
+        if (!si.ok) out.push(['crit', 'Kritik', si.noBody ? `Fibula vidası ${i + 1} altında guide gövdesi yok; kovan boşlukta kalırdı.` : xl(`Fibula vidası ${i + 1} kemiğe ulaşmıyor.`)]);
         else if (si.crossesPlane) out.push(['crit', 'Kritik', `Fibula vidası ${i + 1} matkap yolu kesi yuvasıyla kesişiyor.`]);
         else if (si.slotGap < 0.5) out.push(['warn', 'Uyarı', `Fibula vidası ${i + 1} kovanı kesi yuvasına ${fmt(Math.max(0, si.slotGap))} mm yaklaşıyor (en az 0,5 mm); testere yoluna değebilir.`]);
         // hole checks: bone along the hole, bone bridge to the cut (>= SCREW_CUT_GAP mm, our own inference)
@@ -761,13 +762,13 @@ window.Fibula = (function () {
     if (!active()) { $('tag6').hidden = true; return; }
     const c = last, R = S.fib.guide && S.fib.guide.result;
     $('fibRows').innerHTML = c ? c.segs.map(g => `<tr><td>${g.i + 1}${g.barrel ? ' (üst)' : ''}</td><td>${fmt(g.L)} mm</td><td>${fmt(g.s0 - F.c.smin, 0)} mm</td><td>${fmt(g.a0, 0)}° / ${fmt(g.a1, 0)}°</td><td>${fmt(g.crest)} mm</td></tr>`).join('') : '<tr><td colspan="5">Defekt yok</td></tr>';
-    const mm = $('fibMirrorMsg'); if (mm) { mm.hidden = !(plan().mirror && c); mm.textContent = plan().mirror && c ? (c.D.mirrored ? `Defekt hattının ${c.D.mirrored}/${c.D.nmid} noktası sağlam taraftan aynalandı${window.Ref && Ref.get && Ref.get() ? '' : ' (orta hat kemiğin ortasından tahmin edildi)'}.` : 'Karşı tarafta eşleşen sağlam kemik bulunamadı (defekt orta hatta olabilir); mevcut kemik kullanılıyor.') : ''; }
+    const mm = $('fibMirrorMsg'); if (mm) { mm.hidden = !(plan().mirror && c); mm.textContent = plan().mirror && c ? (c.D.mirrored ? xl(`Defekt hattının ${c.D.mirrored}/${c.D.nmid} noktası sağlam taraftan aynalandı${window.Ref && Ref.get && Ref.get() ? '' : ' (orta hat kemiğin ortasından tahmin edildi)'}.`) : xl('Karşı tarafta eşleşen sağlam kemik bulunamadı (defekt orta hatta olabilir); mevcut kemik kullanılıyor.')) : ''; }
     $('fibSum').innerHTML = c ? `<dt>Defekt boyu (hat boyunca)</dt><dd>${fmt(c.D.L)} mm</dd><dt>Greftlerin hattan sapması</dt><dd>${fmt(c.dev, 2)} mm</dd><dt>Kullanılan fibula</dt><dd>${fmt(c.used)} mm</dd><dt>Proksimalde kalan</dt><dd>${fmt(c.proxLeft, 0)} mm</dd><dt>Fibula guide'ı</dt><dd>${R ? `${fmt(S.fib.guide.ctx.g.L, 0)} mm, temas ${fmt(R.contact, 0)} mm²` : building ? 'üretiliyor' : '–'}</dd>` : '';
     const ck = checks(); $('fibChecks').innerHTML = (ck.length ? ck : [['ok', 'Uygun', 'Fibula kontrolleri geçti.']]).map(([k, t, m]) => `<li class="${k}"><b>${t}</b><span>${m}</span></li>`).join('');
     const crit = ck.some(x => x[0] === 'crit'), ok = approved();
     $('fibApprove').textContent = ok ? 'Fibula onayını kaldır' : 'Fibula planını onayla';
     $('fibApprove').disabled = !ok && (crit || !c || !R);
-    $('fibStatus').textContent = ok ? `Fibula planı onaylandı${plan().by ? ' · ' + plan().by : ''}.` : plan().ok ? 'Plan onaydan sonra değişti; yeniden onay gerekli.' : crit ? 'Kritik kontrol varken onaylanamaz.' : 'Fibula planı cerrah onayı bekliyor.';
+    $('fibStatus').textContent = ok ? xl('Fibula planı onaylandı') + (plan().by ? ' · ' + plan().by : '') + '.' : plan().ok ? xl('Plan onaydan sonra değişti; yeniden onay gerekli.') : crit ? 'Kritik kontrol varken onaylanamaz.' : 'Fibula planı cerrah onayı bekliyor.';
     const t = $('tag6'), tx = ok ? 'Onaylı' : crit ? 'Kritik' : 'Onay bekliyor'; t.hidden = ok; t.className = 'tag ' + (ok ? 'ok' : crit ? 'crit' : 'warn'); t.textContent = ''; t.title = tx; t.setAttribute('aria-label', tx);
   }
   // recompute the plan from the current mandible and fibula state; user edits also create a history entry
@@ -825,7 +826,7 @@ window.Fibula = (function () {
   function sanitize(p) {
     const q = St.clone(p), warn = [], num = (v, d) => { const x = Number(v); return Number.isFinite(x) ? x : d; }, cl = (v, a, b, d) => Math.max(a, Math.min(b, num(v, d)));
     const D0 = defaultPlan();
-    if (!(num(q.kerf, 0) > 0)) warn.push('Testere payı (kerf) sıfır ya da geçersiz; ' + D0.kerf + ' mm kullanıldı. Testere yuvaları için değeri kontrol edin.');
+    if (!(num(q.kerf, 0) > 0)) warn.push(xl(`Testere payı (kerf) sıfır ya da geçersiz; ${D0.kerf} mm kullanıldı. Testere yuvaları için değeri kontrol edin.`));
     q.kerf = num(q.kerf, 0) > 0 ? cl(q.kerf, 0.5, 2, D0.kerf) : D0.kerf;
     // slot width: null (plans saved before it existed) = the kerf; never narrower than the blade
     q.slotW = q.slotW == null || !Number.isFinite(Number(q.slotW)) ? null : Math.max(q.kerf, cl(q.slotW, 0.5, 2.5, q.kerf));
@@ -843,7 +844,7 @@ window.Fibula = (function () {
     const sn = sanitize(p); p = sn.plan; if (sn.warn.length) setTimeout(() => St.alertMsg(sn.warn.join(' ')), 0);
     if (!F || !F.source || F.source.fp !== p.source.fp) {
       if (p.source && p.source.type === 'sample') { if (!(await load('sample'))) return; }
-      else { pending = p; msg(`Bu planın fibula serisi "${p.source ? p.source.name : '?'}". Fibula planını açmak için aynı seriyi ilk adımda yükleyin.`); if (window.UI) UI.openStep('st1'); return; }
+      else { pending = p; msg(`${xl('Bu planın fibula serisi')} "${p.source ? p.source.name : '?'}". ${xl('Fibula planını açmak için aynı seriyi ilk adımda yükleyin.')}`); if (window.UI) UI.openStep('st1'); return; }
       F.c = null;
     }
     if (p.legSplit && !F.split && Array.isArray(p.legSplit.f) && Array.isArray(p.legSplit.t)) { const c = splitLeg(V(...p.legSplit.f), V(...p.legSplit.t)); if (c) F.cands.push(c); }
@@ -882,7 +883,7 @@ window.Fibula = (function () {
   function reportHTML() {
     if (!active()) return '';
     const s = summary(), esc = t => String(t).replace(/[&<>]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[ch]);
-    return `<h2>Fibula rekonstrüksiyonu</h2><p>${esc(F.label)} · ${s.segment_sayisi} segment · testere payı ${fmt(s.testere_payi_mm)} mm · distal korunan ${fmt(s.distal_korunan_mm, 0)} mm · proksimalde kalan ${s.proksimalde_kalan_mm ?? '–'} mm · ${approved() ? `onaylı (${esc(plan().by || '')})` : 'onay bekliyor'}</p>
+    return `<h2>Fibula rekonstrüksiyonu</h2><p>${esc(F.label)} · ${xl(`${s.segment_sayisi} segment · testere payı ${fmt(s.testere_payi_mm)} mm · distal korunan ${fmt(s.distal_korunan_mm, 0)} mm · proksimalde kalan ${s.proksimalde_kalan_mm ?? '–'} mm`)} · ${approved() ? `${xl('onaylı')} (${esc(plan().by || '')})` : xl('onay bekliyor')}</p>
 <table><tr><th>Segment</th><th>Boy</th><th>Distal uçtan</th><th>Uç açıları</th><th>Rotasyon</th></tr>${s.segmentler.map(g => `<tr><td>${g.no}</td><td>${fmt(g.boy_mm)} mm</td><td>${fmt(g.distal_uctan_mm)} mm</td><td>${fmt(g.kesi_acilari_deg[0])}° / ${fmt(g.kesi_acilari_deg[1])}°</td><td>${g.rotasyon_deg}°</td></tr>`).join('')}</table>`;
   }
   async function production(signal) {
@@ -890,7 +891,7 @@ window.Fibula = (function () {
     const x = S.fib.guide.ctx;
     const r = await St.serverGuide({ vol: F.vol, red: F.red, F: F.c.Fm, thr: THR, g: x.g, P: x.P, u: x.u, v: x.v, n: x.n, pls: x.pls, scs: x.scs, wrapProfile: S.fib.guide.result.wrapProfile }, signal);
     S.fib.prod = Object.assign(r, { key: S.fib.guide.key });
-    $('prodMsg').textContent += ` Fibula guide'ı: ${r.watertight ? 'su geçirmez' : 'SU GEÇİRMEZ DEĞİL'}, ${r.bodies} parça${r.bodies > 1 ? ' (BİRDEN FAZLA PARÇA)' : ''}.`;
+    $('prodMsg').textContent += ' ' + xl(`Fibula guide'ı: ${r.watertight ? 'su geçirmez' : 'SU GEÇİRMEZ DEĞİL'}, ${r.bodies} parça${r.bodies > 1 ? ' (BİRDEN FAZLA PARÇA)' : ''}.`);
   }
 
 
@@ -939,21 +940,21 @@ window.Fibula = (function () {
     const dk = hits.find(h => h.object.userData.disc), sg = hits.find(h => h.object.userData.legSeg !== undefined), gd = hits.find(h => h.object.userData.guide);
     if (dk) { selectJoint(dk.object.userData.joint); return; }
     if (gd && (!sg || gd.distance <= sg.distance)) { fsel.joint = fsel.seg = null; draw(last); focusBox('fgBox'); note('Fibula guide\'ı seçildi; gövde ve vida ayarları aşağıda.'); return; }
-    if (sg) { const i = sg.object.userData.legSeg; fsel.seg = i; fsel.joint = null; draw(last); focusBox(plan().roll.length > i ? 'fr' + i : 'fibRows'); note(`Segment ${i + 1} seçildi; dönüşünü ve kesi konumlarını ayarlayabilirsiniz.`); return; }
+    if (sg) { const i = sg.object.userData.legSeg; fsel.seg = i; fsel.joint = null; draw(last); focusBox(plan().roll.length > i ? 'fr' + i : 'fibRows'); note(xl(`Segment ${i + 1} seçildi; dönüşünü ve kesi konumlarını ayarlayabilirsiniz.`)); return; }
     fsel.joint = fsel.seg = null; draw(last); note('');
   }
   function selectJoint(j) {
     const P0 = plan();
     if (j > 0 && j < P0.n) {
       fsel.joint = j; fsel.seg = null; $('fibJoint').value = j; syncUI(); draw(last); focusBox('fibJointBox');
-      note(`Segment ${j}–${j + 1} arasındaki kesi seçildi; açısını aşağıdan ayarlayın.`); return;
+      note(xl(`Segment ${j}–${j + 1} arasındaki kesi seçildi; açısını aşağıdan ayarlayın.`)); return;
     }
     // the graft's two ends are cut to the mandible's own planes: those are edited on the mandible
     const E = St.resEnds(), end = j === 0 ? E && E.A : E && E.B;
     const k = end && !end.virtual ? St.planesWorld().findIndex(q => Math.abs(q.off - end.off) < 1e-6 && q.N.distanceTo(end.N) < 1e-6) : -1;
     fsel.joint = j; fsel.seg = null; draw(last);
-    if (k >= 0) { St.select('p' + k); setActive('m', true); note(`Bu uç mandibuladaki Kesi ${k + 1} ile aynı düzlemde; açısını mandibulada değiştirince fibula da güncellenir.`); }
-    else note('Bu uç kondile bağlı; mandibula tarafındaki kesiyle değişir.');
+    if (k >= 0) { St.select('p' + k); setActive('m', true); note(xl(`Bu uç mandibuladaki Kesi ${k + 1} ile aynı düzlemde; açısını mandibulada değiştirince fibula da güncellenir.`)); }
+    else note(xl('Bu uç kondile bağlı; mandibula tarafındaki kesiyle değişir.'));
   }
   // which labelled bone is at a world point (a small neighbourhood vote)
   function labelAt(q) {
@@ -976,12 +977,12 @@ window.Fibula = (function () {
       endMode();
       let c = F.cands.find(x => x.label === l);
       if (!c) { c = boneStats(F.red, F.labels, [{ label: l }])[0]; c.picked = true; c.tibia = (F.c && F.cands[F.c.i] && F.cands[F.c.i].tibia && F.cands[F.c.i].tibia.label !== l) ? F.cands[F.c.i].tibia : null; }
-      useCandidate(c); note(`Fibula olarak seçildi (${fmt(c.len, 0)} mm, Ø${fmt(2 * c.rad, 0)} mm).`); return;
+      useCandidate(c); note(xl(`Fibula olarak seçildi (${fmt(c.len, 0)} mm, Ø${fmt(2 * c.rad, 0)} mm).`)); return;
     }
     if (!fsel.first) { fsel.first = q.clone(); fsel.firstL = l; marker(q, 0x46c98b); note('Şimdi aynı parçada tibiaya tıklayın.'); return; }
     const pf = fsel.first, lf = fsel.firstL; endMode();
     if (l !== lf) { note('İki tıklama aynı (birleşik) kemik parçasında olmalı. Ayrı parçalarsa "Fibulayı modelde seç"i kullanın.'); return; }
-    const out = splitLeg(pf, q); if (!out) { note('Ayrılamadı; tıklamaları kemik gövdesinin ortasına yakın yapın.'); return; }
+    const out = splitLeg(pf, q); if (!out) { note(xl('Ayrılamadı; tıklamaları kemik gövdesinin ortasına yakın yapın.')); return; }
     useCandidate(out, { legSplit: { f: pf.toArray().map(x => Math.round(x * 10) / 10), t: q.toArray().map(x => Math.round(x * 10) / 10) } });
     note('Fibula tibiadan ayrıldı.');
   }

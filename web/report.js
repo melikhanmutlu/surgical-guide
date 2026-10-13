@@ -2,6 +2,9 @@
    PDF of JPEG pages by a small writer below. Contents: case and version, 3D views, cut table, screws, fibula segments,
    assembly order, automatic checks, and signature fields for the surgeon and the engineer. */
 'use strict';
+var xl = s => (window.I18N ? I18N.t(s) : s);
+// canvas text bypasses the DOM translator: a whole string, else line by line
+const xt = s => { s = String(s); const w = xl(s); return w !== s ? w : s.split('\n').map(xl).join('\n'); };
 window.Report = (function () {
   const St = window.Studio; if (!St) return null;
   const { S, V, fmt } = St, $ = id => document.getElementById(id);
@@ -40,23 +43,23 @@ window.Report = (function () {
       const cv = document.createElement('canvas'); cv.width = W; cv.height = H; g = cv.getContext('2d'); pages.push(cv);
       g.fillStyle = '#fff'; g.fillRect(0, 0, W, H); y = M;
       g.fillStyle = C.muted; g.font = `22px ${FONT}`; g.textBaseline = 'alphabetic';
-      g.fillText(`Yolmed · ${meta.title}`, M, 50); g.textAlign = 'right'; g.fillText(meta.version, W - M, 50); g.textAlign = 'left';
+      g.fillText(`Yolmed · ${xt(meta.title)}`, M, 50); g.textAlign = 'right'; g.fillText(meta.version, W - M, 50); g.textAlign = 'left';
       g.strokeStyle = C.line; g.lineWidth = 2; g.beginPath(); g.moveTo(M, 64); g.lineTo(W - M, 64); g.stroke();
     }
     const room = h => { if (y + h > H - 110) page(); };
     function wrap(t, maxW, font) { g.font = font; const out = []; String(t).split('\n').forEach(par => { let line = ''; par.split(' ').forEach(w => { const tr = line ? line + ' ' + w : w; if (g.measureText(tr).width > maxW && line) { out.push(line); line = w; } else line = tr; }); out.push(line); }); return out; }
     function text(t, o = {}) {
       const size = o.size || 24, font = `${o.weight || 400} ${size}px ${o.mono ? MONO : FONT}`, lh = Math.round(size * 1.45), x = o.x || M, mw = o.w || W - M - x;
-      const lines = wrap(t, mw, font); room(lines.length * lh);
+      const lines = wrap(xt(t), mw, font); room(lines.length * lh);
       g.font = font; g.fillStyle = o.color || C.ink; lines.forEach(l => { g.fillText(l, x, y + size); y += lh; }); y += o.after ?? 6;
     }
-    function h2(t) { room(90); y += 18; g.fillStyle = C.accent; g.font = `600 30px ${FONT}`; g.fillText(t, M, y + 30); y += 46; g.strokeStyle = C.line; g.beginPath(); g.moveTo(M, y); g.lineTo(W - M, y); g.stroke(); y += 14; }
+    function h2(t) { room(90); y += 18; g.fillStyle = C.accent; g.font = `600 30px ${FONT}`; g.fillText(xt(t), M, y + 30); y += 46; g.strokeStyle = C.line; g.beginPath(); g.moveTo(M, y); g.lineTo(W - M, y); g.stroke(); y += 14; }
     function table(head, rows, widths) {
       const rh = 40, x0 = M, tw = W - 2 * M, ws = widths.map(f => f * tw);
       const row = (cells, hd) => {
         room(rh); let x = x0;
         if (hd) { g.fillStyle = C.soft; g.fillRect(x0, y, tw, rh); }
-        cells.forEach((c, i) => { g.font = `${hd ? 600 : 400} 21px ${hd || i === 0 ? FONT : MONO}`; g.fillStyle = hd ? C.muted : C.ink; let t = String(c); while (g.measureText(t).width > ws[i] - 14 && t.length > 2) t = t.slice(0, -2) + '…'; g.fillText(t, x + 8, y + 27); x += ws[i]; });
+        cells.forEach((c, i) => { g.font = `${hd ? 600 : 400} 21px ${hd || i === 0 ? FONT : MONO}`; g.fillStyle = hd ? C.muted : C.ink; let t = xt(c); while (g.measureText(t).width > ws[i] - 14 && t.length > 2) t = t.slice(0, -2) + '…'; g.fillText(t, x + 8, y + 27); x += ws[i]; });
         y += rh; g.strokeStyle = C.line; g.lineWidth = 1; g.beginPath(); g.moveTo(x0, y); g.lineTo(x0 + tw, y); g.stroke();
       };
       row(head, true); rows.forEach(r => row(r)); y += 14;
@@ -65,20 +68,20 @@ window.Report = (function () {
       const gap = 24, iw = (W - 2 * M - gap) / 2;
       for (let i = 0; i < list.length; i += 2) {
         const ih = list[i].img ? iw * list[i].img.height / list[i].img.width : iw * 0.64; room(ih + 50);
-        list.slice(i, i + 2).forEach((it, k) => { const x = M + k * (iw + gap); if (it.img) g.drawImage(it.img, x, y, iw, ih); g.strokeStyle = C.line; g.strokeRect(x, y, iw, ih); g.fillStyle = C.muted; g.font = `20px ${FONT}`; g.fillText(it.cap, x, y + ih + 28); });
+        list.slice(i, i + 2).forEach((it, k) => { const x = M + k * (iw + gap); if (it.img) g.drawImage(it.img, x, y, iw, ih); g.strokeStyle = C.line; g.strokeRect(x, y, iw, ih); g.fillStyle = C.muted; g.font = `20px ${FONT}`; g.fillText(xt(it.cap), x, y + ih + 28); });
         y += ih + 48;
       }
     }
-    function status(label, cls) { room(60); g.font = `600 24px ${FONT}`; const w = g.measureText(label).width + 40; g.fillStyle = cls === 'ok' ? '#e8f4ee' : '#fbf1e1'; g.fillRect(M, y, w, 46); g.fillStyle = cls === 'ok' ? C.ok : C.warn; g.fillText(label, M + 20, y + 31); y += 62; }
+    function status(label, cls) { label = xt(label); room(60); g.font = `600 24px ${FONT}`; const w = g.measureText(label).width + 40; g.fillStyle = cls === 'ok' ? '#e8f4ee' : '#fbf1e1'; g.fillRect(M, y, w, 46); g.fillStyle = cls === 'ok' ? C.ok : C.warn; g.fillText(label, M + 20, y + 31); y += 62; }
     function signature(rows) {
       room(220); y += 10;
       const cw = (W - 2 * M - 40) / 2;
-      rows.forEach((r, i) => { const x = M + i * (cw + 40); g.fillStyle = C.muted; g.font = `600 22px ${FONT}`; g.fillText(r.role, x, y + 24); g.fillStyle = C.ink; g.font = `22px ${FONT}`; g.fillText(r.name || 'Ad Soyad: ________________', x, y + 62); g.fillText(r.date || 'Tarih: ____ / ____ / ________', x, y + 100); g.strokeStyle = C.ink; g.lineWidth = 1.5; g.beginPath(); g.moveTo(x, y + 170); g.lineTo(x + cw, y + 170); g.stroke(); g.fillStyle = C.muted; g.font = `20px ${FONT}`; g.fillText('İmza', x, y + 196); });
+      rows.forEach((r, i) => { const x = M + i * (cw + 40); g.fillStyle = C.muted; g.font = `600 22px ${FONT}`; g.fillText(xt(r.role), x, y + 24); g.fillStyle = C.ink; g.font = `22px ${FONT}`; g.fillText(r.name || xt('Ad Soyad: ________________'), x, y + 62); g.fillText(r.date || xt('Tarih: ____ / ____ / ________'), x, y + 100); g.strokeStyle = C.ink; g.lineWidth = 1.5; g.beginPath(); g.moveTo(x, y + 170); g.lineTo(x + cw, y + 170); g.stroke(); g.fillStyle = C.muted; g.font = `20px ${FONT}`; g.fillText('İmza', x, y + 196); });
       y += 220;
     }
     page();
     return { keep: room, text, h2, table, images, status, signature, pages, get y() { return y; }, footer() {
-      pages.forEach((cv, i) => { const c = cv.getContext('2d'); c.fillStyle = C.muted; c.font = `19px ${FONT}`; c.textAlign = 'left'; c.fillText('Araştırma prototipi çıktısıdır; klinik kullanım için doğrulanmamıştır.', M, H - 50); c.textAlign = 'right'; c.fillText(`Sayfa ${i + 1} / ${pages.length}`, W - M, H - 50); c.textAlign = 'left'; });
+      pages.forEach((cv, i) => { const c = cv.getContext('2d'); c.fillStyle = C.muted; c.font = `19px ${FONT}`; c.textAlign = 'left'; c.fillText(xt('Araştırma prototipi çıktısıdır; klinik kullanım için doğrulanmamıştır.'), M, H - 50); c.textAlign = 'right'; c.fillText(xt(`Sayfa ${i + 1} / ${pages.length}`), W - M, H - 50); c.textAlign = 'left'; });
     } };
   }
 
@@ -111,16 +114,16 @@ window.Report = (function () {
     const out = [], R = S.result, seat = R && R.seat && R.seat.ok ? (R.seat.best.tilt ? `${R.seat.best.tilt}° eğik` : 'dik') : 'dik';
     const fib = window.Fibula && Fibula.active() ? Fibula.summary() : null, plate = window.Plate && Plate.summary ? Plate.summary() : null;
     const guides = S.g.split && S.planes.length >= 2 ? 2 : 1;
-    out.push(`Mandibula guide${guides > 1 ? `'larını (${guides})` : "'ını"} kemiğe ${seat} yönde oturtun; oturmanın tam olduğunu kontrol edin.`);
-    if (S.screws.length) out.push(`Vida yuvalarını sırayla delin ve guide'ı sabitleyin: ${S.screws.map((s, i) => `Vida ${i + 1} (${fmt(s.d)} mm matkap, ${fmt(s.len, 0)} mm)`).join(', ')}.`);
-    if (S.planes.length) out.push(`Osteotomileri yuvalardan yapın: ${S.planes.map((p, i) => `Kesi ${i + 1}`).join(', ')} (yuva ${fmt(Math.max(...S.planes.map(p => p.w)))} mm).`);
-    out.push('Guide\'ı çıkarın ve rezeke parçayı alın; parçayı rezeke model ile karşılaştırın.');
+    out.push(guides > 1 ? xl(`Mandibula guide'larını (${guides}) kemiğe ${seat} yönde oturtun; oturmanın tam olduğunu kontrol edin.`) : xl(`Mandibula guide'ını kemiğe ${seat} yönde oturtun; oturmanın tam olduğunu kontrol edin.`));
+    if (S.screws.length) out.push(`${xl("Vida yuvalarını sırayla delin ve guide'ı sabitleyin:")} ${S.screws.map((s, i) => xl(`Vida ${i + 1} (${fmt(s.d)} mm matkap, ${fmt(s.len, 0)} mm)`)).join(', ')}.`);
+    if (S.planes.length) out.push(`${xl('Osteotomileri yuvalardan yapın:')} ${S.planes.map((p, i) => xl(`Kesi ${i + 1}`)).join(', ')} ${xl(`(yuva ${fmt(Math.max(...S.planes.map(p => p.w)))} mm).`)}`);
+    out.push(xl('Guide\'ı çıkarın ve rezeke parçayı alın; parçayı rezeke model ile karşılaştırın.'));
     if (fib) {
-      out.push(`Fibula guide'ını bacağa oturtun ve vidalayın. Distal ${fmt(fib.distal_korunan_mm, 0)} mm korunur.`);
-      out.push(`Fibula osteotomilerini yapın: ${fib.segmentler.map(g => `segment ${g.no} ${fmt(g.boy_mm)} mm`).join(', ')}.`);
-      out.push('Segmentleri numara sırasıyla defekte yerleştirin; rotasyonları plandaki gibi ayarlayın.');
+      out.push(xl(`Fibula guide'ını bacağa oturtun ve vidalayın. Distal ${fmt(fib.distal_korunan_mm, 0)} mm korunur.`));
+      out.push(`${xl('Fibula osteotomilerini yapın:')} ${fib.segmentler.map(g => xl(`segment ${g.no} ${fmt(g.boy_mm)} mm`)).join(', ')}.`);
+      out.push(xl('Segmentleri numara sırasıyla defekte yerleştirin; rotasyonları plandaki gibi ayarlayın.'));
     }
-    out.push(!plate ? 'Rekonstrüksiyonu plakla sabitleyin.' : plate.guide_ile_eslesen ? `Ön bükülmüş plağı (${plate.holes} delik) guide vida delikleriyle eşleşen ${plate.guide_ile_eslesen} delikten başlayarak sabitleyin.` : `Ön bükülmüş plağı (${plate.holes} delik) plandaki konumunda sabitleyin; guide vida delikleriyle eşleşen delik yok.`);
+    out.push(!plate ? xl('Rekonstrüksiyonu plakla sabitleyin.') : plate.guide_ile_eslesen ? xl(`Ön bükülmüş plağı (${plate.holes} delik) guide vida delikleriyle eşleşen ${plate.guide_ile_eslesen} delikten başlayarak sabitleyin.`) : xl(`Ön bükülmüş plağı (${plate.holes} delik) plandaki konumunda sabitleyin; guide vida delikleriyle eşleşen delik yok.`));
     return out;
   }
 
@@ -155,15 +158,15 @@ window.Report = (function () {
     d.text('Hastaya özel cerrahi plan raporu', { size: 40, weight: 600, after: 4 });
     d.text(`${name} · ${when}`, { size: 24, color: C.muted, after: 14 });
     d.status(draft ? 'TASLAK' : 'ONAYLI PLAN', draft ? 'warn' : 'ok');
-    d.text(`Sürüm: ${version}${surgeon ? ' · Onaylayan: ' + surgeon : ''}`, { size: 22 });
-    if (draft) d.text(`Onay bekleyen: ${miss.join(', ') || '–'}${S.crit ? ` · ${S.crit} kritik kontrol` : ''}`, { size: 22, color: C.warn });
-    d.text(`Görüntü: ${St.caseLine()} · Segmentasyon: ${S.segMethod || '–'}`, { size: 20, color: C.muted, after: 10 });
+    d.text(`${xl('Sürüm:')} ${version}${surgeon ? ' · ' + xl('Onaylayan:') + ' ' + surgeon : ''}`, { size: 22 });
+    if (draft) d.text(`${xl('Onay bekleyen:')} ${miss.map(xl).join(', ') || '–'}${S.crit ? ` · ${xl(`${S.crit} kritik kontrol`)}` : ''}`, { size: 22, color: C.warn });
+    d.text(`${xl('Görüntü:')} ${St.caseLine()} · ${xl('Segmentasyon:')} ${S.segMethod || '–'}`, { size: 20, color: C.muted, after: 10 });
     if (shots.length) { d.h2('Görünümler'); d.images(shots); }
     if (slices.length) { d.h2('BT kesitleri'); d.images(slices); }
     d.h2('Kesim tablosu');
     const sorted = S.planes.slice().sort((a, b) => a.off - b.off);
     d.table(['Kesi', 'Konum (eksen)', 'Yatay açı', 'Dikey açı', 'Yuva', 'Onay'], S.planes.map((p, i) => [`Kesi ${i + 1}`, `${fmt(p.off)} mm`, `${fmt(p.yaw)}°`, `${fmt(p.pitch)}°`, `${fmt(p.w)} mm`, p.ok ? (p.by || 'onaylı') : 'bekliyor']), [0.16, 0.2, 0.15, 0.15, 0.12, 0.22]);
-    d.text(`Rezeksiyon: lezyon ${fmt(S.lesion.from)} – ${fmt(S.lesion.to)} mm, güvenlik payı ${fmt(S.lesion.margin)} mm${S.lesion.condyle ? `, kondil dahil (${S.lesion.condyle === 'R' ? 'sağ' : 'sol'}) rezeksiyon` : ''}${S.g.split ? ', iki ayrı guide' : ''}${!S.lesion.condyle && sorted.length >= 2 ? `, kesiler arası ${fmt(sorted.at(-1).off - sorted[0].off)} mm` : ''}${S.resectedVolume ? `, rezeke hacim ${fmt(S.resectedVolume / 1000, 2)} cm³` : ''}.`, { size: 22 });
+    d.text(`${xl(`Rezeksiyon: lezyon ${fmt(S.lesion.from)} – ${fmt(S.lesion.to)} mm, güvenlik payı ${fmt(S.lesion.margin)} mm`)}${S.lesion.condyle ? xl(`, kondil dahil (${S.lesion.condyle === 'R' ? 'sağ' : 'sol'}) rezeksiyon`) : ''}${S.g.split ? xl(', iki ayrı guide') : ''}${!S.lesion.condyle && sorted.length >= 2 ? xl(`, kesiler arası ${fmt(sorted.at(-1).off - sorted[0].off)} mm`) : ''}${S.resectedVolume ? xl(`, rezeke hacim ${fmt(S.resectedVolume / 1000, 2)} cm³`) : ''}.`, { size: 22 });
     if (S.screws.length) {
       d.h2('Vidalar');
       d.table(['Vida', 'Konum (eksen, yanal)', 'Eğim', 'Matkap / kovan', 'Boy', 'Kemikte'], S.screws.map((s, i) => { const si = S.result && S.result.screwInfo[i]; return [`Vida ${i + 1}`, `${fmt(s.u)}, ${fmt(s.v)} mm`, `${fmt(s.tiltU, 0)}°, ${fmt(s.tiltV, 0)}°`, `${fmt(s.d)} / ${fmt(s.D)} mm`, `${fmt(s.len, 0)} mm`, si && si.ok ? `${fmt(si.inBone)} mm` : '–']; }), [0.13, 0.24, 0.16, 0.19, 0.12, 0.16]);
@@ -172,17 +175,17 @@ window.Report = (function () {
     if (fib) {
       d.h2('Fibula segmentleri');
       d.table(['Segment', 'Boy', 'Distal uçtan', 'Uç açıları', 'Rotasyon'], fib.segmentler.map(g => [`Segment ${g.no}`, `${fmt(g.boy_mm)} mm`, `${fmt(g.distal_uctan_mm)} mm`, `${fmt(g.kesi_acilari_deg[0])}° / ${fmt(g.kesi_acilari_deg[1])}°`, `${g.rotasyon_deg}°`]), [0.2, 0.18, 0.2, 0.24, 0.18]);
-      d.text(`${fib.fibula_serisi} · testere payı ${fmt(fib.testere_payi_mm)} mm · distal korunan ${fmt(fib.distal_korunan_mm, 0)} mm · proksimalde kalan ${fib.proksimalde_kalan_mm ?? '–'} mm · hattan sapma ${fmt(fib.sapma_mm, 2)} mm`, { size: 21 });
+      d.text(`${fib.fibula_serisi} · ${xl(`testere payı ${fmt(fib.testere_payi_mm)} mm · distal korunan ${fmt(fib.distal_korunan_mm, 0)} mm · proksimalde kalan ${fib.proksimalde_kalan_mm ?? '–'} mm · hattan sapma ${fmt(fib.sapma_mm, 2)} mm`)}`, { size: 21 });
     }
     (window.ReportSections || []).forEach(f => { try { f(d, C); } catch (e) { /* optional section */ } });
     d.h2('Montaj sırası');
-    assembly().forEach((t, i) => d.text(`${i + 1}. ${t}`, { size: 23 }));
+    assembly().forEach((t, i) => d.text(`${i + 1}. ${xt(t)}`, { size: 23 }));
     d.h2('Otomatik kontroller');
     const ck = S.checkList || [];
     if (!ck.length) d.text('Tüm kontroller geçti.', { size: 22, color: C.ok });
-    ck.forEach(([c, t, m]) => d.text(`${t}: ${m}`, { size: 21, color: c === 'crit' ? C.crit : c === 'warn' ? C.warn : C.ink }));
+    ck.forEach(([c, t, m]) => d.text(`${xl(t)}: ${xt(m)}`, { size: 21, color: c === 'crit' ? C.crit : c === 'warn' ? C.warn : C.ink }));
     d.keep(330); d.h2('Onay');
-    d.signature([{ role: 'Cerrah', name: surgeon ? `Ad Soyad: ${surgeon}` : '' }, { role: 'Biyomedikal mühendis' }]);
+    d.signature([{ role: 'Cerrah', name: surgeon ? `${xl('Ad Soyad:')} ${surgeon}` : '' }, { role: 'Biyomedikal mühendis' }]);
     d.footer();
     const blob = pdfOf(d.pages.map(jpegOf));
     St.busy(false);

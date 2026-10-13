@@ -3,6 +3,7 @@
    for planning. Layers are for looking and for marking (the lesion brush paints on whatever layer is visible);
    the plan itself always uses the bone segmentation of the Anatomy step. */
 'use strict';
+var xl = s => (window.I18N ? I18N.t(s) : s);
 window.Layers = (function () {
   const St = window.Studio; if (!St) return null;
   const { S, fmt, bus } = St, $ = id => document.getElementById(id);
@@ -71,9 +72,9 @@ window.Layers = (function () {
     box.innerHTML = `<li class="lay"><label><input type="checkbox" data-bone ${bone && bone.visible ? 'checked' : ''}><i style="background:${hex(St.COLORS.bone)}"></i>Kemik (planlama modeli)</label>
         <span class="hu"><input type="number" data-bthr value="${thr}" min="120" max="800" step="10" aria-label="Kemik eşiği (HU)"> HU üstü</span></li>` +
       layers.map(L => `<li class="lay"><label><input type="checkbox" data-on="${L.id}" ${L.on ? 'checked' : ''}><i style="background:${hex(L.color)}"></i>${St.esc(L.name)}</label>
-        <span class="hu"><input type="number" data-min="${L.id}" value="${L.min}" step="10" aria-label="${St.esc(L.name)} alt HU"> – <input type="number" data-max="${L.id}" value="${L.max}" step="10" aria-label="${St.esc(L.name)} üst HU"> HU</span>
+        <span class="hu"><input type="number" data-min="${L.id}" value="${L.min}" step="10" aria-label="${St.esc(L.name)} ${xl('alt HU')}"> – <input type="number" data-max="${L.id}" value="${L.max}" step="10" aria-label="${St.esc(L.name)} ${xl('üst HU')}"> HU</span>
         <input type="range" min="0.05" max="1" step="0.05" value="${L.opacity}" data-op="${L.id}" title="Saydamlık" aria-label="${St.esc(L.name)} saydamlığı">
-        <button class="x" data-del="${L.id}" title="Katmanı kaldır" aria-label="${St.esc(L.name)} katmanını kaldır">×</button>
+        <button class="x" data-del="${L.id}" title="Katmanı kaldır" aria-label="${window.I18N && I18N.lang === 'en' ? 'Remove ' + St.esc(L.name) + ' layer' : St.esc(L.name) + ' katmanını kaldır'}">×</button>
         ${L.empty ? '<small class="hint">Bu aralıkta doku bulunamadı.</small>' : ''}</li>`).join('');
     const byId = id => layers.find(L => L.id === +id);
     box.querySelector('[data-bone]').addEventListener('change', e => { show('bone', e.target.checked); if (St.parts.resected && !S.resRemoved) show('resected', e.target.checked); });

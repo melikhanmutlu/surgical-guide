@@ -7,6 +7,7 @@
      and PACS matches it to the study by Study Instance UID.
    - Navigation: landmarks, cut planes, screw and implant axes as JSON and CSV in DICOM patient coordinates (LPS, mm). */
 'use strict';
+var xl = s => (window.I18N ? I18N.t(s) : s);
 window.Exports = (function () {
   const St = window.Studio; if (!St) return null;
   const { S, V, fmt } = St, $ = id => document.getElementById(id);
@@ -170,11 +171,11 @@ window.Exports = (function () {
     }
     if (S.anchor) St.planesWorld().forEach((pw, i) => push({ tur: 'düzlem', ad: `Kesi ${i + 1}`, sistem: frame, p: vec(pw.p), yon: vec(pw.N), d1: pw.w, not: 'yuva genişliği mm' }));
     const si = S.result ? S.result.screwInfo : [];
-    si.forEach((x, i) => { if (x.ok) push({ tur: 'eksen', ad: `Vida ${i + 1}`, sistem: frame, p: vec(x.s.entry), yon: vec(x.s.dir), d1: x.s.sc.d, d2: x.s.sc.len, not: 'giriş noktası, yön; çap ve boy mm' }); });
-    if (window.Implants) (Implants.summary() || []).forEach(x => { if (x.platform_lps_mm) push({ tur: 'eksen', ad: `İmplant ${x.no}`, sistem: frame, p: x.platform_lps_mm, yon: x.eksen.map(v => -v), d1: x.cap_mm, d2: x.boy_mm, not: 'platform, apekse yön; çap ve boy mm' }); });
+    si.forEach((x, i) => { if (x.ok) push({ tur: 'eksen', ad: `Vida ${i + 1}`, sistem: frame, p: vec(x.s.entry), yon: vec(x.s.dir), d1: x.s.sc.d, d2: x.s.sc.len, not: 'giriş noktası, yön; çap ve boy mm' }); }); // i18n-skip: exported file content (fixed Turkish schema)
+    if (window.Implants) (Implants.summary() || []).forEach(x => { if (x.platform_lps_mm) push({ tur: 'eksen', ad: `İmplant ${x.no}`, sistem: frame, p: x.platform_lps_mm, yon: x.eksen.map(v => -v), d1: x.cap_mm, d2: x.boy_mm, not: 'platform, apekse yön; çap ve boy mm' }); }); // i18n-skip: exported file content (fixed Turkish schema)
     const st = window.Fibula && Fibula.active() ? Fibula.state() : null;
     if (st && st.last) {
-      st.last.segs.forEach(g => { push({ tur: 'nokta', ad: `Greft ${g.i + 1} başı`, sistem: frame, p: vec(g.P0), yon: vec(g.N0) }); push({ tur: 'nokta', ad: `Greft ${g.i + 1} sonu`, sistem: frame, p: vec(g.P1), yon: vec(g.N1) }); });
+      st.last.segs.forEach(g => { push({ tur: 'nokta', ad: `Greft ${g.i + 1} başı`, sistem: frame, p: vec(g.P0), yon: vec(g.N0) }); push({ tur: 'nokta', ad: `Greft ${g.i + 1} sonu`, sistem: frame, p: vec(g.P1), yon: vec(g.N1) }); }); // i18n-skip: exported file content (fixed Turkish schema)
       if (S.fib.guide) S.fib.guide.ctx.pls.forEach((pl, i) => push({ tur: 'düzlem', ad: `Fibula kesisi ${i + 1}`, sistem: 'Fibula BT (LPS)', p: vec(pl.p), yon: vec(pl.N), d1: pl.w, not: 'yuva genişliği mm' }));
     }
     const U = S.vol && S.vol.meta && S.vol.meta.uids;
@@ -194,7 +195,7 @@ window.Exports = (function () {
   });
   $('xSeg').addEventListener('click', async () => {
     St.busy(true, 'DICOM SEG hazırlanıyor…'); await St.sleep();
-    try { const r = segDICOM(); await save('segmentasyon_seg.dcm', r.bytes, 'application/dicom'); msg(`DICOM SEG hazır: ${r.segs} segment, ${r.frames} kesit.`); } catch (e) { msg(e.message); }
+    try { const r = segDICOM(); await save('segmentasyon_seg.dcm', r.bytes, 'application/dicom'); msg(xl(`DICOM SEG hazır: ${r.segs} segment, ${r.frames} kesit.`)); } catch (e) { msg(e.message); }
     St.busy(false);
   });
   $('xNav').addEventListener('click', async () => { const n = navigation(); await save('navigasyon.json', JSON.stringify(n.json, null, 2), 'application/json'); await save('navigasyon.csv', n.csv, 'text/csv'); msg('Navigasyon dosyaları hazır (JSON ve CSV, LPS mm).'); });
