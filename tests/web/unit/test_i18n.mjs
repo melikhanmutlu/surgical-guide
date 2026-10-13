@@ -94,7 +94,7 @@ function coverage(strings) {
 test('lookup mechanics: numbers lifted out and put back, singular for a lone 1, whitespace kept, unknown text unchanged', () => {
   const D = EN.D, k = Object.keys(D).find(x => /#/.test(x) && !/#.*#/.test(x));
   assert.ok(k, 'dictionary has a key with one number');
-  assert.equal(EN.t('  ' + k.replace('#', '12,5') + ' '), '  ' + D[k].replace('#', '12,5') + ' ');
+  assert.equal(EN.t('  ' + k.replace('#', '12,5') + ' '), '  ' + D[k].replace('#', '12.5') + ' ');
   assert.equal(EN.t('zzz bilinmeyen metin qq'), 'zzz bilinmeyen metin qq');
   assert.equal(EN.t('123'), '123', 'pure numbers untouched');
   assert.equal(TR.t(k), k, 'Turkish mode leaves strings alone');

@@ -100,13 +100,13 @@ for (const f of files) {
 // strings as they look at run time (numbers filled in) must come out in English with the numbers in the right place
 test('run-time samples come out in English', () => {
   const S = [
-    ['Toplam: +1,20 cm³ eklendi, −0,50 cm³ çıkarıldı.', 'Total: +1,20 cm³ added, −0,50 cm³ removed.'],
-    ['Mandibula BT\'si ameliyattan 120 gün önce çekilmiş (01.02.2026); 90 günden eski. Lezyon büyümüş ya da kemik değişmiş olabilir; güncel BT önerilir.', 'The mandible CT was taken 120 days before surgery (01.02.2026); older than 90 days. The lesion may have grown or the bone changed; a current CT is advised.'],
+    ['Toplam: +1,20 cm³ eklendi, −0,50 cm³ çıkarıldı.', 'Total: +1.20 cm³ added, −0.50 cm³ removed.'],
+    ['Mandibula BT\'si ameliyattan 120 gün önce çekilmiş (01.02.2026); 90 günden eski. Lezyon büyümüş ya da kemik değişmiş olabilir; güncel BT önerilir.', 'The mandible CT was taken 120 days before surgery (01.02.2026); older than 90 days. The lesion may have grown or the bone changed; a recent CT is recommended.'],
     ['Mandibula guide\'ını kemiğe 12° eğik yönde oturtun; oturmanın tam olduğunu kontrol edin.', 'Seat the mandible guide on the bone in the direction tilted 12°; check that it seats fully.'],
     ['İmplant 3 çevresinde 1 mm kemik duvarı yüzeyin yalnız %40\'inde var; daha ince implant ya da eğim düşünün.', 'Implant 3: a 1 mm bone wall around it exists on only 40% of the surface; consider a thinner implant or a different tilt.'],
     ['Segment 2 (üst)', 'Segment 2 (upper)'],
     ['Fibula segmenti 2 bitiş kesisi 31°; 30° üstü temas yüzeyini azaltır.', 'Fibula segment 2 end cut is 31°; angles above 30° reduce the contact surface.'],
-    ['Ameliyat sonrası: Kesi 2 plandan +0,8 mm, 3,1° sapmış (sınır 2 mm, 3°).', 'Post-operative: Cut 2 deviates +0,8 mm and 3,1° from the plan (limit 2 mm, 3°).'],
+    ['Ameliyat sonrası: Kesi 2 plandan +0,8 mm, 3,1° sapmış (sınır 2 mm, 3°).', 'Post-operative: Cut 2 deviates +0.8 mm and 3.1° from the plan (limit 2 mm, 3°).'],
     ['1 gün', '1 day'], ['5 gün', '5 days'],
   ];
   for (const [tr, en] of S) assert.equal(T(tr), en);
