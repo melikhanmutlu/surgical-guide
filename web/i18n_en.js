@@ -1926,4 +1926,11 @@ window.I18N_EN = {
 "Sunucuda bağlantı köprüsü hazırlanıyor…": "Preparing the connecting bar on the server…",
 "Sunucuda fibula guide'ı hazırlanıyor…": "Preparing the fibula guide on the server…",
 "Sunucuda fibula guide'ı hazırlanıyor… #/#": "Preparing the fibula guide on the server… #/#",
+"Sarmayı artırın ya da guide'ı daha geniş bir kemik yüzeyine taşıyın.": "Increase the wrap or move the guide onto a wider bone surface.",
+"Fibula vidası # altında guide gövdesi yok; kovan boşlukta kalırdı.": "There is no guide body under fibula screw #; the sleeve would hang in the air.",
+"Vidayı kaydırın ya da sarmayı artırın.": "Move the screw or increase the wrap.",
+"Vidayı kemiğin üstüne kaydırın.": "Move the screw onto the bone.",
+"Fibula vidası # matkap yolu kesi yuvasıyla kesişiyor.": "The drill path of fibula screw # crosses the cut slot.",
+"Vidayı yuvadan uzaklaştırın.": "Move the screw away from the slot.",
+"Fibula vidası # kovanı kesi yuvasına # mm yaklaşıyor (en az # mm); testere yoluna değebilir.": "The sleeve of fibula screw # comes within # mm of the cut slot (at least # mm); it may touch the saw path.",
 };
