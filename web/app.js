@@ -2498,7 +2498,8 @@
     S.checkList = out.slice();
     const rank = { crit: 0, warn: 1, ok: 2 }, infos = out.filter(o => o[0] === 'info'), main = out.filter(o => o[0] !== 'info').sort((a, b) => (rank[a[0]] ?? 3) - (rank[b[0]] ?? 3));
     if (!main.length) main.push(['ok', 'Uygun', 'Tüm kontroller geçti.']);
-    const li = ([c, t, m, ref]) => `<li class="${c}"${ref ? ` data-go="${ref}" title="İlgili öğeye git" tabindex="0" role="button"` : ''}><b>${t}</b><span>${esc(m)}</span></li>`;
+    // the row's link is an inner element: a list item keeps its listitem role (axe "list", AR-10)
+    const li = ([c, t, m, ref]) => ref ? `<li class="${c}"><div class="go" data-go="${ref}" title="İlgili öğeye git" tabindex="0" role="button"><b>${t}</b><span>${esc(m)}</span></div></li>` : `<li class="${c}"><b>${t}</b><span>${esc(m)}</span></li>`;
     const n = c => out.filter(o => o[0] === c).length;
     $('chkSum').innerHTML = n('crit') || n('warn') ? (n('crit') ? `<span class="tag crit">${n('crit')} kritik</span>` : '') + (n('warn') ? `<span class="tag warn">${n('warn')} uyarı</span>` : '') + (infos.length ? `<span class="tag">${infos.length} bilgi</span>` : '') : '';
     $('chkSum').hidden = !$('chkSum').innerHTML;
@@ -2512,7 +2513,7 @@
       const mine = S.checkList.filter(o => o[3] && o[0] !== 'ok' && o[0] !== 'info' && stepOf(o[3]) === box.dataset.for);
       box.innerHTML = mine.length ? `<ul class="checks">${mine.map(li).join('')}</ul>` : '';
     });
-    document.querySelectorAll('.checks li[data-go]').forEach(el => { el.addEventListener('click', () => goTo(el.dataset.go)); el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); goTo(el.dataset.go); } }); });
+    document.querySelectorAll('.checks li > [data-go]').forEach(el => { el.addEventListener('click', () => goTo(el.dataset.go)); el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); goTo(el.dataset.go); } }); });
     updateMarkers();
   }
   // Checks that hold the approval and the package back on what goes to the printer (E1, E3): a production STL the server

@@ -179,7 +179,8 @@ input[type=checkbox] { accent-color: var(--accent); }
 .checks .ok b::before { background-color: var(--ok); background-image: var(--g-ok); }
 .checks .warn b::before { background-color: var(--warn); background-image: var(--g-warn); }
 .checks .crit b::before { background-color: var(--crit); background-image: var(--g-crit); }
-.checks li[data-go] { cursor: pointer; } .checks li[data-go]:hover { background: var(--hover); }
+.checks li:has(> [data-go]):hover { background: var(--hover); }
+.checks li > [data-go] { cursor: pointer; grid-column: 1 / -1; display: grid; grid-template-columns: inherit; gap: inherit; align-items: inherit; }
 .checks li { grid-template-columns: 74px 1fr; }
 .appr { list-style: none; margin: 0; padding: 0; display: grid; }
 .appr li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); }
@@ -319,7 +320,7 @@ button.link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2p
 @container stage (max-width: 760px) { .hud { gap: 4px 6px; padding: 4px 6px; } .hud button, .hud select { padding: 0 7px; font-size: 12px; height: 26px; } .hud input[type=range] { width: 90px; } .hud .divider { display: none; } }
 @container stage (max-width: 560px) { .viewtools .presets { display: none; } .viewtools #viewCube { width: 72px; height: 72px; } #modeBar { max-width: calc(100% - 110px); } }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-.checks li[data-go] { cursor: pointer; } .checks li[data-go]:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.checks li > [data-go]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 button.primary:disabled { opacity: 1; background: var(--sunken); color: var(--muted); border-color: var(--line-strong); }
 #readyPill.crit { cursor: pointer; }
 .mk.crit { color: var(--crit); border-color: var(--crit); } .mk.crit::before { background-color: var(--crit); background-image: var(--g-crit); }
@@ -454,8 +455,8 @@ label.chk input[type=checkbox] { margin: 0 4px 0 0; width: 15px; height: 15px; f
 .kv dd { text-align: right; padding-left: 12px; text-wrap: pretty; }
 .checks li { grid-template-columns: 18px 1fr; }
 .checks li b { font-size: 0; gap: 0; } .checks li b::before { font-size: 12px; }
-.checks li[data-go]::after { content: "›"; grid-column: 3; color: var(--faint); font-size: 16px; line-height: 1; align-self: center; padding-right: 6px; }
-.checks li[data-go] { grid-template-columns: 18px 1fr auto; }
+.checks li > [data-go]::after { content: "›"; grid-column: 3; color: var(--faint); font-size: 16px; line-height: 1; align-self: center; padding-right: 6px; }
+.checks li:has(> [data-go]) { grid-template-columns: 18px 1fr auto; }
 .chk-sum { display: flex; flex-wrap: wrap; gap: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
 .rowcard { display: grid; grid-template-columns: 1fr auto; gap: 0 8px; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
 .rowcard b { font-weight: 500; } .rowcard .v { font: 12.5px var(--font-mono); font-variant-numeric: tabular-nums; }
