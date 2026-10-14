@@ -58,6 +58,15 @@ def one_leg_ct(side):
 
 
 class Separate(unittest.TestCase):
+    def test_flood_order_shared_between_ratios(self):
+        """D4 P16: a Separator floods every ratio from one precomputed order; the labels equal a fresh flood's."""
+        shape = (40, 40, 70)
+        m = rod(shape, "x", 20, 10, 5, 65, 6) | rod(shape, "x", 20, 26, 5, 65, 4)
+        s = bones.Separator(m, SP)
+        for r in (0.35, 0.5, 0.65, 0.35):
+            fresh = bones._flood(s.edt, s.cmask, r)[1:-1, 1:-1, 1:-1]
+            self.assertTrue(np.array_equal(s.run_coarse(r), fresh), r)
+
     def test_two_rods_with_a_bridge(self):
         shape = (60, 60, 100)
         m = rod(shape, "x", 30, 14, 10, 90, 9) | rod(shape, "x", 30, 34, 10, 90, 5)

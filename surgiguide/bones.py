@@ -8,6 +8,8 @@ local maximum is a bone core, and two cores are one bone when the neck between t
 as the thinner core (a bone is thick everywhere; a joint or a tooth contact is a thin neck). The cores grow back over the
 whole mask, so each piece keeps its full surface.
 """
+from array import array
+
 import numpy as np
 from scipy import ndimage as ndi
 
@@ -19,15 +21,22 @@ FIBULA_LENGTH = (120.0, 500.0)                # mm: shortest / longest fibula (C
 FIBULA_RATIOS = (0.45, 0.5, 0.4, 0.55, 0.35, 0.6)
 
 
-def _flood(edt, cmask, ratio):
-    """Watershed with neck / core merging on a padded coarse grid; int32 labels (0 = outside), pieces numbered by root."""
-    shape = edt.shape
-    ny, nx = shape[1], shape[2]
+def _flood_order(edt, cmask):
+    """The flood's visiting order (bone voxels, thickest first) and the distances as a flat float array: the same for every
+    ratio, so a Separator computes them once (D4 P16: compact arrays instead of whole-box Python lists, ~12 B per voxel)."""
     order = np.flatnonzero(cmask.ravel())
     order = order[np.argsort(-edt.ravel()[order], kind="stable")].tolist()
-    D = edt.ravel().tolist()
+    return order, array("d", edt.ravel().astype(np.float64).tobytes())
+
+
+def _flood(edt, cmask, ratio, pre=None):
+    """Watershed with neck / core merging on a padded coarse grid; int32 labels (0 = outside), pieces numbered by root.
+    pre: _flood_order(edt, cmask), when the caller floods the same grid at several ratios."""
+    shape = edt.shape
+    ny, nx = shape[1], shape[2]
+    order, D = pre or _flood_order(edt, cmask)
     nb = (-1, 1, -nx, nx, -nx * ny, nx * ny)
-    lab = [0] * cmask.size
+    lab = array("l", bytes(array("l").itemsize * cmask.size))
     parent, peak = [0], [0.0]
 
     def find(r):
@@ -85,7 +94,9 @@ class Separator:
     def run_coarse(self, ratio):
         """Coarse-grid labels (no padding, root numbers, 0 = outside): everything the pieces' statistics need, at a fraction of
         the cost of lifting them to the native grid."""
-        return _flood(self.edt, self.cmask, ratio)[1:-1, 1:-1, 1:-1]
+        if getattr(self, "_pre", None) is None:
+            self._pre = _flood_order(self.edt, self.cmask)
+        return _flood(self.edt, self.cmask, ratio, self._pre)[1:-1, 1:-1, 1:-1]
 
     def lift(self, coarse, label=None):
         """Native-grid labels (shape of the input mask's box) from coarse labels: a native voxel takes the label of its coarse
