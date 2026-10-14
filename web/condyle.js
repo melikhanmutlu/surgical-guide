@@ -138,12 +138,23 @@ window.Condyle = (function () {
   ['parts', 'changed', 'planApplied'].forEach(t => bus.addEventListener(t, () => { try { render(); showNeo(); } catch (e) { /* no case yet */ } }));
   bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring)) neo = NEO_DEFAULT; });
 
+  // the condyle chosen for a condylar resection against the side of the lesion: the lesion's centre on the guide axis lies
+  // clearly (> 10 mm) across the midline from that condyle and nearer the other one (Denetim 3 open item: a right
+  // condyle picked for a left lesion went unnoticed). A warning, not a block: a resection may cross the midline.
+  function wrongSide() {
+    const ref = cond(), k = S.lesion.condyle; if (!ref || !k || !S.anchor || !ref.cond.R || !ref.cond.L) return null;
+    const { u } = St.frameAxes(), c = S.anchor.p.clone().addScaledVector(u, (S.lesion.from + S.lesion.to) / 2);
+    const sd = q => q[0] * ref.n[0] + q[1] * ref.n[1] + q[2] * ref.n[2] - ref.d, sc = sd([c.x, c.y, c.z]), sk = sd(ref.cond[k]);
+    const other = k === 'R' ? 'L' : 'R', closer = c.distanceTo(V(...ref.cond[k])) - c.distanceTo(V(...ref.cond[other]));
+    return Math.sign(sc) !== Math.sign(sk) && Math.abs(sc) > 10 && closer > 0 ? { side: k, off: Math.abs(sc), closer } : null;
+  }
   // ---------- checks ----------
   (window.ExtraChecks = window.ExtraChecks || []).push(() => {
     const out = [];
     if (!S.anchor) return out;
     if (S.lesion.condyle) {
       const E = St.resEnds(), d = E && E.condyle ? E.B.neo : neo, sn = sideName(S.lesion.condyle).toLocaleLowerCase('tr-TR');
+      const ws = wrongSide(); if (ws) out.push(['warn', 'Uyarı', ws.side === 'R' ? `Kondil dahil rezeksiyon sağ kondile ayarlı, ama lezyon orta hattın sol tarafında (orta hattan ${fmt(ws.off, 0)} mm, sol kondile ${fmt(ws.closer, 0)} mm daha yakın). Rezeksiyon tarafını kontrol edin.` : `Kondil dahil rezeksiyon sol kondile ayarlı, ama lezyon orta hattın sağ tarafında (orta hattan ${fmt(ws.off, 0)} mm, sağ kondile ${fmt(ws.closer, 0)} mm daha yakın). Rezeksiyon tarafını kontrol edin.`, 'lesion']);
       out.push(['info', 'Bilgi', xl(`Yeni kondil (${sn}): fibula ucu yuvarlatılır ve fossanın ${fmt(d)} mm altına, kesiye doğru yerleştirilir. Eklem diski korunur; ameliyattan sonra en az 2 hafta çene (maksillomandibüler) fiksasyonu planlanmalıdır.`), 'lesion']);
       if (d > NEO_WARN) out.push(['warn', 'Uyarı', `Yeni kondil fossadan ${fmt(d)} mm uzakta (10 mm üstü). 1 cm'den fazla aşağı ya da öne yer değiştirme yutma güçlüğü ve çene kaymasıyla ilişkili; mesafeyi azaltın.`, 'lesion']);
       out.push(['warn', 'Uyarı', 'Kondil rezeke ediliyor: en büyük konum sapması kondilde beklenir (3-4 mm). Yeni kondili oklüzal wafer ya da çene fiksasyonuyla konumlandırın; alternatif olarak kondil protezi değerlendirilebilir.', 'lesion']);
@@ -183,5 +194,5 @@ window.Condyle = (function () {
     get: () => (neo !== NEO_DEFAULT ? { neo } : null),
     set(x) { const v = x && x.neo != null ? Number(x.neo) : NaN; neo = Number.isFinite(v) ? Math.max(0, Math.min(NEO_MAX, v)) : NEO_DEFAULT; render(); },
   };
-  return { neoOffset: () => neo, setNeo: v => { neo = Math.max(0, Math.min(NEO_MAX, +v || 0)); render(); }, stumpPlaces, position, notch, NEO_WARN, STUMP_MIN, TOL_RAMUS, TOL_BODY };
+  return { neoOffset: () => neo, setNeo: v => { neo = Math.max(0, Math.min(NEO_MAX, +v || 0)); render(); }, stumpPlaces, position, notch, wrongSide, NEO_WARN, STUMP_MIN, TOL_RAMUS, TOL_BODY };
 })();

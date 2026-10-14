@@ -2,12 +2,13 @@
 // shows that attacker-controlled text reaches innerHTML unescaped, while the sibling modules escape the same text).
 //  1. renderQC (app.js:362): DICOM Modality (0008,0060) / ConvolutionKernel (0018,1210) strings -> #qc
 //  2. renderParts (app.js:963): scene part labels (layer names from a stored plan, layers.js:46) -> #parts
+//  3. mfg.js (Denetim 4 G1): production-profile values from a stored plan -> <input value="…"> in #mfgBox
 // Run: node test_xss.mjs
 import { test, run, assert } from './lib/t.mjs';
 import { studio, ready } from './lib/harness.mjs';
 import { dicom } from './lib/dicomw.mjs';
 
-const P = studio({ dicom: true, pre: ['codecs.js', 'unzip.js'] }); const St = await ready(P);
+const P = studio({ dicom: true, pre: ['codecs.js', 'unzip.js'], post: ['mfg.js'] }); const St = await ready(P);
 const $ = id => P.g.document.getElementById(id);
 const PAY = '<img src=x onerror=alert(1)>';
 const until = async (f, ms = 8000) => { const t0 = Date.now(); while (!f()) { if (Date.now() - t0 > ms) return false; await new Promise(r => setTimeout(r, 20)); } return true; };
@@ -34,6 +35,18 @@ test('renderParts: a scene part label (e.g. a layer name restored from a stored 
   St.renderParts();
   const html = $('parts').innerHTML;
   assert.ok(!html.includes(PAY), 'label must be escaped: ' + html.slice(0, 300));
+});
+
+test('mfg.js (G1): a stored plan\'s production profile cannot break out of the form attributes', () => {
+  const ATTR = '"><img src=x onerror=alert(1)>';
+  P.g.PlanExt.mfg.set({ prof: 'custom', blade: ATTR, clear: ATTR, slotTol: ATTR, minWall: ATTR, fit: ATTR });
+  const html = $('mfgBox').innerHTML;
+  assert.ok(html.includes('id="mf_blade"'), 'form rendered');
+  assert.ok(!html.includes('<img') && !html.includes('onerror'), 'payload must not reach the markup: ' + html.slice(0, 300));
+  assert.ok(Object.values(P.g.Mfg.get()).every(v => v === null || typeof v === 'string' || Number.isFinite(v)), JSON.stringify(P.g.Mfg.get()));
+  P.g.PlanExt.mfg.set({ prof: '"><b>x</b>' });
+  assert.equal(P.g.Mfg.get().prof, null, 'unknown profile key dropped'); assert.ok(!$('mfgBox').innerHTML.includes('<b>x'));
+  P.g.PlanExt.mfg.set(null);
 });
 
 await run('HTML injection evidence (app.js)');

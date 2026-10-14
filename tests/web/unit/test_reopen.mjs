@@ -59,7 +59,7 @@ test('setup: condylar resection, new condyle 8 mm (non-default), cut point moved
   await sleep(100);
   const E = St.resEnds(); assert.equal(E.condyle, 'R'); near(E.B.neo, 8, 1e-9, 'graft end 8 mm short of the fossa');
   near(E.A.p.y, -2.5, 1e-9, 'cut point moved along v'); near(E.A.p.z, -3, 1e-9, 'cut point moved along n');
-  S.lesion.ok = true; S.lesion.by = 'test';
+  $('surgeon').value = 'test'; St.stamp(S.lesion);   // approved in the app (a stamp bound to its values, D-7)
   fire('fibApprove', 'click'); assert.equal(W.Fibula.approved(), true, 'fibula approved');
   saved = St.clone(St.planOf()); before = snap();
   assert.equal(saved.ext.condyle.neo, 8, 'the offset is saved with the plan');
