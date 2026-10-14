@@ -129,7 +129,7 @@ window.Report = (function () {
 
   async function build() {
     const name = (window.CaseStore && CaseStore.caseName()) || ($('caseInfo').querySelector('dd') || {}).textContent || 'Vaka';
-    const version = window.CaseStore ? CaseStore.versionLabel() : 'Taslak', when = new Date().toLocaleString('tr-TR');
+    const version = window.CaseStore ? CaseStore.versionLabel() : 'Taslak', when = window.DateFmt ? DateFmt.dateTime(Date.now()) : new Date().toLocaleString('tr-TR');   // dates.js: EN spells the month
     const miss = St.pendingList(), draft = miss.length || S.crit, surgeon = $('surgeon').value.trim();
     St.busy(true, 'Rapor görüntüleri hazırlanıyor…'); await St.sleep();
     const shots = [];

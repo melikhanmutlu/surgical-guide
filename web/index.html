@@ -116,6 +116,9 @@ h1.brand { margin: 0; } .brand { display: flex; align-items: center; gap: 10px; 
 .hud select { width: auto; }
 .stage { position: absolute; inset: 0; background: var(--stage); touch-action: none; }
 .stage canvas { display: block; width: 100%; height: 100%; }
+/* keyboard pick (region / screw modes): Enter takes the point under this ring while the 3D view has focus */
+.stage[data-kbpick]:focus-within::after { content: ""; position: absolute; left: 50%; top: 50%; width: 18px; height: 18px; margin: -11px 0 0 -11px; border: 2px solid var(--accent); border-radius: 50%; pointer-events: none; }
+.stage[data-kbpick="half"]:focus-within::after { left: 25%; }
 .hud { position: absolute; left: 0; right: 0; margin: 0 auto; width: fit-content; bottom: 14px; z-index: 2; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 6px 10px; padding: 6px 8px; background: var(--glass); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); max-width: calc(100% - 28px); }
 .hud label { white-space: nowrap; color: var(--muted); } .hud input[type=range] { width: 130px; }
 .hud .divider { width: 1px; height: 20px; background: var(--line); }
@@ -179,7 +182,8 @@ input[type=checkbox] { accent-color: var(--accent); }
 .checks .ok b::before { background-color: var(--ok); background-image: var(--g-ok); }
 .checks .warn b::before { background-color: var(--warn); background-image: var(--g-warn); }
 .checks .crit b::before { background-color: var(--crit); background-image: var(--g-crit); }
-.checks li[data-go] { cursor: pointer; } .checks li[data-go]:hover { background: var(--hover); }
+.checks li:has(> [data-go]):hover { background: var(--hover); }
+.checks li > [data-go] { cursor: pointer; grid-column: 1 / -1; display: grid; grid-template-columns: inherit; gap: inherit; align-items: inherit; }
 .checks li { grid-template-columns: 74px 1fr; }
 .appr { list-style: none; margin: 0; padding: 0; display: grid; }
 .appr li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); }
@@ -319,7 +323,7 @@ button.link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2p
 @container stage (max-width: 760px) { .hud { gap: 4px 6px; padding: 4px 6px; } .hud button, .hud select { padding: 0 7px; font-size: 12px; height: 26px; } .hud input[type=range] { width: 90px; } .hud .divider { display: none; } }
 @container stage (max-width: 560px) { .viewtools .presets { display: none; } .viewtools #viewCube { width: 72px; height: 72px; } #modeBar { max-width: calc(100% - 110px); } }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-.checks li[data-go] { cursor: pointer; } .checks li[data-go]:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.checks li > [data-go]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 button.primary:disabled { opacity: 1; background: var(--sunken); color: var(--muted); border-color: var(--line-strong); }
 #readyPill.crit { cursor: pointer; }
 .mk.crit { color: var(--crit); border-color: var(--crit); } .mk.crit::before { background-color: var(--crit); background-image: var(--g-crit); }
@@ -454,8 +458,8 @@ label.chk input[type=checkbox] { margin: 0 4px 0 0; width: 15px; height: 15px; f
 .kv dd { text-align: right; padding-left: 12px; text-wrap: pretty; }
 .checks li { grid-template-columns: 18px 1fr; }
 .checks li b { font-size: 0; gap: 0; } .checks li b::before { font-size: 12px; }
-.checks li[data-go]::after { content: "›"; grid-column: 3; color: var(--faint); font-size: 16px; line-height: 1; align-self: center; padding-right: 6px; }
-.checks li[data-go] { grid-template-columns: 18px 1fr auto; }
+.checks li > [data-go]::after { content: "›"; grid-column: 3; color: var(--faint); font-size: 16px; line-height: 1; align-self: center; padding-right: 6px; }
+.checks li:has(> [data-go]) { grid-template-columns: 18px 1fr auto; }
 .chk-sum { display: flex; flex-wrap: wrap; gap: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
 .rowcard { display: grid; grid-template-columns: 1fr auto; gap: 0 8px; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
 .rowcard b { font-weight: 500; } .rowcard .v { font: 12.5px var(--font-mono); font-variant-numeric: tabular-nums; }
@@ -627,7 +631,7 @@ button.ghost.danger { color: var(--crit); }
               <details class="sub-d" id="secLes"><summary>Lezyonu boya (isteğe bağlı)</summary><div id="lesPaint" class="col"></div></details>
               <details class="sub-d" id="secBounds"><summary>Rezeksiyon aralığını sayıyla gir</summary>
                 <div id="lesCtl" class="col"></div>
-                <div class="btns"><button id="suggest"><svg class="i"><use href="#i-spark"/></svg>Kesileri sınıra göre koy</button></div>
+                <div class="btns"><button id="suggest"><svg class="i"><use href="#i-spark"/></svg>Kesileri aralık + güvenlik payına göre koy</button></div>
               </details>
             </li>
             <li id="sq2"><h3 class="sub"><span class="sn">b</span>Rezeke parça</h3>

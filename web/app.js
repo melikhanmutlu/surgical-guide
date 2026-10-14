@@ -376,7 +376,7 @@
   }
   async function switchSeries(i) {
     if (!scan || !scan.groups[i] || i === scan.cur) return;
-    if (S.anchor && !confirm('Başka seri açılınca kesiler ve guide silinir. Devam edilsin mi?')) { renderSeries(); return; }
+    if (S.anchor && !confirm('Seri değiştirilsin mi? Bu serideki kesiler ve guide silinir.')) { renderSeries(); return; }
     if (loadBlocked()) { renderSeries(); return; }
     const ctl = startLoad(), prog = progress(ctl); let r;
     try { await prog(0, 'Seri açılıyor…'); r = await decodeSeries(scan.groups[i], prog, 0, 1, scan); } catch (e) { if (e !== LOAD_CANCELLED) { if (loadCtl === ctl) loadCtl = null; throw e; } }
@@ -697,7 +697,8 @@
     [['sq1', has], ['sq2', has && S.resRemoved], ['sq3', gOn]].forEach(([id, ok]) => $(id).classList.toggle('done', ok));
     $('gNone').hidden = gOn;
   }
-  async function makeGuide() {
+  const makeGuide = () => exclusive(makeGuideNow);
+  async function makeGuideNow() {
     if (!S.anchor || !S.planes.length) { alertMsg('Önce kesileri belirleyin.'); return; }
     S.guideOn = true; placeScrews(); S.sel = null;
     busy(true, 'Rezeksiyon güncelleniyor… 1/2'); await sleep(); await rebuildResection();
@@ -728,7 +729,7 @@
     schedule(false); syncSeq();
   }
   async function resetPlan() {
-    if (S.anchor && !confirm('Kesiler, guide ve vidalar silinip baştan başlanacak. Emin misiniz?')) return;
+    if (S.anchor && !confirm('Plan sıfırlansın mı? Kesiler, guide ve vidalar silinir; onaylar da düşer.')) return;
     S.anchor = null; S.planes = []; S.screws = []; S.sel = null; S.result = null; S.grid = null; S.guideOn = false; S.resRemoved = false;
     Object.assign(S.gAuto, AUTO_DEFAULT); S.g.wrapU = null; S.g.vc = 0; S.fitLog = []; S.autoSize = null;
     unapproveAll(); $('guideStat').textContent = '';
@@ -2326,7 +2327,8 @@
     }));
   }
   // cuts are edited in the resection step, screws in their own step; approval happens only in the review step
-  const apprText = o => o.ok ? `${xl('Onaylı')}${o.by ? ' · ' + esc(o.by) : ''}${o.at ? ' · ' + new Date(o.at).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }) : ''}. ${xl('Değişiklik onayı kaldırır.')}` : 'Sistem önerisi; cerrah onayı İnceleme ve onay adımında verilir.';
+  const DF = k => t => (window.DateFmt ? DateFmt[k](t) : k === 'time' ? new Date(t).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }) : new Date(t).toLocaleString('tr-TR'));   // dates.js: the interface language
+  const apprText = o => o.ok ? `${xl('Onaylı')}${o.by ? ' · ' + esc(o.by) : ''}${o.at ? ' · ' + DF('time')(o.at) : ''}. ${xl('Değişiklik onayı kaldırır.')}` : 'Sistem önerisi; cerrah onayı İnceleme ve onay adımında verilir.';
   function renderElements() {
     const btn = (k, o, i, name) => `<button class="el ${S.sel === k + i ? 'on' : ''}" data-s="${k}${i}" aria-pressed="${S.sel === k + i}">${name} ${i + 1}<span class="dot ${o.ok ? 'ok' : ''}" title="${o.ok ? 'Onaylı' : 'Onay bekliyor'}"><span class="sr-only">${o.ok ? 'onaylı' : 'onay bekliyor'}</span></span></button>`;
     $('plList').innerHTML = S.planes.map((p, i) => btn('p', p, i, 'Kesi')).join('');
@@ -2402,7 +2404,7 @@
         const f = pieceFrames();
         if (f) [[f.A, f.a], [f.B, f.b]].forEach(([cut, fr]) => {
           const a = THREE.MathUtils.radToDeg(Math.acos(Math.min(1, Math.abs(fr.u.dot(cut.N)))));
-          if (a > CUT_ALONG_DEG) out.push(['warn', 'Uyarı', `Kesi ${S.planes.indexOf(cut.pl) + 1} kemik boyunca uzanıyor (kemiğin yönüne ${fmt(a, 0)}° eğik); güdükte vida için kemik kalmaz. Kesiyi kemiğe dik çevirin ("Kesileri sınıra göre koy" kesileri kemiğe dik önerir).`, 'p' + S.planes.indexOf(cut.pl)]);
+          if (a > CUT_ALONG_DEG) out.push(['warn', 'Uyarı', `Kesi ${S.planes.indexOf(cut.pl) + 1} kemik boyunca uzanıyor (kemiğin yönüne ${fmt(a, 0)}° eğik); güdükte vida için kemik kalmaz. Kesiyi kemiğe dik çevirin ("Kesileri aralık + güvenlik payına göre koy" kesileri kemiğe dik önerir).`, 'p' + S.planes.indexOf(cut.pl)]);
         });
       }
       // graft-to-stump gap at each end: the half slot the saw takes from the stump (0 when the kerf lies on the resected side)
@@ -2498,7 +2500,8 @@
     S.checkList = out.slice();
     const rank = { crit: 0, warn: 1, ok: 2 }, infos = out.filter(o => o[0] === 'info'), main = out.filter(o => o[0] !== 'info').sort((a, b) => (rank[a[0]] ?? 3) - (rank[b[0]] ?? 3));
     if (!main.length) main.push(['ok', 'Uygun', 'Tüm kontroller geçti.']);
-    const li = ([c, t, m, ref]) => `<li class="${c}"${ref ? ` data-go="${ref}" title="İlgili öğeye git" tabindex="0" role="button"` : ''}><b>${t}</b><span>${esc(m)}</span></li>`;
+    // the row's link is an inner element: a list item keeps its listitem role (axe "list", AR-10)
+    const li = ([c, t, m, ref]) => ref ? `<li class="${c}"><div class="go" data-go="${ref}" title="İlgili öğeye git" tabindex="0" role="button"><b>${t}</b><span>${esc(m)}</span></div></li>` : `<li class="${c}"><b>${t}</b><span>${esc(m)}</span></li>`;
     const n = c => out.filter(o => o[0] === c).length;
     $('chkSum').innerHTML = n('crit') || n('warn') ? (n('crit') ? `<span class="tag crit">${n('crit')} kritik</span>` : '') + (n('warn') ? `<span class="tag warn">${n('warn')} uyarı</span>` : '') + (infos.length ? `<span class="tag">${infos.length} bilgi</span>` : '') : '';
     $('chkSum').hidden = !$('chkSum').innerHTML;
@@ -2512,7 +2515,7 @@
       const mine = S.checkList.filter(o => o[3] && o[0] !== 'ok' && o[0] !== 'info' && stepOf(o[3]) === box.dataset.for);
       box.innerHTML = mine.length ? `<ul class="checks">${mine.map(li).join('')}</ul>` : '';
     });
-    document.querySelectorAll('.checks li[data-go]').forEach(el => { el.addEventListener('click', () => goTo(el.dataset.go)); el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); goTo(el.dataset.go); } }); });
+    document.querySelectorAll('.checks li > [data-go]').forEach(el => { el.addEventListener('click', () => goTo(el.dataset.go)); el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); goTo(el.dataset.go); } }); });
     updateMarkers();
   }
   // Checks that hold the approval and the package back on what goes to the printer (E1, E3): a production STL the server
@@ -2536,7 +2539,7 @@
   }
   function pending() {
     const p = [];
-    if (!S.lesion.ok) p.push('Rezeksiyon sınırı');
+    if (!S.lesion.ok) p.push('Rezeksiyon aralığı');
     S.planes.forEach((o, i) => { if (!o.ok) p.push(`Kesi ${i + 1}`); });
     S.screws.forEach((o, i) => { if (!o.ok) p.push(`Vida ${i + 1}`); });
     if (window.Fibula && Fibula.active() && !Fibula.approved()) p.push('Fibula planı');
@@ -2544,7 +2547,7 @@
     return p;
   }
   const initials = n => (n || '').split(/\s+/).filter(w => w && !/^(dr|prof|doç|doc|op|uzm)\.?$/i.test(w)).map(w => w[0].toLocaleUpperCase('tr-TR')).slice(0, 2).join('') || '?';
-  const badge = o => o.ok ? `<span class="badge" title="${esc(o.by || '')}${o.at ? ' · ' + new Date(o.at).toLocaleString('tr-TR') : ''}"><span class="ini">${esc(initials(o.by))}</span>${o.at ? new Date(o.at).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }) : ''}</span>` : '';
+  const badge = o => o.ok ? `<span class="badge" title="${esc(o.by || '')}${o.at ? ' · ' + DF('dateTime')(o.at) : ''}"><span class="ini">${esc(initials(o.by))}</span>${o.at ? DF('time')(o.at) : ''}</span>` : '';
   function approveItem(ref) {
     const name = $('surgeon').value.trim();
     const o = ref === 'lesion' ? S.lesion : ref[0] === 'p' ? S.planes[+ref.slice(1)] : ref[0] === 's' ? S.screws[+ref.slice(1)] : null;
@@ -2567,7 +2570,7 @@
     const fib = window.Fibula && Fibula.active();
     $('appr').innerHTML =
       `<li class="sum"><button class="go" data-go="data"><span class="nm">Görüntü kalitesi</span></button><span class="tag ${qcCrit ? 'crit' : 'ok'}">${qcCrit ? 'Kritik' : 'Uygun'}</span></li>` +
-      row('lesion', 'Rezeksiyon sınırı', L, `${fmt(L.from)} – ${fmt(L.to)} mm, pay ${fmt(L.margin)} mm`) +
+      row('lesion', 'Rezeksiyon aralığı', L, `${fmt(L.from)} – ${fmt(L.to)} mm, güvenlik payı ${fmt(L.margin)} mm`) +
       S.planes.map((p, i) => row('p' + i, `Kesi ${i + 1}`, p, plSub(p, i))).join('') +
       S.screws.map((sc, i) => row('s' + i, `Vida ${i + 1}`, sc, scSub(sc, i))).join('') +
       (fib ? row('fib', 'Fibula planı ve guide\'ı', { ok: Fibula.approved(), by: S.fib.plan.by, at: S.fib.plan.at }, `${S.fib.plan.n} segment`) : '') +
@@ -2637,6 +2640,13 @@
   // analysis) is rebuilt as fast as the machine allows, and the full guide, resection and checks follow
   // once the value rests.
   let timer = null, rebuildPending = false;   // rebuildPending: a scheduled guide / resection rebuild has not finished yet
+  // W25: the rebuild jobs (and "Guide oluştur") run one at a time. clearTimeout cannot stop a callback that already
+  // runs, and fitWrap tries wrap / split / screw values on S.g while it waits: a second rebuild started meanwhile
+  // would build (and show) a guide from those trial values. A job that finds a newer edit queued leaves the work to it.
+  let jobLock = Promise.resolve();
+  function exclusive(fn) { const run = jobLock.then(fn); jobLock = run.catch(() => {}); return run; }
+  // resolves once no rebuild is scheduled or running (tests and callers that must read a finished state)
+  async function settled() { for (let i = 0; i < 2400 && rebuildPending; i++) await new Promise(r => setTimeout(r, 25)); await jobLock; }
   let previewRaf = 0;
   function previewElements() {
     if (!previewRaf) previewRaf = requestAnimationFrame(() => { previewRaf = 0; previewNow(); });
@@ -2655,7 +2665,7 @@
     previewElements();
     // while dragging only the cut discs and screws move; the resected piece and the guide follow on release
     clearTimeout(timer); rebuildPending = true;
-    timer = setTimeout(async () => { try {
+    timer = setTimeout(() => exclusive(async () => { if (timer !== t) return; live.jobs = (live.jobs || 0) + 1; try {
       if (live.resDirty) { live.planes = live.resDirty = false; busy(true, 'Rezeksiyon güncelleniyor…'); await sleep(); await rebuildResection(); }
       if (S.screwRefit) { S.screwRefit = false; if (S.guideOn && S.anchor) { placeScrews(); S.sel = null; renderElements(); } }
       await regenerate();
@@ -2676,7 +2686,7 @@
           if (dropFloating()) await regenerate();
         } else if (S.guideOn && R && $('guideStat')) $('guideStat').textContent = 'Guide yeni konumda kemiğe oturuyor.';
       }
-    } finally { if (timer === t) rebuildPending = false; } }, liveEdit ? 400 : 120);
+    } finally { if (timer === t) rebuildPending = false; } }), liveEdit ? 400 : 120);
     const t = timer;
   }
   const ray = new THREE.Raycaster(), mouse = new THREE.Vector2();
@@ -2707,9 +2717,28 @@
       else if (S.guideSel) { S.guideSel = false; syncGizmo(); emit('guideSel', false); }
       return;
     }
-    const targets = ['bone', 'resected', 'guide'].filter(k => parts[k] && parts[k].visible).map(k => parts[k].obj);
-    const hit = ray.intersectObjects(targets, false)[0];
-    if (!hit) return;
+    const hit = ray.intersectObjects(pickTargets(), false)[0];
+    if (hit) pickHit(hit);
+  });
+  const pickTargets = () => ['bone', 'resected', 'guide'].filter(k => parts[k] && parts[k].visible).map(k => parts[k].obj);
+  // Keyboard alternative to the click in the region / screw modes (AR-7, WCAG 2.1.1): the focused 3D view turns with
+  // the arrow keys (ui.js); Enter takes the surface under the middle of the view (the ring marks it). A miss right in
+  // the middle looks outward in small rings (a U-shaped jaw is open at its centre) before it gives up.
+  function centreHit() {
+    const t = pickTargets(); if (!t.length) return null;
+    for (let r = 0; r <= 0.3001; r += 0.03) for (let a = 0, n = r ? 16 : 1; a < n; a++) {
+      mouse.set(r * Math.cos(2 * Math.PI * a / n), r * Math.sin(2 * Math.PI * a / n)); ray.setFromCamera(mouse, camera);
+      const h = ray.intersectObjects(t, false)[0]; if (h) return h;
+    }
+    return null;
+  }
+  renderer.domElement.addEventListener('keydown', e => {
+    if ((e.key !== 'Enter' && e.key !== ' ') || (S.mode !== 'anchor' && S.mode !== 'screw') || e.ctrlKey || e.metaKey || e.altKey || !camera.layers.isEnabled(0)) return;
+    e.preventDefault();
+    const h = centreHit();
+    if (h) pickHit(h); else alertMsg('Görünümün ortasında kemik ya da guide yok; görünümü ok tuşlarıyla çevirip yeniden deneyin.');
+  });
+  function pickHit(hit) {
     if (S.mode === 'anchor') {
       const nrm = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
       if (nrm.dot(ray.ray.direction) > 0) nrm.negate();
@@ -2724,7 +2753,7 @@
       S.screws.push(sc);
       S.sel = 's' + (S.screws.length - 1); setMode('orbit'); schedule(false);
     }
-  });
+  }
   // ---------- 3D handles: drag the selected cut or screw along / around the guide axes ----------
   // x = along the bone (u), y = lateral (v), z = seating normal (n). A cut moves only along x and turns
   // about y and z; a screw moves in x/y (it always starts on the bone surface) and tilts about x and y.
@@ -3016,7 +3045,9 @@
     if (m !== 'orbit') mandibleView();
     S.mode = m;
     $('modeBadge').hidden = m === 'orbit';
-    $('modeBadge').textContent = m === 'anchor' ? 'Rezeksiyon bölgesinin ortasında kemik yüzeyine tıklayın (guide buraya oturur)' : m === 'screw' ? 'Vida yeri için guide üzerine tıklayın' : $('modeBadge').textContent;
+    $('modeBadge').textContent = m === 'anchor' ? 'Rezeksiyon bölgesinin ortasında kemik yüzeyine tıklayın (guide buraya oturur) · Klavye: 3B görünümde ok tuşlarıyla çevirin, Enter ortadaki noktayı seçer'
+      : m === 'screw' ? 'Vida yeri için guide üzerine tıklayın · Klavye: 3B görünümde ok tuşlarıyla çevirin, Enter ortadaki noktaya vida koyar' : $('modeBadge').textContent;
+    if (m === 'anchor' || m === 'screw') $('stage').setAttribute('data-kbpick', S.split ? 'half' : ''); else $('stage').removeAttribute('data-kbpick');   // the ring in the middle of the view (keyboard pick)
   }
   // ---------- click / brush modes (cut region, screw site, bone pick, marking and lesion brushes, ...) ----------
   // Every tool that takes over the clicks on the model shows the mode bar over the view: what the clicks do now,
@@ -3178,7 +3209,7 @@
   $('fit').addEventListener('click', () => { if (parts.bone) fitTo(parts.bone.obj); });
   // the sample replaces the whole case: a plan (cuts, screws, guide, fibula plan) is lost and "undo" does not bring it back, so ask first
   const planned = () => !!(S.anchor || S.planes.length || S.screws.length || (window.Fibula && Fibula.active && Fibula.active()));
-  const sampleClick = name => { if (loadBlocked()) return; if (planned() && !confirm('Örnek vaka yüklenince mevcut plan (kesiler, vidalar, guide) silinir. Devam edilsin mi?')) return; loadSample(name); };
+  const sampleClick = name => { if (loadBlocked()) return; if (planned() && !confirm('Örnek vaka yüklensin mi? Mevcut plan (kesiler, vidalar, guide) silinir.')) return; loadSample(name); };
   $('sampleM').addEventListener('click', () => sampleClick('mandible'));
   $('sampleL').addEventListener('click', () => sampleClick('leg'));
   $('dicomDir').addEventListener('change', e => { if (e.target.files.length) loadDicom([...e.target.files]); });
@@ -3236,6 +3267,7 @@
   }
   const zip = files => new Blob([zipBytes(files)]);
   function reportHTML() {
+    // rapor.html is a Turkish document (lang="tr") in either interface language: Turkish dates
     const miss = pending(), draft = miss.length || S.crit, when = new Date().toLocaleString('tr-TR');
     const st = o => o.ok ? `Onaylı${o.by ? ' · ' + esc(o.by) : ''}${o.at ? ' · ' + new Date(o.at).toLocaleString('tr-TR') : ''}` : 'Bekliyor';
     const li = arr => arr.map(([, t, m]) => `<li><b>${t}:</b> ${esc(m)}</li>`).join('');
@@ -3247,7 +3279,7 @@
 ${draft ? `<p>Onay bekleyen: ${esc(miss.join(', ') || '-')}${S.crit ? ` · ${S.crit} kritik kontrol` : ''}</p>` : ''}
 <h2>Vaka</h2><p>${esc(caseLine())}</p><p>Segmentasyon: ${esc(S.segMethod)}</p>
 <h2>Görüntü kalite kontrolü</h2><ul>${li(S.qc)}</ul>
-<h2>Rezeksiyon sınırı</h2><p>Lezyon ${fmt(S.lesion.from)} ile ${fmt(S.lesion.to)} mm arası, güvenlik payı ${fmt(S.lesion.margin)} mm · ${st(S.lesion)}</p>
+<h2>Rezeksiyon aralığı</h2><p>Lezyon ${fmt(S.lesion.from)} ile ${fmt(S.lesion.to)} mm arası, güvenlik payı ${fmt(S.lesion.margin)} mm · ${st(S.lesion)}</p>
 <h2>Kesi düzlemleri</h2><table><tr><th>Kesi</th><th>Konum</th><th>Yatay açı</th><th>Dikey açı</th><th>Yuva</th><th>Durum</th></tr>${S.planes.map((p, i) => `<tr><td>${i + 1}</td><td>${fmt(p.off)} mm</td><td>${fmt(p.yaw)}°</td><td>${fmt(p.pitch)}°</td><td>${fmt(p.w)} mm</td><td>${st(p)}</td></tr>`).join('')}</table>
 <h2>Vidalar</h2><table><tr><th>Vida</th><th>Konum (eksen, yanal)</th><th>Eğim</th><th>Matkap / kovan</th><th>Boy</th><th>Kemik içinde</th><th>Durum</th></tr>${S.screws.map((s, i) => { const si = R && R.screwInfo[i]; return `<tr><td>${i + 1}</td><td>${fmt(s.u)}, ${fmt(s.v)} mm</td><td>${fmt(s.tiltU, 0)}°, ${fmt(s.tiltV, 0)}°</td><td>${fmt(s.d)} / ${fmt(s.D)} mm</td><td>${fmt(s.len, 0)} mm</td><td>${si && si.ok ? fmt(si.inBone) + ' mm' : '-'}</td><td>${st(s)}</td></tr>`; }).join('')}</table>
 <h2>Guide gövdesi</h2><table>${gp.map(([k, v, u]) => `<tr><td>${k}</td><td>${fmt(v)} ${u}</td></tr>`).join('')}${R ? `<tr><td>Temas alanı</td><td>${fmt(R.contact, 0)} mm²</td></tr><tr><td>Hacim</td><td>${fmt(R.volume / 1000, 2)} cm³</td></tr>` : ''}</table>
@@ -3504,7 +3536,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   function serverUrl() { return ($('aiUrl').value || '').trim().replace(/\/+$/, ''); }
   function select(sel) { if (sel) S.guideSel = false; S.sel = sel; emit('select', sel); renderElements(); rebuildElementParts(S.result ? S.result.pls : planesWorld(), S.result ? S.result.screwInfo : []); applyExplode(); render(); }
   window.Studio = { mandibleView, endModes, onEndModes, startLoad, loadStopped, loadBusy: () => committing, LOAD_CANCELLED, renderComps, setGuideRot, setGuideRoll, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, resEnds, splitGap, cutMisses, evalScrew, resectedAt, resectedNear, resPiece, boneTrack, cutAlongBone, bestScrew,
-    boneSections, sizeBody, autoBody, buildGuideSet, cutsAngle, cutFrame, pieceFrames, pieceBody, screwBodyOn, pieceWrapTop, frameAt, stumpGap, mergeStl, mergeMeshes, AUTO_DEFAULT, G_DEFAULT, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume, boneField, simplifyMesh, BAR, barPlan, barSdf, buildBarMesh, placeLug, longCase, axisOffBone, ramusAxis, stopSides, LONG_MM, CUT_OFF_MAX, prodKey, bonelessCut, reframe };
+    boneSections, sizeBody, autoBody, buildGuideSet, cutsAngle, cutFrame, pieceFrames, pieceBody, screwBodyOn, pieceWrapTop, frameAt, stumpGap, mergeStl, mergeMeshes, AUTO_DEFAULT, G_DEFAULT, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume, boneField, simplifyMesh, BAR, barPlan, barSdf, buildBarMesh, placeLug, longCase, axisOffBone, ramusAxis, stopSides, LONG_MM, CUT_OFF_MAX, prodKey, bonelessCut, reframe, exclusive, settled, makeGuide };
   bus.addEventListener('planeDragged', () => { renderElements(); schedule(true, true); });
   // messages assembled at run time are written in the language that was active: write them again when it changes
   if (window.addEventListener) window.addEventListener('langchange', () => { try { renderChecks(); renderAppr(); syncLesion(); } catch (e) { /* no case open yet */ } });

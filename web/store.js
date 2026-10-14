@@ -8,7 +8,9 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
   const St = window.Studio; if (!St) return;
   const $ = id => document.getElementById(id), S = St.S;
   const nowISO = () => new Date().toISOString();
-  const when = iso => new Date(iso).toLocaleString('tr-TR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  // dates and times in the interface language (dates.js); the fallback only runs without it (unit tests)
+  const DF = k => t => (window.DateFmt ? DateFmt[k](t) : k === 'time' ? new Date(t).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }) : new Date(t).toLocaleString('tr-TR'));
+  const when = DF('short'), hhmm = DF('time');
   const rid = () => Math.random().toString(36).slice(2, 10);
   const esc = t => String(t).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
 
@@ -114,7 +116,7 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
   function diffObj(a, b, names, prefix, out) {
     const ch = Object.keys(names).filter(k => a[k] !== b[k]);
     ch.forEach(k => out.push(`${prefix}${prefix ? ' ' : ''}${names[k]} ${num(a[k], k)} → ${num(b[k], k)}`));
-    if (!ch.length && !!a.ok !== !!b.ok) out.push(`${xl(prefix || 'Rezeksiyon sınırı')} ${xl(b.ok ? 'onaylandı' : 'onayı kaldırıldı')}`);
+    if (!ch.length && !!a.ok !== !!b.ok) out.push(`${xl(prefix || 'Rezeksiyon aralığı')} ${xl(b.ok ? 'onaylandı' : 'onayı kaldırıldı')}`);
   }
   function describe(a, b) {
     if (!a || !b) return 'Başlangıç';
@@ -196,7 +198,7 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
   }
   // (clamped: Ctrl+Z pressed more often than there are steps ends at the first one, not on an ignored index, W26)
   const step = d => { const i = Math.max(0, Math.min(H.list.length - 1, (want !== null ? want : H.idx) + d)); return goTo(i); };
-  const ago = t => { const s = (Date.now() - t) / 1000; return s < 50 ? 'şimdi' : s < 3600 ? `${Math.round(s / 60)} dk önce` : new Date(t).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }); };
+  const ago = t => { const s = (Date.now() - t) / 1000; return s < 50 ? 'şimdi' : s < 3600 ? `${Math.round(s / 60)} dk önce` : hhmm(t); };
   function renderHist() {
     const ul = $('histList'); if (!ul) return;
     const rows = H.list.map((e, i) => ({ e, i })).reverse();
@@ -237,7 +239,7 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
   }
   async function saveNow() {
     if (!backend) return;
-    try { await ensureCase(); clearTimeout(saveTimer); pendingSave = null; const r = await backend.saveDraft(caseId, St.planOf()); dirty = false; setSave('Kaydedildi ' + when(r.updated_at || nowISO()).split(' ').pop()); }
+    try { await ensureCase(); clearTimeout(saveTimer); pendingSave = null; const r = await backend.saveDraft(caseId, St.planOf()); dirty = false; setSave('Kaydedildi ' + hhmm(r.updated_at || nowISO())); }
     catch (e) { setSave('Kaydedilemedi', 'err'); St.alertMsg('Plan kaydedilemedi: ' + e.message); }
   }
   function setAutosave(on) {
@@ -253,7 +255,7 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
     clearTimeout(saveTimer);
     saveTimer = setTimeout(async () => {
       const p = pendingSave; pendingSave = null;
-      try { await ensureCase(); const r = await backend.saveDraft(caseId, p); setSave('Kaydedildi ' + when(r.updated_at || nowISO()).split(' ').pop()); }
+      try { await ensureCase(); const r = await backend.saveDraft(caseId, p); setSave('Kaydedildi ' + hhmm(r.updated_at || nowISO())); }
       catch (e) { setSave('Kaydedilemedi', 'err'); St.alertMsg('Plan kaydedilemedi: ' + e.message); }
     }, 1000);
   }

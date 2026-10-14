@@ -11,7 +11,7 @@
 //  W19 the drill control: the sleeve follows the drill down as well as up, the built-in defaults stay
 //  condyle chosen on the side away from the lesion: a warning
 // Run: node test_d4_app.mjs
-import { test, run, assert, near } from './lib/t.mjs';
+import { test as test0, run, assert, near } from './lib/t.mjs';
 import { studio, ready, src } from './lib/harness.mjs';
 
 const P = studio({ post: ['store.js', 'mfg.js', 'condyle.js'], extra: { addEventListener() {}, removeEventListener() {} } });
@@ -30,6 +30,10 @@ const fire = (id, type, value) => { const el = $(id); if (value !== undefined) e
   S.red = G.reduce(S.vol, 0.8); S.kind = 'dicom'; S.autoAnchor = false;
   await St.segment(true);
 }
+// every test starts once the rebuilds scheduled by the one before (applyPlan, a layout switch) have finished: one still
+// running would change S.g and the screws under the next test (fitWrap tries values while it awaits), which made a run
+// under load fail now and then
+const test = (name, fn) => test0(name, async () => { await St.settled(); return fn(); });
 const entryOf = sc => { const e = St.screwWorld(sc).entry; return e ? e.toArray() : null; };
 function twoGuides() {
   S.anchor = { p: V(0, 0, 0), n: V(0, 0, 1), axis: V(1, 0, 0) };
@@ -176,12 +180,16 @@ test('G1: the production profile from a plan is numbers in range and a known pre
 
 test('D5 / W26: an entry updated later reads with its final value; repeated undo stops at the first entry', async () => {
   const H = W.CaseStore.history;
+  // rebuilds left running by the tests above would emit 'changed' (another snapshot) while this test waits
+  await St.settled();
   S.g.split = 0; S.anchor = { p: V(0, 0, 0), n: V(0, 0, 1), axis: V(1, 0, 0) };
   S.planes = [{ off: -11, yaw: 0, pitch: 0, w: 1.2, ok: false }, { off: 15, yaw: 0, pitch: 0, w: 1.2, ok: false }]; S.screws = []; S.guideOn = false;
   const p0 = St.clone(St.planOf()); S.planes[0].off = -12; const p1 = St.clone(St.planOf());
   H.list = [{ plan: p0, label: 'Başlangıç', at: Date.now() }, { plan: p1, label: W.CaseStore.describe(p0, p1), at: Date.now(), auto: true }]; H.idx = 1;
   assert.ok(/-11,0 → -12,0/.test(H.list[1].label), H.list[1].label);
-  S.planes[0].off = -13; St.emit('changed'); await sleep(450);
+  // the snapshot follows 'changed' after 300 ms: wait for it (not a fixed time; a loaded machine fires timers late)
+  S.planes[0].off = -13; St.emit('changed');
+  for (let i = 0; i < 200 && !/-13,0/.test(H.list[H.list.length - 1].label); i++) await sleep(25);
   assert.equal(H.list.length, 2, 'the rest of the drag is the same step');
   assert.ok(/-11,0 → -13,0/.test(H.list[1].label), 'label follows the value it ended at: ' + H.list[1].label);
   // four presses of undo from the third entry of three: the first entry, not the second
