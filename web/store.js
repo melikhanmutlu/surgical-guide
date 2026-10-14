@@ -114,7 +114,7 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
   function diffObj(a, b, names, prefix, out) {
     const ch = Object.keys(names).filter(k => a[k] !== b[k]);
     ch.forEach(k => out.push(`${prefix}${prefix ? ' ' : ''}${names[k]} ${num(a[k], k)} → ${num(b[k], k)}`));
-    if (!ch.length && !!a.ok !== !!b.ok) out.push(`${xl(prefix || 'Rezeksiyon sınırı')} ${xl(b.ok ? 'onaylandı' : 'onayı kaldırıldı')}`);
+    if (!ch.length && !!a.ok !== !!b.ok) out.push(`${xl(prefix || 'Rezeksiyon aralığı')} ${xl(b.ok ? 'onaylandı' : 'onayı kaldırıldı')}`);
   }
   function describe(a, b) {
     if (!a || !b) return 'Başlangıç';

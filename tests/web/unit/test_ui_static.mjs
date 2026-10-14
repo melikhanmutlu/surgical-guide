@@ -61,6 +61,9 @@ test('run-time strings: critical count, history labels, legend, layer labels, cl
     ['Cilt (dış yüzey): alt HU sınırı', 'Skin (outer surface): lower HU limit'],
     ['-8,0 – 8,0 mm, pay 3,0 mm', '-8.0 to 8.0 mm · safety margin 3.0 mm'],
     ['Rezeksiyon sınırı', 'Resection extent'],
+    ['-8,0 – 8,0 mm, güvenlik payı 3,0 mm', '-8.0 to 8.0 mm · safety margin 3.0 mm'],
+    ['Rezeksiyon aralığı', 'Resection extent'],
+    ['Kesileri aralık + güvenlik payına göre koy', 'Place cuts at extent + safety margin'],
     ['Onay bekliyor (10)', 'Awaiting approval (10)'],
   ];
   for (const [tr, en] of S) assert.equal(T(tr), en);
