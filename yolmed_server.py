@@ -1,23 +1,27 @@
-"""Yolmed planning service: segmentation + case store + production guide STL (hospital network only).
+"""Yolmed planning service: the studio's case store, production guide STL and segmentation, one HTTP server.
 
-    python yolmed_server.py --backend threshold --port 8800 --db ./yolmed_cases.sqlite
+    python yolmed_server.py --backend threshold --port 8800 --db ./yolmed_cases.sqlite [--web ./web]
 
-Endpoints (JSON unless noted; CORS incl. Access-Control-Allow-Private-Network)
-  GET  /health                          (unchanged from seg_server.py)
-  POST /segment?...                     (unchanged from seg_server.py: int16 HU body -> uint8 labels)
+Endpoints (JSON unless noted). With YOLMED_TOKEN set every endpoint but /health and the static files needs
+`Authorization: Bearer <token>`; cross-origin pages need YOLMED_ALLOWED_ORIGINS (seg_server.py lists the settings).
+  GET  /health                          -> {backend, structures, version, store}  (503 when the case store is not writable)
+  POST /segment?...                     (seg_server.py: int16 HU body -> uint8 labels)
   GET  /cases                           -> [{id, name, kind, fingerprint, updated_at, n_versions}] newest first
-  POST /cases {name, kind, fingerprint} -> {id}
+  POST /cases {name, kind, fingerprint} -> {id}                       (name: 1..200 characters)
   GET  /cases/{id}                      -> {id, name, kind, fingerprint, draft, updated_at}
   PUT  /cases/{id}/draft {plan}         -> {ok: true, updated_at}
   GET  /cases/{id}/versions             -> [{n, note, author, created_at}] newest first
-  POST /cases/{id}/versions {plan, note, author} -> {n}     (immutable, n = 1, 2, 3 ... per case)
+  POST /cases/{id}/versions {plan, note, author} -> {n}     (immutable, n = 1, 2, 3 ... per case; author <= 200 characters)
   GET  /cases/{id}/versions/{n}         -> {n, plan, note, author, created_at}
   POST /guide {crop, mask_b64, frame, g, planes, screws, gap?, wrap_profile?, stops?, seat_dir?, resolution?}
-       -> {stl_b64, watertight, volume_mm3, faces, bodies, pieces, seat_dir, ms, ...}
+       -> {stl_b64, watertight, production_ok, issues, screws, resolution, requested_resolution, volume_mm3, faces, bodies,
+           pieces, seat_dir, version, ms, ...}
        The production STL is the browser preview's guide (web/app.js buildGuide) on a 0.2 mm grid: g carries the
        preview's body (L, W, vc, uc, wrap, wrapU, wall, clear, bridge, side, skirt), planes the saw slots (already on
        the kerf side), wrap_profile the preview's wrap line and seat_dir its insertion direction; all optional fields
        may be left out (older clients), the server then derives them from the bone itself.
+       production_ok is false when the STL must not be printed as it is: issues lists why (screw_no_body: a screw got
+       no sleeve and no hole; resolution_coarsened: the grid is coarser than asked; not_manifold: the mesh is not closed).
   POST /guide {kind: "bar", bar: {path, r, pads}, crop?, mask_b64?}
        -> {stl_b64, watertight, volume_mm3, faces, bodies, bone_clear_mm, in_bone_verts, ms}
        The connecting bar between the two guides of a long resection (web/app.js barPlan), a separate part.
@@ -37,33 +41,30 @@ import os
 import re
 import secrets
 import sqlite3
+import sys
 import threading
 import time
+import traceback
 from http.server import ThreadingHTTPServer
 from urllib.parse import urlparse, unquote
 
 import numpy as np
 from scipy import ndimage as ndi
 
-import seg_server  # /health and /segment are served by seg_server.Handler, unchanged
+import seg_server  # the HTTP base (headers, auth, uploads) and /health, /segment
+from seg_server import HttpError
+from surgiguide.version import VERSION
 
-MAX_BODY = 256 * 1024 * 1024
-BODY_BASE_S = 20                        # seconds allowed to send a body, plus size / BODY_MIN_RATE
-BODY_MIN_RATE = 2e6                    # bytes per second a client must sustain
-MAX_PLAN_BODY = 4 * 1024 * 1024       # case and version requests carry only plan JSON
 MAX_CROP = 128e6                      # voxels in a guide crop (a 100 mm guide at 0.3 mm is ~100 M)
+MAX_BODY = int(MAX_CROP * 4 / 3) + 8 * 1024 * 1024   # a /guide request: the crop's mask in base64 plus the plan fields
+MAX_PLAN_BODY = 4 * 1024 * 1024       # case and version requests carry only plan JSON
 MAX_GRID = 40e6                       # guide grid cells (~2 GB peak at this size)
 MAX_PLANES = 64                       # saw slots / screws in one guide (a guide has a handful; each one costs a boolean)
 MAX_SCREWS = 64
-DRAIN_MAX = 32 * 1024 * 1024          # an over-size upload is read (and discarded) up to this much after the 413, so the client can read it
-MAX_TEXT = 2000                       # kind, fingerprint, note, author
+MAX_TEXT = 2000                       # kind, fingerprint, note
+MAX_NAME = 200                        # case name, version author (listed in every GET /cases / history)
+PREVIEW_RES = 0.4                     # mm: the browser preview's grid; a production grid coarser than this is not production
 GUIDE_SLOTS = threading.BoundedSemaphore(int(os.environ.get("YOLMED_GUIDE_JOBS", "1")))
-
-
-class HttpError(Exception):
-    def __init__(self, code, msg):
-        super().__init__(msg)
-        self.code, self.msg = code, msg
 
 
 def now_iso():
@@ -79,6 +80,7 @@ class CaseStore:
     CREATE TABLE IF NOT EXISTS versions (
         case_id TEXT NOT NULL REFERENCES cases(id), n INTEGER NOT NULL, plan TEXT NOT NULL,
         note TEXT, author TEXT, created_at TEXT NOT NULL, PRIMARY KEY (case_id, n));
+    CREATE TABLE IF NOT EXISTS health (k INTEGER PRIMARY KEY, t TEXT);
     CREATE TRIGGER IF NOT EXISTS versions_no_update BEFORE UPDATE ON versions
         BEGIN SELECT RAISE(ABORT, 'versions are immutable'); END;
     CREATE TRIGGER IF NOT EXISTS versions_no_delete BEFORE DELETE ON versions
@@ -101,6 +103,21 @@ class CaseStore:
                 yield c
         finally:
             c.close()
+
+    def check(self):
+        """Health: the database answers and takes a write (rolled back; a full disk / read-only volume fails here)."""
+        try:
+            c = sqlite3.connect(self.path, timeout=5)
+            try:
+                c.execute("BEGIN IMMEDIATE")
+                c.execute("SELECT COUNT(*) FROM cases").fetchone()
+                c.execute("INSERT OR REPLACE INTO health (k, t) VALUES (1, ?)", (now_iso(),))
+                c.execute("ROLLBACK")
+            finally:
+                c.close()
+            return True, None
+        except sqlite3.Error as e:
+            return False, str(e)
 
     def list_cases(self):
         with self._conn() as c:
@@ -133,7 +150,7 @@ class CaseStore:
     def put_draft(self, cid, plan):
         t = now_iso()
         with self.lock, self._conn() as c:
-            cur = c.execute("UPDATE cases SET draft=?, updated_at=? WHERE id=?", (json.dumps(plan), t, cid))
+            cur = c.execute("UPDATE cases SET draft=?, updated_at=? WHERE id=?", (json.dumps(plan, allow_nan=False), t, cid))
             if cur.rowcount == 0:
                 raise HttpError(404, f"case not found: {cid}")
         return t
@@ -152,7 +169,7 @@ class CaseStore:
                 raise HttpError(404, f"case not found: {cid}")
             n = c.execute("SELECT COALESCE(MAX(n), 0) + 1 FROM versions WHERE case_id=?", (cid,)).fetchone()[0]
             c.execute("INSERT INTO versions (case_id, n, plan, note, author, created_at) VALUES (?,?,?,?,?,?)",
-                      (cid, n, json.dumps(plan), note, author, t))
+                      (cid, n, json.dumps(plan, allow_nan=False), note, author, t))
             c.execute("UPDATE cases SET updated_at=? WHERE id=?", (t, cid))
         return n
 
@@ -371,13 +388,13 @@ def build_bar(req):
     verts = np.asarray(mesh.vert_properties, dtype=np.float64)[:, :3]
     faces = np.asarray(mesh.tri_verts, dtype=np.int64)
     verts, faces, _ = _weld(verts, faces)
-    buf = io.BytesIO()
-    trimesh.Trimesh(verts, faces, process=False).export(buf, file_type="stl")
-    tm = trimesh.load(io.BytesIO(buf.getvalue()), file_type="stl")
-    edges_ok = bool(len(faces)) and np.all(np.unique(tm.edges_sorted, axis=0, return_counts=True)[1] == 2)
+    verts, faces, repair = _repair_mesh(verts, faces)
+    data = _stl_bytes(verts, faces, f"YOLMED bar {VERSION}")
+    tm, watertight = _mesh_check(data)
     out = {
-        "stl_b64": base64.b64encode(buf.getvalue()).decode("ascii"),
-        "watertight": bool(tm.is_watertight and tm.is_winding_consistent and edges_ok and tm.volume > 0),
+        "stl_b64": base64.b64encode(data).decode("ascii"),
+        "watertight": watertight, "production_ok": watertight, "issues": [] if watertight else [{"code": "not_manifold"}],
+        "version": VERSION, "repair": repair,
         "manifold": True, "volume_mm3": float(tm.volume), "faces": int(len(tm.faces)), "bodies": int(tm.body_count), "pieces": int(tm.body_count),
         "bone_clear_mm": None, "in_bone_verts": None,
     }
@@ -387,7 +404,10 @@ def build_bar(req):
         cnx, cny, cnz = int(crop["nx"]), int(crop["ny"]), int(crop["nz"])
         if cnx * cny * cnz > MAX_CROP:
             raise HttpError(422, "crop too large")
-        raw = base64.b64decode(req["mask_b64"])
+        try:
+            raw = base64.b64decode(req["mask_b64"], validate=True)
+        except (TypeError, ValueError):
+            raise HttpError(400, "mask_b64 is not base64")
         if len(raw) != cnx * cny * cnz:
             raise HttpError(400, f"mask has {len(raw)} bytes, expected nx*ny*nz = {cnx * cny * cnz}")
         mask = np.frombuffer(raw, np.uint8).reshape(cnz, cny, cnx) > 0
@@ -414,13 +434,123 @@ def build_bar(req):
     return out
 
 
+def _vec(x, n=3):
+    return isinstance(x, (list, tuple)) and len(x) == n and all(isinstance(c, (int, float)) and not isinstance(c, bool) for c in x)
+
+
+def _num(x):
+    return isinstance(x, (int, float)) and not isinstance(x, bool)
+
+
+def _validate_guide(req):
+    """The shape of a /guide request, checked before any work: a wrong field is a 400 that names it (anything that still
+    fails later is a server error, logged with its traceback)."""
+    def need(ok, msg):
+        if not ok:
+            raise HttpError(400, msg)
+    crop, fr, g = req.get("crop"), req.get("frame"), req.get("g")
+    need(isinstance(crop, dict), "crop must be {nx, ny, nz, sp, origin, axes}")
+    need(all(isinstance(crop.get(k), int) and not isinstance(crop.get(k), bool) for k in ("nx", "ny", "nz")), "crop.nx, ny, nz must be integers")
+    need(_vec(crop.get("sp")) and _vec(crop.get("origin")), "crop.sp and crop.origin must be 3 numbers")
+    ax = crop.get("axes")
+    need(isinstance(ax, (list, tuple)) and len(ax) == 3 and all(_vec(a) for a in ax), "crop.axes must be 3 rows of 3 numbers")
+    need(abs(np.linalg.det(np.asarray(ax, float))) > 1e-6, "crop.axes must be independent directions")
+    need(isinstance(req.get("mask_b64"), str), "mask_b64 must be a base64 string")
+    need(isinstance(fr, dict) and all(_vec(fr.get(k)) for k in ("p", "u", "v", "n")), "frame must be {p, u, v, n}, 3 numbers each")
+    need(isinstance(g, dict) and all(_num(g.get(k)) for k in ("L", "W", "wrap", "wall", "clear", "bridge")),
+         "g needs the numbers L, W, wrap, wall, clear, bridge")
+    need(all(g.get(k) is None or _num(g.get(k)) for k in ("side", "vc", "uc", "skirt")), "g.side, vc, uc, skirt must be numbers")
+    planes, screws = req.get("planes") or [], req.get("screws") or []
+    need(isinstance(planes, list) and all(isinstance(p, dict) and _vec(p.get("p")) and _vec(p.get("N")) and _num(p.get("w")) for p in planes),
+         "planes must be a list of {p, N, w}")
+    need(isinstance(screws, list) and all(isinstance(s, dict) and _vec(s.get("entry")) and _vec(s.get("dir")) and all(_num(s.get(k)) for k in ("d", "D", "sleeveH"))
+                                          for s in screws), "screws must be a list of {entry, dir, d, D, sleeveH}")
+    gap = req.get("gap")
+    if gap:
+        need(isinstance(gap, dict) and all(isinstance(gap.get(k), dict) and _vec(gap[k].get("p")) and _vec(gap[k].get("N")) for k in ("A", "B")),
+             "gap needs plane records A and B ({p, N, w})")
+    stops = req.get("stops")
+    need(stops is None or (isinstance(stops, dict) and all(stops.get(k) is None or _vec(stops.get(k), 2) for k in ("pos", "neg"))),
+         "stops must be {pos: [length, depth] | null, neg: ...}")
+    need(req.get("resolution") is None or _num(req.get("resolution")), "resolution must be a number")
+    sd = req.get("seat_dir")
+    need(sd is None or (isinstance(sd, dict) and _num(sd.get("tilt")) and _num(sd.get("az"))), "seat_dir must be {tilt, az} in degrees")
+
+
+def _repair_mesh(verts, faces):
+    """Make the mesh what a float32 STL reader sees and clean it: vertices at their float32 positions merged, faces that
+    collapse (repeated corners) and duplicate faces removed, and flat closed slivers (components of no volume,
+    left where two surface sheets touch after the simplification) dropped. Returns (verts, faces, report)."""
+    import trimesh
+    rep = {}
+    v32 = np.asarray(verts, np.float32)
+    uv, inv = np.unique(v32, axis=0, return_inverse=True)
+    f = inv.reshape(-1)[np.asarray(faces)]
+    keep = (f[:, 0] != f[:, 1]) & (f[:, 1] != f[:, 2]) & (f[:, 0] != f[:, 2])
+    rep["degenerate_faces"] = int(np.count_nonzero(~keep))
+    f = f[keep]          # (a flat face on three distinct corners stays: it closes the surface between them)
+    # faces on the same three corners: a repeated face is kept once, a face and its reversed twin close nothing and both go
+    key = np.sort(f, axis=1)
+    _, inv_k, cnt = np.unique(key, axis=0, return_inverse=True, return_counts=True)
+    inv_k = inv_k.reshape(-1)
+    drop = np.zeros(len(f), bool)
+    for g in np.nonzero(cnt > 1)[0]:
+        idx = np.nonzero(inv_k == g)[0]
+        rot = [tuple(np.roll(f[i], -int(np.argmin(f[i])))) for i in idx]       # orientation-preserving canonical order
+        fwd = [i for i, t in zip(idx, rot) if t == rot[0]]
+        rev = [i for i, t in zip(idx, rot) if t != rot[0]]
+        net = len(fwd) - len(rev)
+        keep = (fwd if net > 0 else rev)[:1] if net else []
+        drop[idx] = True
+        drop[keep] = False
+    rep["duplicate_faces"] = int(np.count_nonzero(drop))
+    f = f[~drop]
+    tm = trimesh.Trimesh(uv.astype(np.float64), f, process=False)
+    slivers = 0
+    if len(f):
+        parts = trimesh.graph.connected_components(tm.face_adjacency, nodes=np.arange(len(f)), min_len=1)
+        if len(parts) > 1:
+            drop = []
+            for comp in parts:
+                sub = tm.submesh([comp], append=True, repair=False)
+                if abs(float(sub.volume)) < 1e-2 and float(sub.area) < 1.0:
+                    drop.extend(comp)
+                    slivers += 1
+            if drop:
+                m = np.ones(len(f), bool)
+                m[np.asarray(drop)] = False
+                f = f[m]
+    rep["slivers"] = slivers
+    used, inv2 = np.unique(f, return_inverse=True)
+    return uv.astype(np.float64)[used], inv2.reshape(-1, 3), rep
+
+
+def _stl_bytes(verts, faces, title):
+    """Binary STL with a header naming the software version (never starting with 'solid')."""
+    import trimesh
+    buf = io.BytesIO()
+    trimesh.Trimesh(verts, faces, process=False).export(buf, file_type="stl")
+    data = bytearray(buf.getvalue())
+    data[:80] = title.encode("ascii", "replace")[:80].ljust(80, b" ")
+    return bytes(data)
+
+
+def _mesh_check(data):
+    """What the client gets, checked as a slicer would read it: the float32 STL, vertices merged by exact position."""
+    import trimesh
+    tm = trimesh.load(io.BytesIO(data), file_type="stl")
+    n = len(tm.faces)
+    edges_ok = bool(n) and np.all(np.unique(tm.edges_sorted, axis=0, return_counts=True)[1] == 2)
+    return tm, bool(n and tm.is_watertight and tm.is_winding_consistent and edges_ok and tm.volume > 0)
+
+
 def build_guide(req):
     import manifold3d as m3d
-    import trimesh
     from skimage.measure import marching_cubes
 
     if req.get("kind") == "bar":
         return build_bar(req)
+    _validate_guide(req)
     t0 = time.perf_counter()
     T = {}
     crop, fr, g = req["crop"], req["frame"], req["g"]
@@ -430,10 +560,16 @@ def build_guide(req):
     axes = np.asarray(crop["axes"], float).reshape(3, 3)       # rows: i, j, k unit vectors
     if cnx * cny * cnz > MAX_CROP:
         raise HttpError(422, f"crop too large ({cnx}x{cny}x{cnz}); at most {int(MAX_CROP)} voxels")
-    raw = base64.b64decode(req["mask_b64"])
+    if min(cnx, cny, cnz) < 2:
+        raise HttpError(400, "invalid crop grid")
+    try:
+        raw = base64.b64decode(req["mask_b64"], validate=True)
+    except ValueError:
+        raise HttpError(400, "mask_b64 is not base64")
     if len(raw) != cnx * cny * cnz:
         raise HttpError(400, f"mask has {len(raw)} bytes, expected nx*ny*nz = {cnx * cny * cnz}")
     mask = np.frombuffer(raw, np.uint8).reshape(cnz, cny, cnx) > 0
+    del raw
     r = float(req.get("resolution") or 0.2)
     if not (0.05 <= r <= 2.0):
         raise HttpError(400, "resolution must be within [0.05, 2] mm")
@@ -738,9 +874,10 @@ def build_guide(req):
         return np.where(far, np.maximum(outer, dde_i - bridge_hi), f).astype(np.float32)
     # pass 0 (no slots, no bridge limit) finds the body's own +v / -v edge per position along the guide: the bridge (the
     # rib across the saw slots) runs `bridge` wide inside that edge, not the box edge, so it never floats
+    BR_OFF = np.float32(1e3)
     e0 = np.full(nx, np.nan)
     for i in range(nx):
-        rows = (slab(i, False, None) < 0).any(axis=1)
+        rows = (slab(i, False, BR_OFF) < 0).any(axis=1)
         if rows.any():
             e0[i] = VV[rows].max() if side > 0 else VV[rows].min()
     if side > 0:
@@ -819,27 +956,32 @@ def build_guide(req):
         axes_.append((el, ol, Rr, rr, top, rng, info))
 
     def radial(el, ol, rng):
-        sl = tuple(slice(a, b + 1) for a, b in rng)
-        qa, qb, qc = UU[sl[0]][:, None, None] - el[0], VV[sl[1]][None, :, None] - el[1], NN[sl[2]][None, None, :] - el[2]
-        t_ = qa * ol[0] + qb * ol[1] + qc * ol[2]
-        rad = np.sqrt(np.maximum(qa * qa + qb * qb + qc * qc - t_ * t_, 0.0))
-        return sl, rad.astype(np.float32), t_.astype(np.float32)
+        """The grid box around a screw axis (it runs through the whole grid, so a tilted screw's box is most of it), a few
+        slabs at a time so the float64 temporaries stay ~100 MB: yields (slices, radial distance, position along the axis)."""
+        (a0, a1), (b0, b1), (c0, c1) = rng
+        qb, qc = VV[b0:b1 + 1][None, :, None] - el[1], NN[c0:c1 + 1][None, None, :] - el[2]
+        step = max(1, int(2e6 // max(1, (b1 - b0 + 1) * (c1 - c0 + 1))))
+        for i0 in range(a0, a1 + 1, step):
+            i1 = min(a1 + 1, i0 + step)
+            qa = UU[i0:i1][:, None, None] - el[0]
+            t_ = qa * ol[0] + qb * ol[1] + qc * ol[2]
+            rad = np.sqrt(np.maximum(qa * qa + qb * qb + qc * qc - t_ * t_, 0.0))
+            yield (slice(i0, i1), slice(b0, b1 + 1), slice(c0, c1 + 1)), rad.astype(np.float32), t_.astype(np.float32)
     for el, ol, Rr, rr, top, rng, info in axes_:
-        sl, rad, t_ = radial(el, ol, rng)
-        cyl = np.maximum(np.maximum(rad - Rr, -1 - t_), t_ - top)
-        d_s, de_s = dd[sl], dde[sl]
-        in_cyl = (rad <= Rr + r)
-        body = (cyl < 0) & (d_s > clear)
-        n_all = int(np.count_nonzero(body))
-        shaded = int(np.count_nonzero(body & (de_s <= clear)))
-        F[sl] = np.where(in_cyl, np.minimum(F[sl], np.maximum(np.maximum(cyl, clear - d_s), clear - de_s)), F[sl])
+        n_all = shaded = 0
+        for sl, rad, t_ in radial(el, ol, rng):
+            cyl = np.maximum(np.maximum(rad - Rr, -1 - t_), t_ - top)
+            d_s, de_s = dd[sl], dde[sl]
+            in_cyl = (rad <= Rr + r)
+            body = (cyl < 0) & (d_s > clear)
+            n_all += int(np.count_nonzero(body))
+            shaded += int(np.count_nonzero(body & (de_s <= clear)))
+            F[sl] = np.where(in_cyl, np.minimum(F[sl], np.maximum(np.maximum(cyl, clear - d_s), clear - de_s)), F[sl])
         if n_all and shaded > 0.1 * n_all:
             info["shadowed"] = round(shaded / n_all, 2)
-        del rad, t_, cyl, in_cyl, body
     for el, ol, Rr, rr, top, rng, info in axes_:
-        sl, rad, t_ = radial(el, ol, rng)
-        F[sl] = np.where(rad <= rr + r, np.maximum(F[sl], rr - rad), F[sl])
-        del rad, t_
+        for sl, rad, t_ in radial(el, ol, rng):
+            F[sl] = np.where(rad <= rr + r, np.maximum(F[sl], rr - rad), F[sl])
     # two separate guides: nothing between the outermost cuts beyond a capture flange past each slot
     if gap:
         fl = float(gap.get("flange", 3.0))
@@ -903,18 +1045,29 @@ def build_guide(req):
     if np.linalg.det(R) < 0:
         faces = faces[:, ::-1]
     verts, faces, welded = _weld(verts, faces)
-    buf = io.BytesIO()
-    trimesh.Trimesh(verts, faces, process=False).export(buf, file_type="stl")
-    # validate what the client actually gets: the float32 STL, vertices merged by exact position
-    tm = trimesh.load(io.BytesIO(buf.getvalue()), file_type="stl")
-    edges_ok = bool(len(faces)) and np.all(np.unique(tm.edges_sorted, axis=0, return_counts=True)[1] == 2)
-    watertight = bool(tm.is_watertight and tm.is_winding_consistent and edges_ok and tm.volume > 0)
+    verts, faces, repair = _repair_mesh(verts, faces)
+    data = _stl_bytes(verts, faces, f"YOLMED guide {VERSION} grid {r:g} mm")
+    tm, watertight = _mesh_check(data)
     bodies = int(tm.body_count) if len(faces) else 0
     T["export"] = time.perf_counter() - t0
+    # what keeps this STL from being printed as it is (the studio blocks the package and says why)
+    issues = []
+    for k, si in enumerate(screw_info):
+        si["index"] = k
+        if si.get("no_body"):
+            issues.append({"code": "screw_no_body", "screw": k})
+    if r > r_req + 1e-9:
+        issues.append({"code": "resolution_coarsened", "requested_mm": r_req, "used_mm": r, "coarser_than_preview": bool(r > PREVIEW_RES + 1e-9)})
+    if not watertight:
+        issues.append({"code": "not_manifold"})
+    blocking = [i for i in issues if i["code"] != "resolution_coarsened" or i["coarser_than_preview"]]
     return {
-        "stl_b64": base64.b64encode(buf.getvalue()).decode("ascii"),
+        "stl_b64": base64.b64encode(data).decode("ascii"),
         "watertight": watertight,
         "manifold": manifold,
+        "production_ok": not blocking,
+        "issues": issues,
+        "version": VERSION,
         "volume_mm3": float(tm.volume),
         "faces": int(len(tm.faces)),
         "bodies": bodies,
@@ -923,11 +1076,13 @@ def build_guide(req):
         "dropped_fragments": len(small),
         "dropped_islands_mm2": dropped_islands,
         "welded_vertices": int(welded),
+        "repair": repair,
         "grid": [nx, ny, nz],
         "resolution": r,
         "requested_resolution": r_req,
         "seat_dir": seat_dir,
         "screws": screw_info,
+        "screws_missing": sum(1 for si in screw_info if si.get("no_body")),
         "contact_mm2": round(contact * r * r, 1),
         "field_volume_mm3": round(vol_vox * r * r * r, 1),
         "body_v": body_v,
@@ -937,98 +1092,61 @@ def build_guide(req):
 
 # --------------------------------------------------------------------------------------------- HTTP
 CASE_RE = re.compile(r"^/cases/([A-Za-z0-9_-]+)(/draft|/versions(?:/(\d+))?)?/?$")
+GUIDE_ERRORS = (KeyError, TypeError, ValueError, IndexError, OverflowError, AttributeError)
+
+
+def _finite_float(s):
+    """JSON numbers that overflow (1e999) would be stored as Infinity, which no browser can read back: refused."""
+    x = float(s)
+    if not math.isfinite(x):
+        raise ValueError(f"number out of range: {s[:40]}")
+    return x
+
+
+def _no_const(c):
+    raise ValueError(f"{c} is not valid JSON")
 
 
 class Handler(seg_server.Handler):
     store = None
-    timeout = 60          # seconds a client may stall while sending; ends half-open connections
-
-    def _cors(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
-        self.send_header("Access-Control-Expose-Headers", "X-Structures")
-        self.send_header("Access-Control-Allow-Private-Network", "true")
-
-    def _json(self, code, obj):
-        body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
-        self.send_response(code); self._cors()
-        self.send_header("Content-Type", "application/json; charset=utf-8"); self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+    web_root = None   # optional: serve the studio (web/) from the same origin
 
     def _body(self, limit=MAX_PLAN_BODY):
+        raw = self._read_body(limit)
         try:
-            n = int(self.headers.get("Content-Length") or 0)
-        except ValueError:
-            raise HttpError(400, "bad Content-Length")
-        if n < 0:
-            raise HttpError(400, "bad Content-Length")
-        if n > limit:
-            self._unread = n          # answered with 413 first, then drained (see _dispatch)
-            raise HttpError(413, "request too large")
-        # an overall deadline (not just a per-read timeout) so a client trickling bytes cannot hold a job slot
-        deadline = time.monotonic() + BODY_BASE_S + n / BODY_MIN_RATE
-        chunks, got = [], 0
-        while got < n:
-            if time.monotonic() > deadline:
-                raise HttpError(408, "request body too slow")
-            try:   # each read may stall only briefly, so a silent or trickling client frees the job slot quickly
-                self.connection.settimeout(max(0.5, min(5.0, deadline - time.monotonic())))
-                chunk = self.rfile.read1(min(1 << 20, n - got))
-            except OSError:
-                raise HttpError(408, "request body too slow")
-            if not chunk:
-                raise HttpError(400, "request body ended early")
-            chunks.append(chunk); got += len(chunk)
-
-        def _no_const(c):
-            raise ValueError(f"{c} is not valid JSON")
-        try:
-            obj = json.loads(b"".join(chunks) or b"null", parse_constant=_no_const)
+            obj = json.loads(raw or b"null", parse_constant=_no_const, parse_float=_finite_float)
         except ValueError as e:
-            raise HttpError(400, f"invalid JSON: {e}")
+            raise HttpError(400, f"invalid JSON: {str(e)[:200]}")
+        except RecursionError:
+            raise HttpError(400, "invalid JSON: nested too deeply")
+        finally:
+            del raw
         if not isinstance(obj, dict):
             raise HttpError(400, "JSON object expected")
         return obj
 
-    def _drain(self):
-        """After a 413: read and discard the rest of the upload (at most DRAIN_MAX, a few seconds), so a client that is still
-        sending can finish and read the 413 instead of a connection reset; then close."""
-        self.close_connection = True
-        left = min(getattr(self, "_unread", 0), DRAIN_MAX)
-        end = time.monotonic() + 10
-        try:
-            while left > 0 and time.monotonic() < end:
-                self.connection.settimeout(1.0)
-                chunk = self.rfile.read1(min(1 << 20, left))
-                if not chunk:
-                    break
-                left -= len(chunk)
-        except OSError:
-            pass
-
     @staticmethod
-    def _text(b, key, required=False):
+    def _text(b, key, required=False, limit=MAX_TEXT):
         """A short string field of a request, or None; anything else is a 400 (not a database error)."""
         v = b.get(key)
         if v is None and not required:
             return None
-        if not isinstance(v, str) or len(v) > MAX_TEXT:
-            raise HttpError(400, f"{key} must be text of at most {MAX_TEXT} characters")
+        if not isinstance(v, str) or len(v) > limit or (required and not v.strip()):
+            raise HttpError(400, f"{key} must be text of 1 to {limit} characters" if required else f"{key} must be text of at most {limit} characters")
         return v
 
     def _dispatch(self, method):
         path = urlparse(self.path).path
         try:
             st = self.store
+            if path.startswith("/cases") or path == "/guide":
+                self._require_auth()
             if path in ("/cases", "/cases/"):
                 if method == "GET":
                     return self._json(200, st.list_cases())
                 if method == "POST":
                     b = self._body()
-                    name = b.get("name")
-                    if not isinstance(name, str) or not name.strip():
-                        raise HttpError(400, "name required")
+                    name = self._text(b, "name", required=True, limit=MAX_NAME)
                     return self._json(200, {"id": st.create_case(name, self._text(b, "kind"), self._text(b, "fingerprint"))})
                 raise HttpError(405, "method not allowed")
             m = CASE_RE.match(path)
@@ -1047,41 +1165,55 @@ class Handler(seg_server.Handler):
                     b = self._body()
                     if b.get("plan") is None:
                         raise HttpError(400, "plan required")
-                    return self._json(200, {"n": st.add_version(cid, b["plan"], self._text(b, "note"), self._text(b, "author"))})
+                    return self._json(200, {"n": st.add_version(cid, b["plan"], self._text(b, "note"), self._text(b, "author", limit=MAX_NAME))})
                 if vn is not None and method == "GET":
                     if len(vn) > 9:
                         raise HttpError(404, "no such version")
                     return self._json(200, st.get_version(cid, int(vn)))
                 raise HttpError(405, "method not allowed")
             if path == "/guide" and method == "POST":
-                # take the job slot before reading the (large) body, so waiting requests hold no memory
-                if not GUIDE_SLOTS.acquire(timeout=120):
+                req = self._body(MAX_BODY)
+                # the job slot is taken only now, with the whole body in hand: a slow upload never holds the guide service
+                if not GUIDE_SLOTS.acquire(timeout=seg_server.JOB_WAIT_S):
                     raise HttpError(503, "guide service busy, try again")
                 try:
-                    return self._json(200, build_guide(self._body(MAX_BODY)))
-                except (KeyError, TypeError, ValueError, IndexError, OverflowError) as e:
-                    raise HttpError(400, f"bad guide request: {type(e).__name__}: {e}")
+                    out = build_guide(req)
+                except GUIDE_ERRORS:
+                    # a request shape the validation let through: the client sees a short, generic answer, the log the details
+                    traceback.print_exc()
+                    raise HttpError(400, "bad guide request (fields missing or of the wrong type)")
                 finally:
+                    del req
                     GUIDE_SLOTS.release()
-            raise HttpError(404, f"not found: {path}")
+                self._release_upload()
+                return self._json(200, out)
+            raise HttpError(404, f"not found: {path[:200]}")
         except HttpError as e:
-            self._json(e.code, {"error": e.msg})
-            if e.code == 413:
-                self._drain()
-            return
-        except (TypeError, AttributeError, RecursionError, OverflowError) as e:   # wrong JSON shapes in a request body
-            return self._json(400, {"error": f"bad request: {type(e).__name__}"})
-        except Exception as e:  # keep the server alive, report the failure as JSON
-            import traceback; traceback.print_exc()   # the details stay in the server log, not in the response
-            return self._json(500, {"error": "internal error"})
+            return self._error(e)
+        except (TypeError, AttributeError, RecursionError, OverflowError):   # wrong JSON shapes in a request body
+            traceback.print_exc()
+            return self._error(HttpError(400, "bad request"))
+        except Exception:  # keep the server alive, report the failure as JSON
+            traceback.print_exc()   # the details stay in the server log, not in the response
+            return self._error(HttpError(500, "internal error"))
+        finally:
+            self._release_upload()
 
-    web_root = None   # optional: serve the studio (web/) from the same origin
+    def health(self):
+        code, body = super().health()
+        ok, err = self.store.check() if self.store else (True, None)
+        body["store"] = "ok" if ok else "error"
+        if not ok:
+            print(f"health: case store not writable: {err}", file=sys.stderr, flush=True)
+            code = 503
+        return code, body
 
     def _static(self, path):
         root = os.path.realpath(self.web_root)
         if path == "/config.js":     # tells the studio that this server is its case store and STL service
-            body = b"window.YOLMED_SERVER = location.origin;\n"
-            ctype = "application/javascript"
+            body = ("window.YOLMED_SERVER = location.origin;\nwindow.YOLMED_VERSION = %s;\nwindow.YOLMED_AUTH = %s;\n"
+                    % (json.dumps(VERSION), "true" if self.token else "false")).encode()
+            ctype = "application/javascript; charset=utf-8"
         else:
             path = unquote(path)         # %2E, %20 ... : file names with spaces or dots; the root check below stays the guard
             if "\x00" in path:
@@ -1090,17 +1222,13 @@ class Handler(seg_server.Handler):
             if os.path.isdir(f):
                 f = os.path.join(f, "index.html")
             if not (f == root or f.startswith(root + os.sep)) or not os.path.isfile(f):
-                raise HttpError(404, f"not found: {path}")
+                raise HttpError(404, f"not found: {path[:200]}")
             with open(f, "rb") as fh:
                 body = fh.read()
             ctype = mimetypes.guess_type(f)[0] or "application/octet-stream"
             if ctype.startswith("text/") or ctype == "application/javascript":
                 ctype += "; charset=utf-8"
-        self.send_response(200)
-        self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-cache"); self.send_header("X-Content-Type-Options", "nosniff")
-        self.end_headers(); self.wfile.write(body)
+        self._send(200, body, ctype, (("Cache-Control", "no-cache"),))
 
     def do_GET(self):
         path = urlparse(self.path).path
@@ -1110,7 +1238,7 @@ class Handler(seg_server.Handler):
             try:
                 return self._static(path)
             except HttpError as e:
-                return self._json(e.code, {"error": e.msg})
+                return self._error(e)
         return self._dispatch("GET")
 
     def do_POST(self):
@@ -1122,10 +1250,15 @@ class Handler(seg_server.Handler):
         return self._dispatch("PUT")
 
 
-def make_server(host, port, db, backend="threshold", web=None):
+def make_server(host, port, db, backend="threshold", web=None, token=None, allow_origin=None):
+    """token / allow_origin: None keeps the environment's YOLMED_TOKEN / YOLMED_ALLOWED_ORIGINS ("" switches them off)."""
     Handler.backend = backend
     Handler.store = CaseStore(db)
     Handler.web_root = web
+    if token is not None:
+        Handler.token = token or None
+    if allow_origin is not None:
+        Handler.allowed_origins = seg_server._origins(allow_origin)
     return ThreadingHTTPServer((host, port), Handler)
 
 
@@ -1141,5 +1274,9 @@ if __name__ == "__main__":
     if os.path.dirname(a.db):
         os.makedirs(os.path.dirname(a.db), exist_ok=True)
     srv = make_server(a.host, a.port, a.db, a.backend, a.web)
-    print(f"yolmed service ({a.backend}, db={a.db}) on http://{a.host}:{a.port}")
+    print(f"yolmed service {VERSION} ({a.backend}, db={a.db}, token {'required' if Handler.token else 'off'}, "
+          f"cross-origin {','.join(sorted(Handler.allowed_origins)) or 'off'}) on http://{a.host}:{a.port}", flush=True)
+    if not Handler.token and a.host not in ("127.0.0.1", "localhost", "::1"):
+        print("WARNING: YOLMED_TOKEN is not set: the case store and /guide, /segment are open to anyone who can reach this "
+              "address", file=sys.stderr, flush=True)
     srv.serve_forever()
