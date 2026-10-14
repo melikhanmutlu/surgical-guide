@@ -11,6 +11,11 @@ window.Audit = (function () {
   const ROLE = { eng: 'Mühendis', sur: 'Cerrah' }, ACT = { onay: 'onay verdi', geri: 'onayı geri çekti', not: 'not ekledi' };
   const LABEL = { eng: 'Mühendis teknik onayı', sur: 'Cerrah klinik onayı' };
   let log = [], chain = { ok: true, bad: -1 }, engName = '', note = '';
+  // W21: roles whose approval was already stale when the plan was opened. The plan hash covers every field of planOf(),
+  // so a plan approved in an older version (before a setting was added) or changed outside the app no longer matches.
+  // Nothing is migrated: which fields were added cannot be told apart from an edit, so the approval is never carried
+  // over; the user is told why and that both approvals must be given again.
+  let staleOnOpen = new Set(), checkOnApply = false;
 
   // ---------- SHA-256 (synchronous, so hashing never waits on crypto.subtle) ----------
   const K = new Uint32Array([0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2]);
@@ -86,11 +91,12 @@ window.Audit = (function () {
 
   // ---------- panel ----------
   // English spells the month out: 10/14 vs 14.10 must not be guessed on an approval record
-  const when = iso => (window.I18N && I18N.lang === 'en') ? new Date(iso).toLocaleString('en-US', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })
-    : new Date(iso).toLocaleString('tr-TR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const when = iso => (window.DateFmt ? DateFmt.dateTime(iso) : new Date(iso).toLocaleString('tr-TR'));   // dates.js
   function stTxt(role, h) {
     const s = status(role, h);
-    return s.state === 'valid' ? `<span class="tag ok">Onaylı</span> ${esc(s.e.name)} · ${esc(when(s.e.at))}` : s.state === 'stale' ? `<span class="tag warn">Plan değişti</span> ${esc(s.e.name)} ${xl('onayından sonra plan değişti; yeniden onay gerekli.')}`
+    return s.state === 'valid' ? `<span class="tag ok">Onaylı</span> ${esc(s.e.name)} · ${esc(when(s.e.at))}`
+      : s.state === 'stale' && staleOnOpen.has(role) ? `<span class="tag warn">Plan değişti</span> ${esc(s.e.name)} ${xl('onayı plan açılırken eşleşmedi: plan onaydan sonra değiştirilmiş ya da uygulamanın eski bir sürümünde onaylanmış (yeni sürüm plana yeni ayarlar ekler). Onaylar aktarılmaz; planı inceleyip yeniden onaylayın.')}`
+      : s.state === 'stale' ? `<span class="tag warn">Plan değişti</span> ${esc(s.e.name)} ${xl('onayından sonra plan değişti; yeniden onay gerekli.')}`
       : s.state === 'broken' ? '<span class="tag crit">Geçersiz</span> Kayıt zinciri bozuk.' : '<span class="tag">Bekliyor</span>';
   }
   function block(role, h) {
@@ -124,6 +130,7 @@ window.Audit = (function () {
     if (action === 'onay') { const why = can(role); if (why) { msg(why); return; } }
     if (action === 'not' && !comment) { msg('Not için yorum yazın.'); return; }
     if (role === 'eng') engName = name;
+    if (action !== 'not') staleOnOpen.delete(role);
     append(role, action, name, comment);
     // withdrawing the technical approval withdraws the clinical one that rested on it
     if (role === 'eng' && action === 'geri' && status('sur').ok) append('sur', 'geri', $('surgeon').value.trim() || 'cerrah', 'Teknik onay geri çekildiği için');
@@ -146,11 +153,20 @@ window.Audit = (function () {
     label: 'Onay kaydı',
     get: () => (log.length ? { log: log.map(e => Object.assign({}, e)) } : null),
     // undo and redo bring back older plans; the log only grows, so a shorter copy of the same chain is ignored
-    set(x) { const inc = x && Array.isArray(x.log) ? x.log.map(e => Object.assign({}, e)) : []; if (!(log.length && isPrefix(inc, log))) log = inc; verify(); render(); },
+    // a log that replaces the current one is an opened plan (file, saved case, version): its approvals are checked once
+    // the whole plan is in place (planApplied)
+    set(x) { const inc = x && Array.isArray(x.log) ? x.log.map(e => Object.assign({}, e)) : []; if (!(log.length && isPrefix(inc, log))) { log = inc; staleOnOpen = new Set(); checkOnApply = log.length > 0; } verify(); render(); },
   };
-  bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring)) { log = []; chain = { ok: true, bad: -1 }; render(); } });
+  bus.addEventListener('planApplied', () => {
+    if (!checkOnApply) return; checkOnApply = false;
+    const h = planHash(), st = ['eng', 'sur'].filter(r => status(r, h).state === 'stale');
+    staleOnOpen = new Set(st);
+    if (st.length) { note = 'Kayıtlı onaylar bu planla eşleşmiyor; iki onayı yeniden verin.'; const t = $('toast'), was = t && !t.hidden ? t.textContent : '';   // keep the item-approval notice of the same opening
+      St.alertMsg((was ? was + ' ' : '') + xl(`Plan dosyasındaki ${st.length} plan onayı (mühendis / cerrah) açılan planla eşleşmiyor: plan onaydan sonra değiştirilmiş ya da uygulamanın eski bir sürümünde onaylanmış. Onaylar aktarılmaz; planı inceleyip yeniden onaylayın.`)); render(); }
+  });
+  bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring)) { log = []; chain = { ok: true, bad: -1 }; staleOnOpen = new Set(); render(); } });
   let t = null;
   ['changed', 'parts', 'planApplied'].forEach(ev => bus.addEventListener(ev, () => { clearTimeout(t); t = setTimeout(render, 200); }));
   render();
-  return { log: () => log, verify, planHash, status, sha256, chain: () => chain };
+  return { log: () => log, verify, planHash, status, sha256, chain: () => chain, staleOnOpen: () => [...staleOnOpen] };
 })();
