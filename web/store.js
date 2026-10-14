@@ -91,7 +91,9 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
   // are derived updates of the restored entry, and counting the key press would let them truncate the redo list.
   const isHistGesture = e => (e.type === 'keydown' && (e.ctrlKey || e.metaKey) && /^[zy]$/i.test(e.key))
     || (e.type === 'pointerdown' && e.target && e.target.closest && e.target.closest('#undo, #redo, #histList'));
-  ['pointerdown', 'keydown', 'input', 'change'].forEach(t => document.addEventListener(t, e => { if (e.isTrusted && !isHistGesture(e)) userAt = performance.now(); }, true));
+  // gest counts presses (pointer or key): the snapshots of one press (a drag, a slider pulled) make one undo step
+  let gest = 0;
+  ['pointerdown', 'keydown', 'input', 'change'].forEach(t => document.addEventListener(t, e => { if (e.isTrusted && !isHistGesture(e)) { userAt = performance.now(); if (t === 'pointerdown' || t === 'keydown') gest++; } }, true));
   const setSave = (text, cls) => { $('saveState').textContent = text; $('stSave').textContent = text; $('saveState').style.color = cls === 'err' ? 'var(--crit)' : ''; };
   function renderCaseHead() {
     $('caseName').disabled = !!caseId;
@@ -141,7 +143,8 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
     const t = out.map(capital);
     return t.length > 2 ? `${t[0]} · ${t[1]} +${t.length - 2}` : t.join(' · ');
   }
-  const entry = (plan, label) => ({ plan, label, at: Date.now() });
+  // auto: the label was written from the change itself, so it is written again when the entry's plan is updated
+  const entry = (plan, label, auto) => ({ plan, label, at: Date.now(), g: gest, ...(auto ? { auto: true } : {}) });
   function baseline(label) { const p = St.planOf(); lastJSON = JSON.stringify(p); H.list = [entry(p, label || 'Başlangıç')]; H.idx = 0; lastSnap = performance.now(); updUndo(); }
   function snapshot(label, forceUser) {
     if (S.restoring || !S.red) return;
@@ -154,9 +157,16 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
     lastSnap = performance.now();
     lastJSON = js;
     if (H.idx < 0) { H.list = [entry(plan, 'Başlangıç')]; H.idx = 0; }
-    else if (!user) H.list[H.idx].plan = plan;     // derived update (preset, async recompute): not an undo step
-    else {
-      const e = entry(plan, label || describe(H.list[H.idx].plan, plan));
+    else if (!user) {
+      // derived update (preset, async recompute, the rest of a drag): not an undo step. The entry's label is written
+      // again from its own change, so a drag reads with the value it ended at, not the one of its first snapshot (D5)
+      const e = H.list[H.idx]; e.plan = plan;
+      if (e.auto && H.idx > 0) e.label = describe(H.list[H.idx - 1].plan, plan);
+    } else if (!label && H.idx > 0 && H.idx === H.list.length - 1 && H.list[H.idx].auto && H.list[H.idx].g === gest) {
+      // the same press still going on (a drag past the first snapshot): its one step now ends where the press ended
+      const e = H.list[H.idx]; e.plan = plan; e.label = describe(H.list[H.idx - 1].plan, plan); e.at = Date.now();
+    } else {
+      const e = entry(plan, label || describe(H.list[H.idx].plan, plan), !label);
       H.list = H.list.slice(0, H.idx + 1); H.list.push(e); if (H.list.length > 150) H.list.shift(); H.idx = H.list.length - 1;
     }
     updUndo();
@@ -184,7 +194,8 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
       finally { going = null; want = null; }
     })();
   }
-  const step = d => goTo((want !== null ? want : H.idx) + d);
+  // (clamped: Ctrl+Z pressed more often than there are steps ends at the first one, not on an ignored index, W26)
+  const step = d => { const i = Math.max(0, Math.min(H.list.length - 1, (want !== null ? want : H.idx) + d)); return goTo(i); };
   const ago = t => { const s = (Date.now() - t) / 1000; return s < 50 ? 'şimdi' : s < 3600 ? `${Math.round(s / 60)} dk önce` : new Date(t).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }); };
   function renderHist() {
     const ul = $('histList'); if (!ul) return;
