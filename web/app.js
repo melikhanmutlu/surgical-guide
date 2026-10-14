@@ -376,7 +376,7 @@
   }
   async function switchSeries(i) {
     if (!scan || !scan.groups[i] || i === scan.cur) return;
-    if (S.anchor && !confirm('Başka seri açılınca kesiler ve guide silinir. Devam edilsin mi?')) { renderSeries(); return; }
+    if (S.anchor && !confirm('Seri değiştirilsin mi? Bu serideki kesiler ve guide silinir.')) { renderSeries(); return; }
     if (loadBlocked()) { renderSeries(); return; }
     const ctl = startLoad(), prog = progress(ctl); let r;
     try { await prog(0, 'Seri açılıyor…'); r = await decodeSeries(scan.groups[i], prog, 0, 1, scan); } catch (e) { if (e !== LOAD_CANCELLED) { if (loadCtl === ctl) loadCtl = null; throw e; } }
@@ -728,7 +728,7 @@
     schedule(false); syncSeq();
   }
   async function resetPlan() {
-    if (S.anchor && !confirm('Kesiler, guide ve vidalar silinip baştan başlanacak. Emin misiniz?')) return;
+    if (S.anchor && !confirm('Plan sıfırlansın mı? Kesiler, guide ve vidalar silinir; onaylar da düşer.')) return;
     S.anchor = null; S.planes = []; S.screws = []; S.sel = null; S.result = null; S.grid = null; S.guideOn = false; S.resRemoved = false;
     Object.assign(S.gAuto, AUTO_DEFAULT); S.g.wrapU = null; S.g.vc = 0; S.fitLog = []; S.autoSize = null;
     unapproveAll(); $('guideStat').textContent = '';
@@ -3179,7 +3179,7 @@
   $('fit').addEventListener('click', () => { if (parts.bone) fitTo(parts.bone.obj); });
   // the sample replaces the whole case: a plan (cuts, screws, guide, fibula plan) is lost and "undo" does not bring it back, so ask first
   const planned = () => !!(S.anchor || S.planes.length || S.screws.length || (window.Fibula && Fibula.active && Fibula.active()));
-  const sampleClick = name => { if (loadBlocked()) return; if (planned() && !confirm('Örnek vaka yüklenince mevcut plan (kesiler, vidalar, guide) silinir. Devam edilsin mi?')) return; loadSample(name); };
+  const sampleClick = name => { if (loadBlocked()) return; if (planned() && !confirm('Örnek vaka yüklensin mi? Mevcut plan (kesiler, vidalar, guide) silinir.')) return; loadSample(name); };
   $('sampleM').addEventListener('click', () => sampleClick('mandible'));
   $('sampleL').addEventListener('click', () => sampleClick('leg'));
   $('dicomDir').addEventListener('change', e => { if (e.target.files.length) loadDicom([...e.target.files]); });

@@ -186,7 +186,7 @@ window.Implants = (function () {
     renderTable();
     $('imAdd').addEventListener('click', () => add(freeSpot()));
     $('imAuto').addEventListener('click', () => {
-      if (list.length && !confirm('Mevcut implantlar silinip otomatik yerleşimle değiştirilsin mi?')) return;
+      if (list.length && !confirm(`İmplantlar yeniden yerleştirilsin mi? Mevcut ${list.length} implant silinir.`)) return;
       St.busy(true, 'İmplantlar yerleştiriliyor…');
       setTimeout(() => { try { const r = autoPlace(); msgText = r.placed ? xl(`${r.placed} implant yerleştirildi${r.tried > r.placed ? ` · ${r.tried - r.placed} konum uygun değil` : ''}.`) : 'Greft üzerinde kontrolleri geçen implant konumu bulunamadı.'; render(); } finally { St.busy(false); } }, 30);
     });
