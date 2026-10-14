@@ -1,9 +1,9 @@
 """Software version stamp written into every server answer and output (/health, STL headers, guide replies, plan.json of the
 pipeline), so a guide can be traced back to the code that made it.
 
-Taken from, in order: YOLMED_VERSION (set by the Docker build: --build-arg GIT_SHA), RAILWAY_GIT_COMMIT_SHA (Railway sets it
-at run time), `git describe` of the checkout this file lives in, else "unknown". The release number below is bumped by hand
-when the server's output changes on purpose.
+Taken from, in order: YOLMED_VERSION (set by hand), RAILWAY_GIT_COMMIT_SHA (Railway sets it at run time), GIT_SHA (the
+Docker build: --build-arg GIT_SHA), `git describe` of the checkout this file lives in, else "unknown". The release number
+below is bumped by hand when the server's output changes on purpose.
 """
 import os
 import subprocess
