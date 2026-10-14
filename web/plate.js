@@ -46,9 +46,12 @@ window.Plate = (function () {
   // border, wraps round and comes back along the other face (Denetim 4 E1: a 235 mm plate looping back to the start).
   // The walk therefore must keep moving away from the defect: when its progress falls 1.5 mm below the best reached, or
   // it goes 20 mm without new progress, it stops at the farthest point (ok false, back true; the plate is short there).
-  const BACK_TOL = 1.5, STALL_MM = 20;
+  // A walk can also make progress while rolling over the crest or the lower border onto the other face: the surface
+  // normal then turns about the walking direction. The net (signed, so surface noise cancels) roll is followed; past
+  // ROLL_MAX the walk stops where the roll was still under half of it.
+  const BACK_TOL = 1.5, STALL_MM = 20, ROLL_MAX = 90;
   function walk(s, dir, T, stop, prog) {
-    const out = []; let cur = s, d = dir.clone(), len = 0, best = prog(s.p), bi = -1, bLen = 0;
+    const out = []; let cur = s, d = dir.clone(), len = 0, best = prog(s.p), bi = -1, bLen = 0, roll = 0, ri = -1;
     for (let i = 0; i < 160; i++) {
       d.sub(cur.n.clone().multiplyScalar(d.dot(cur.n))).normalize();
       // a short step first; across the saw gap between bone and graft, longer steps bridge it
@@ -56,7 +59,10 @@ window.Plate = (function () {
       if (!nx) return { pts: out, ok: false };
       const step = nx.p.distanceTo(cur.p); if (step < 0.2) return { pts: out, ok: false };
       d = nx.p.clone().sub(cur.p).normalize(); nx.n.lerp(cur.n, 0.5).normalize();
+      roll += THREE.MathUtils.radToDeg(Math.atan2(V().crossVectors(cur.n, nx.n).dot(d), cur.n.dot(nx.n)));
       len += step; cur = nx; out.push(cur);
+      if (Math.abs(roll) <= ROLL_MAX / 2) ri = out.length - 1;
+      else if (Math.abs(roll) > ROLL_MAX) return { pts: out.slice(0, ri + 1), ok: false, back: true };
       if (stop(cur.p, len)) return { pts: out, ok: true };
       const g = prog(cur.p);
       if (g > best) { best = g; bi = out.length - 1; bLen = len; }
@@ -126,8 +132,9 @@ window.Plate = (function () {
   // plate can be bent is not a plate: it is reported as critical (blocks approval and the package; Plate.critical()).
   // Limits: length > 1.6 x expected + 10 mm (expected = cut-to-cut distance + slot halves + extension each side);
   // two points >= 25 mm apart along the line within 6 mm of each other; total bend through the thickness > 450 deg
-  // (an angle-to-angle arch is about 300 deg with surface noise), across the edge > 150 deg, or twist > 180 deg.
-  const LIM = { lenRatio: 1.6, lenAdd: 10, foldArc: 25, foldGap: 6, outPlane: 450, inPlane: 150, twist: 180 };
+  // (an angle-to-angle arch is about 300 deg with surface noise), across the edge > 150 deg, or twist > 270 deg
+  // (on the real mandible CT a plausible 81 mm line measures 124 / 15 / 60 deg; the line rolling under the bone, 509 / 120 / 499).
+  const LIM = { lenRatio: 1.6, lenAdd: 10, foldArc: 25, foldGap: 6, outPlane: 450, inPlane: 150, twist: 270 };
   function assess(R) {
     const out = [], { A, B } = R.E, d = A.p.distanceTo(B.p);
     const want = R.E.condyle ? d + A.w / 2 + P.ext : d + (A.w + B.w) / 2 + 2 * P.ext;
