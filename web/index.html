@@ -116,6 +116,9 @@ h1.brand { margin: 0; } .brand { display: flex; align-items: center; gap: 10px; 
 .hud select { width: auto; }
 .stage { position: absolute; inset: 0; background: var(--stage); touch-action: none; }
 .stage canvas { display: block; width: 100%; height: 100%; }
+/* keyboard pick (region / screw modes): Enter takes the point under this ring while the 3D view has focus */
+.stage[data-kbpick]:focus-within::after { content: ""; position: absolute; left: 50%; top: 50%; width: 18px; height: 18px; margin: -11px 0 0 -11px; border: 2px solid var(--accent); border-radius: 50%; pointer-events: none; }
+.stage[data-kbpick="half"]:focus-within::after { left: 25%; }
 .hud { position: absolute; left: 0; right: 0; margin: 0 auto; width: fit-content; bottom: 14px; z-index: 2; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 6px 10px; padding: 6px 8px; background: var(--glass); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); max-width: calc(100% - 28px); }
 .hud label { white-space: nowrap; color: var(--muted); } .hud input[type=range] { width: 130px; }
 .hud .divider { width: 1px; height: 20px; background: var(--line); }

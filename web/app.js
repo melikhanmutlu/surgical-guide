@@ -2709,9 +2709,28 @@
       else if (S.guideSel) { S.guideSel = false; syncGizmo(); emit('guideSel', false); }
       return;
     }
-    const targets = ['bone', 'resected', 'guide'].filter(k => parts[k] && parts[k].visible).map(k => parts[k].obj);
-    const hit = ray.intersectObjects(targets, false)[0];
-    if (!hit) return;
+    const hit = ray.intersectObjects(pickTargets(), false)[0];
+    if (hit) pickHit(hit);
+  });
+  const pickTargets = () => ['bone', 'resected', 'guide'].filter(k => parts[k] && parts[k].visible).map(k => parts[k].obj);
+  // Keyboard alternative to the click in the region / screw modes (AR-7, WCAG 2.1.1): the focused 3D view turns with
+  // the arrow keys (ui.js); Enter takes the surface under the middle of the view (the ring marks it). A miss right in
+  // the middle looks outward in small rings (a U-shaped jaw is open at its centre) before it gives up.
+  function centreHit() {
+    const t = pickTargets(); if (!t.length) return null;
+    for (let r = 0; r <= 0.3001; r += 0.03) for (let a = 0, n = r ? 16 : 1; a < n; a++) {
+      mouse.set(r * Math.cos(2 * Math.PI * a / n), r * Math.sin(2 * Math.PI * a / n)); ray.setFromCamera(mouse, camera);
+      const h = ray.intersectObjects(t, false)[0]; if (h) return h;
+    }
+    return null;
+  }
+  renderer.domElement.addEventListener('keydown', e => {
+    if ((e.key !== 'Enter' && e.key !== ' ') || (S.mode !== 'anchor' && S.mode !== 'screw') || e.ctrlKey || e.metaKey || e.altKey || !camera.layers.isEnabled(0)) return;
+    e.preventDefault();
+    const h = centreHit();
+    if (h) pickHit(h); else alertMsg('Görünümün ortasında kemik ya da guide yok; görünümü ok tuşlarıyla çevirip yeniden deneyin.');
+  });
+  function pickHit(hit) {
     if (S.mode === 'anchor') {
       const nrm = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
       if (nrm.dot(ray.ray.direction) > 0) nrm.negate();
@@ -2726,7 +2745,7 @@
       S.screws.push(sc);
       S.sel = 's' + (S.screws.length - 1); setMode('orbit'); schedule(false);
     }
-  });
+  }
   // ---------- 3D handles: drag the selected cut or screw along / around the guide axes ----------
   // x = along the bone (u), y = lateral (v), z = seating normal (n). A cut moves only along x and turns
   // about y and z; a screw moves in x/y (it always starts on the bone surface) and tilts about x and y.
@@ -3018,7 +3037,9 @@
     if (m !== 'orbit') mandibleView();
     S.mode = m;
     $('modeBadge').hidden = m === 'orbit';
-    $('modeBadge').textContent = m === 'anchor' ? 'Rezeksiyon bölgesinin ortasında kemik yüzeyine tıklayın (guide buraya oturur)' : m === 'screw' ? 'Vida yeri için guide üzerine tıklayın' : $('modeBadge').textContent;
+    $('modeBadge').textContent = m === 'anchor' ? 'Rezeksiyon bölgesinin ortasında kemik yüzeyine tıklayın (guide buraya oturur) · Klavye: 3B görünümde ok tuşlarıyla çevirin, Enter ortadaki noktayı seçer'
+      : m === 'screw' ? 'Vida yeri için guide üzerine tıklayın · Klavye: 3B görünümde ok tuşlarıyla çevirin, Enter ortadaki noktaya vida koyar' : $('modeBadge').textContent;
+    if (m === 'anchor' || m === 'screw') $('stage').setAttribute('data-kbpick', S.split ? 'half' : ''); else $('stage').removeAttribute('data-kbpick');   // the ring in the middle of the view (keyboard pick)
   }
   // ---------- click / brush modes (cut region, screw site, bone pick, marking and lesion brushes, ...) ----------
   // Every tool that takes over the clicks on the model shows the mode bar over the view: what the clicks do now,
