@@ -362,7 +362,8 @@ dialog::backdrop { background: rgba(10, 14, 18, .45); }
 .keys-t td:first-child { white-space: nowrap; }
 kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; background: var(--sunken); }
 /* scene list */
-.parts li { display: grid; grid-template-columns: 1fr 90px auto; }
+.parts li { display: grid; grid-template-columns: minmax(0, 1fr) 90px auto; }
+@media (max-width: 1366px) { .parts li { grid-template-columns: minmax(0, 1fr) 64px auto; } }   /* the name gets the room, the opacity slider shrinks */
 .parts input[type=range] { margin: 0; }
 /* two-stage approval blocks */
 .audit-b { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
@@ -404,9 +405,10 @@ details.sec:has(> .col:only-of-type:empty) { display: none; }
 .nav { margin-top: 6px; padding-top: 12px; border-top: 1px solid var(--line); justify-content: space-between; align-items: center; gap: 8px; }
 .nav > :only-child { margin-left: auto; }
 /* info toggle: long how-to text stays folded behind a small "i" */
-button.info { all: unset; box-sizing: border-box; display: inline-grid; place-items: center; width: 16px; height: 16px; flex: none; border-radius: 50%; border: 1px solid var(--line-strong); font: italic 600 10.5px/1 Georgia, "Times New Roman", serif; color: var(--faint); cursor: pointer; text-transform: none; letter-spacing: 0; vertical-align: -2px; margin-left: 2px; }
-button.info:hover { color: var(--accent); border-color: var(--accent-line); }
-button.info[aria-expanded="true"] { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line); }
+button.info::after, span.info.im::after { content: ''; position: absolute; inset: -4px; }   /* 24 px target around the 16 px mark (WCAG 2.5.8) */
+button.info, span.info.im { all: unset; position: relative; box-sizing: border-box; display: inline-grid; place-items: center; width: 16px; height: 16px; flex: none; border-radius: 50%; border: 1px solid var(--line-strong); font: italic 600 10.5px/1 Georgia, "Times New Roman", serif; color: var(--faint); cursor: pointer; text-transform: none; letter-spacing: 0; vertical-align: -2px; margin-left: 2px; }
+button.info:hover, span.info.im:hover { color: var(--accent); border-color: var(--accent-line); }
+button.info[aria-expanded="true"], span.info.im[aria-expanded="true"] { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line); }
 button.info:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .hint.info-t { background: var(--sunken); border-left: 2px solid var(--accent-line); padding: 6px 10px; border-radius: 0 var(--r) var(--r) 0; }
 .hint.info-t.shut { display: none; }
@@ -533,11 +535,11 @@ button.ghost.danger { color: var(--crit); }
     <span class="hint" id="saveState" style="white-space:nowrap"></span>
     <button class="ibtn" id="undo" title="Geri al (Ctrl+Z)" aria-label="Geri al" disabled><svg><use href="#i-undo"/></svg></button>
     <button class="ibtn" id="redo" title="Yinele (Ctrl+Shift+Z)" aria-label="Yinele" disabled><svg style="transform:scaleX(-1)"><use href="#i-undo"/></svg></button>
-    <span class="pill" id="readyPill" title="Plan durumu" role="status">Hazırlanıyor</span>
+    <span class="pill" id="readyPill" title="Plan durumu" role="status">Plan eksik</span>
     <span class="sep"></span>
-    <button class="ibtn" id="tLeft" aria-pressed="true" title="Adımlar paneli ( [ )"><svg><use href="#i-left"/></svg><span class="lbl">Adımlar</span></button>
-    <button class="ibtn" id="tRight" aria-pressed="true" title="İnceleme paneli ( ] )"><svg><use href="#i-right"/></svg><span class="lbl">İnceleme</span></button>
-    <button class="ibtn" id="tFocus" aria-pressed="false" title="Yalnız model ( F )"><svg><use href="#i-focus"/></svg><span class="lbl">Yalnız model</span></button>
+    <button class="ibtn" id="tLeft" aria-label="Adımlar paneli" aria-pressed="true" title="Adımlar paneli ( [ )"><svg><use href="#i-left"/></svg><span class="lbl">Adımlar</span></button>
+    <button class="ibtn" id="tRight" aria-label="İnceleme paneli" aria-pressed="true" title="İnceleme paneli ( ] )"><svg><use href="#i-right"/></svg><span class="lbl">İnceleme</span></button>
+    <button class="ibtn" id="tFocus" aria-label="Yalnız model" aria-pressed="false" title="Yalnız model ( F )"><svg><use href="#i-focus"/></svg><span class="lbl">Yalnız model</span></button>
     <button class="ibtn" id="tFull" title="Tam ekran" aria-label="Tam ekran"><svg><use href="#i-full"/></svg></button>
     <span class="sep"></span>
     <button class="ibtn" id="tTheme" title="Aydınlık / koyu tema"><svg><use href="#i-theme"/></svg></button>
@@ -751,17 +753,17 @@ button.ghost.danger { color: var(--crit); }
         <summary><span class="n">7</span>İnceleme ve onay<span class="tick" role="img" aria-label="Tamamlandı"></span><span class="tag" id="tag7"></span><svg class="chev"><use href="#i-chev"/></svg></summary>
         <div class="body">
           <div class="ctl"><label for="surgeon" class="lbl2">Cerrah</label><input id="surgeon" type="text" placeholder="Ad Soyad" autocomplete="off"></div>
-          <h3 class="sub">Öğe kontrolü</h3>
+          <h3 class="sub">Öğe onayları</h3>
           <p class="hint more">Bir satıra tıklayınca ilgili öğe açılır ve 3B görünümde gösterilir.</p>
           <ul class="review" id="appr"></ul>
           <p class="hint" id="apprMsg"></p>
           <div id="auditBox" class="col"></div>
-          <div class="nav"><button class="primary next" data-next="st8">Teslim<svg class="i"><use href="#i-next"/></svg></button></div>
+          <div class="nav"><button class="primary next" data-next="st8">Çıktılar<svg class="i"><use href="#i-next"/></svg></button></div>
         </div>
       </details>
 
       <details class="step" id="st8" name="flow">
-        <summary><span class="n">8</span>Teslim<span class="tick" role="img" aria-label="Tamamlandı"></span><span class="tag" id="tag8"></span><svg class="chev"><use href="#i-chev"/></svg></summary>
+        <summary><span class="n">8</span>Çıktılar<span class="tick" role="img" aria-label="Tamamlandı"></span><span class="tag" id="tag8"></span><svg class="chev"><use href="#i-chev"/></svg></summary>
         <div class="body">
           <ol class="deliver">
             <li><div><b title="Su geçirmez üretim STL'i sunucuda Manifold ile üretilir.">Guide STL'i</b><p class="hint" id="prodMsg"></p></div><button id="expSrv" title="Sunucuda yüzey tabanlı (Manifold) boolean ile su geçirmez STL"><svg class="i"><use href="#i-server"/></svg>Üret</button></li>
@@ -870,8 +872,11 @@ button.ghost.danger { color: var(--crit); }
       <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd></td><td>Geri al / yinele</td></tr>
       <tr><td><kbd>Ctrl</kbd>+<kbd>S</kbd></td><td>Taslağı kaydet</td></tr>
       <tr><td><kbd>1</kbd>–<kbd>5</kbd></td><td>Hazır görünüm: ön, sağ, sol, üst, alt</td></tr>
+      <tr><td><kbd>Tab</kbd> → 3B görünüm, <kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd></td><td>Modeli döndür; <kbd>+</kbd> <kbd>−</kbd> yakınlaştır, <kbd>0</kbd> ortala</td></tr>
       <tr><td><kbd>?</kbd></td><td>Bu pencere</td></tr>
     </table>
+    <h3 class="sub">Akış ve onay</h3>
+    <p class="hint">Adımlar soldan sırayla ilerler. Her kesi, vida ve rezeksiyon aralığı 7. adımda tek tek onaylanır; sonra mühendis teknik, cerrah klinik onayı verir. Onaydan sonra plan değişirse onaylar düşer. Kritik kontrol açıkken onay verilemez ve üretim paketi kilitli kalır; nedeni İndir düğmesinin altında yazar. Kontroller sekmesindeki eşikler örnek değerlerdir.</p>
     <p class="hint">Kesitlerde: tekerlek kesit değiştirir, Ctrl+tekerlek yakınlaştırır, sağ tuşla kaydırılır, Shift+sürükleme pencere ve seviyeyi değiştirir, kesi çizgisi sürüklenir, çift tıklama görünümü büyütür. Sağ üstteki menüden kesit panoramik ya da seçili kesiye dik görünüme çevrilir.</p>
   </form>
 </dialog>

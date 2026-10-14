@@ -85,7 +85,9 @@ window.Audit = (function () {
   (window.ExtraChecks = window.ExtraChecks || []).push(() => chain.ok ? [] : [['crit', 'Kritik', `Onay kaydı zinciri ${chain.bad + 1}. kayıtta bozulmuş; kayıt sonradan değiştirilmiş olabilir. Onaylar geçersiz sayılır.`, 'data']]);
 
   // ---------- panel ----------
-  const when = iso => new Date(iso).toLocaleString('tr-TR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  // English spells the month out: 10/14 vs 14.10 must not be guessed on an approval record
+  const when = iso => (window.I18N && I18N.lang === 'en') ? new Date(iso).toLocaleString('en-US', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })
+    : new Date(iso).toLocaleString('tr-TR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
   function stTxt(role, h) {
     const s = status(role, h);
     return s.state === 'valid' ? `<span class="tag ok">Onaylı</span> ${esc(s.e.name)} · ${esc(when(s.e.at))}` : s.state === 'stale' ? `<span class="tag warn">Plan değişti</span> ${esc(s.e.name)} ${xl('onayından sonra plan değişti; yeniden onay gerekli.')}`

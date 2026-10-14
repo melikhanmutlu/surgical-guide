@@ -59,8 +59,9 @@ html[data-style="k1"] .sub-d[open] { border: 0; background: var(--panel); border
 html[data-style="k1"] .sub-d[open] > summary { margin: 0 -12px; background: transparent; box-shadow: none; border: 0; color: var(--accent); }
 
 /* ---------- controls ---------- */
-/* text-like buttons (review rows, history rows, links) keep their own height: a fixed 36 px made two-line rows overlap */
-html[data-style="k1"] button:not(.info):not(.tab):not(.go):not(.link):not(.hist button), html[data-style="k1"] select, html[data-style="k1"] .filebtn { height: 36px; border-radius: var(--r); border-color: var(--line-strong); padding: 0 12px; }
+/* text-like buttons (review rows, history rows, links) keep their own height: a fixed 36 px made two-line rows overlap;
+   :where() keeps the old specificity so the top bar and other overrides still win */
+html[data-style="k1"] button:not(.info):not(.tab):where(:not(.go, .link, .hist button)), html[data-style="k1"] select, html[data-style="k1"] .filebtn { height: 36px; border-radius: var(--r); border-color: var(--line-strong); padding: 0 12px; }
 html[data-style="k1"] select { border-color: var(--control); }
 html[data-style="k1"] input[type=text], html[data-style="k1"] input[type=number], html[data-style="k1"] input[type=date], html[data-style="k1"] input[type=url], html[data-style="k1"] textarea { height: 36px; border-radius: var(--r); border-color: var(--control); background: var(--panel); }   /* input edge >= 3:1 (WCAG 1.4.11) */
 html[data-style="k1"] textarea { height: auto; }
@@ -96,6 +97,8 @@ html[data-style="k1"] .top button[aria-pressed="true"] { background: var(--accen
 /* ---------- small windows (1024x768, 1280x720): slimmer side panels, tighter chrome, one-row toolbar ---------- */
 @media (max-width: 1366px) {
   :root { --lw: 300px; --rw: 310px; }
+  /* panel toggles keep only their icon (name in title / aria-label) so the case title is not cut at 1280 */
+  html[data-style="k1"] .top .ibtn .lbl { display: none; }
   html[data-style="k1"] .top { padding: 0 12px; }
   html[data-style="k1"] .work { gap: 12px; padding: 12px; }
 }

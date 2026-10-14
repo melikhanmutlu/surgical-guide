@@ -69,7 +69,7 @@ window.UI = (function () {
     const crit = S.crit + (qcCrit ? 1 : 0);
     $('critCnt').hidden = !crit; $('critCnt').textContent = crit;
     const pill = $('readyPill');
-    if (!S.anchor) { pill.className = 'pill'; pill.textContent = 'Hazırlanıyor'; }
+    if (!S.anchor) { pill.className = 'pill'; pill.textContent = 'Plan eksik'; }
     else if (crit) { pill.className = 'pill crit'; pill.textContent = 'Kritik uyarı'; }
     else if (done.st7) { pill.className = 'pill ok'; pill.textContent = 'Onaylı plan'; }
     else { pill.className = 'pill'; pill.textContent = pend ? `Onay bekliyor (${pend})` : 'Onay bekliyor'; }
@@ -80,7 +80,7 @@ window.UI = (function () {
     if (cv3d()) cv3d().setAttribute('aria-label', !S.vol ? '3B görünüm: model yüklenmedi.' : `3B görünüm: ${S.planes.length} kesi, ${S.screws.length} vida, ${crit} kritik kontrol. Ok tuşları döndürür, + ve − yakınlaştırır, 1–5 hazır yönler, 0 ortalar.`);
     if ($('fibIntro')) $('fibIntro').hidden = !!(window.Fibula && Fibula.state().F);
     const dd = $('caseInfo').querySelector('dd');
-    $('caseTitle').textContent = $('caseName').value.trim() || (dd ? dd.textContent : '');
+    $('caseTitle').textContent = $('caseTitle').title = $('caseName').value.trim() || (dd ? dd.textContent : '');
     document.title = ($('caseName').value.trim() ? $('caseName').value.trim() + ' · ' : '') + 'Yolmed Guide Stüdyosu';
   }
   let pend = false;
