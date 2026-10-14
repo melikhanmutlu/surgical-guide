@@ -37,6 +37,26 @@ def leg_ct(shape=(260, 60, 120)):
     return Volume(np.where(m, 700.0, -1000.0).astype(np.float32), SP, (0, 0, 0))
 
 
+def leg_ct_fused_right():
+    """Both legs; on the right leg (x = 35) the fibula (x = 19) is fused to the tibia along its whole length by a 6 mm wall
+    (a synostosis, or a threshold that merges them), the left leg (x = 85, fibula x = 101) is clean; CT table plate
+    (Denetim 4 P1: the left tibia passed as the right fibula)."""
+    shape = (260, 60, 120)
+    z, y, x = np.indices(shape)
+    m = rod(shape, "z", 30, 35, 5, 255, 9) | rod(shape, "z", 30, 19, 5, 255, 5)
+    m |= (z >= 5) & (z <= 255) & (x >= 19) & (x <= 35) & (y >= 27) & (y <= 33)
+    m |= rod(shape, "z", 30, 85, 5, 255, 9) | rod(shape, "z", 30, 101, 5, 255, 5)
+    m |= (y >= 48) & (y <= 52)
+    return Volume(np.where(m, 700.0, -1000.0).astype(np.float32), SP, (0, 0, 0))
+
+
+def one_leg_ct(side):
+    """One leg only: tibia at x = 60, the fibula lateral to it (right: x = 44, left: x = 76)."""
+    shape = (260, 60, 120)
+    m = rod(shape, "z", 30, 60, 5, 255, 9) | rod(shape, "z", 30, 44 if side == "right" else 76, 5, 255, 5)
+    return Volume(np.where(m, 700.0, -1000.0).astype(np.float32), SP, (0, 0, 0))
+
+
 class Separate(unittest.TestCase):
     def test_two_rods_with_a_bridge(self):
         shape = (60, 60, 100)
@@ -107,6 +127,28 @@ class Fibula(unittest.TestCase):
             # the fibula is the lateral rod of the donor leg (right: x = 19, left: x = 101); the table is never taken
             self.assertAlmostEqual(xx.mean(), 19 if side == "right" else 101, delta=1.5)
             self.assertLess(m.sum() * 1e-3, 25, "a rod of r 5 and ~250 mm, not the whole leg")
+
+    def test_never_a_bone_of_the_other_leg(self):
+        """D4 P1: the asked leg's tibia and fibula are fused; the pipeline stops instead of returning the other leg's tibia."""
+        vol = leg_ct_fused_right()
+        with self.assertRaises(RuntimeError) as e:
+            segment.fibula_bone(vol, side="right", hu=250.0)
+        self.assertIn("right leg", str(e.exception))
+        m, info = segment.fibula_bone(vol, side="left", hu=250.0)
+        self.assertEqual((info["status"], info["side"], info["side_from"]), ("ok", "left", "tibia"), info)
+        self.assertAlmostEqual(np.nonzero(m)[2].mean(), 101, delta=1.5)
+        self.assertAlmostEqual(info["radius_mm"], 5, delta=1.5)
+
+    def test_one_leg_side_from_the_tibia(self):
+        for side in ("right", "left"):
+            vol = one_leg_ct(side)
+            m, info = segment.fibula_bone(vol, side="auto", hu=250.0)
+            self.assertEqual(info["side"], side, info)
+            m, info = segment.fibula_bone(vol, side=side, hu=250.0)
+            self.assertEqual(info["status"], "ok", info)
+            other = "left" if side == "right" else "right"
+            with self.assertRaises(RuntimeError):
+                segment.fibula_bone(vol, side=other, hu=250.0)
 
     def test_explicit_component_keeps_the_old_behaviour(self):
         vol = leg_ct()

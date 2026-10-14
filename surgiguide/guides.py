@@ -17,6 +17,10 @@ def _hole(local, p, d, r):
 
 
 DROP_WARN_MM3 = 1.0            # a guide piece smaller than this is voxel dust; anything larger that is dropped is reported
+WALL_MIN_MM = 1.5              # thinnest wall a printed guide should have (a thinner sheet breaks or warps)
+HELD_MIN_MM3 = 1.0             # a guide part of at least this volume held to the rest by thin wall only is a warning (the
+                               # thin wall across a slot or beside a hole breaks and the part falls off); thin rims and the
+                               # voxel staircase where the shell meets the bone obliquely hold nothing and are only reported
 
 
 def _slot_width(k, h):
@@ -42,6 +46,65 @@ def _largest(name, g, h):
         rep["warning"] = (f"{name}: {len(big)} disconnected guide part(s) of {big.sum():.0f} mm3 in total ({big.max():.0f} mm3 at most) "
                           "were dropped (normally the strip over the wedge between two slots; if a rail, screw collar or shell part is missing in the STL, this is why)")
     return g, rep
+
+
+def _run_lengths(m, axis):
+    """Per voxel of mask m: the length (voxels) of the run of mask voxels along `axis` that contains it (0 outside)."""
+    a = np.moveaxis(m, axis, -1)
+    flat = a.reshape(-1, a.shape[-1])
+    prev = np.zeros_like(flat)
+    prev[:, 1:] = flat[:, :-1]
+    rid = np.cumsum((flat & ~prev).ravel()).reshape(flat.shape)
+    rid[~flat] = 0
+    L = np.bincount(rid.ravel())[rid]
+    L[~flat] = 0
+    return np.moveaxis(L.reshape(a.shape), -1, axis)
+
+
+def wall_check(guide, h, wall_min=WALL_MIN_MM):
+    """Wall thickness of a voxel guide: per voxel the shortest of the three axis chords through it (a sheet seen across its
+    thickness; an oblique sheet reads up to 1.7x thicker, so this finds thin walls, it does not grade thick ones). Returns
+    the 1st percentile (mm), the area thinner than wall_min (mm2, volume / thickness; on a sound guide this is the feathered
+    rim and the voxel staircase where the shell meets the bone obliquely) and held_mm3 / held_parts: the guide parts that
+    stay attached only through thin wall (a sliver across a slot or beside a hole: it breaks and the part falls off)."""
+    if not guide.any():
+        return dict(wall_p1_mm=0.0, thin_mm2=0.0, held_mm3=0.0, held_parts=0)
+    t = np.minimum(np.minimum(_run_lengths(guide, 0), _run_lengths(guide, 1)), _run_lengths(guide, 2)) * h
+    thin = guide & (t < wall_min - 1e-6)
+    lab0, k0 = ndi.label(guide)
+    lab, k = ndi.label(guide & ~thin)
+    held = []
+    if k > k0:
+        vol = np.bincount(lab.ravel())[1:] * h ** 3
+        owner = ndi.maximum(lab0, lab, np.arange(1, k + 1))      # the guide component each thick part lies in
+        for c in range(1, k0 + 1):
+            v = np.sort(vol[owner == c])[::-1]
+            held += [float(x) for x in v[1:] if x >= HELD_MIN_MM3]
+    return dict(wall_p1_mm=round(float(np.percentile(t[guide], 1)), 2), thin_mm2=round(float(np.sum(h ** 3 / t[thin])), 1),
+                held_mm3=round(sum(held), 1), held_parts=len(held))
+
+
+def _checks(name, guide, bone, h, clearance, rep, wall):
+    """Minimum wall and seating (can the guide be lifted off along its seating normal?) for a pipeline guide; problems go
+    to rep['warning'] (listed by run_pipeline and written to plan.json), never silent."""
+    def add(msg):
+        rep["warning"] = (rep.get("warning", "") + (" " if rep.get("warning") else "") + msg)
+    wmin = min(WALL_MIN_MM, 0.6 * wall)
+    rep["wall"] = wall_check(guide, h, wmin)
+    if rep["wall"]["held_parts"]:
+        add(f"{name}: {rep['wall']['held_parts']} part(s) of {rep['wall']['held_mm3']:.0f} mm3 are held to the guide only by wall "
+            f"thinner than {wmin:.1f} mm (1st percentile {rep['wall']['wall_p1_mm']:.1f} mm); the guide may break there "
+            "(a slot or a hole leaves a sliver): move the slot / screw or widen the guide")
+    rep["seat"] = seat_check(guide, bone, h, axis=1, clearance=clearance)
+    if rep["seat"]["ok"] and rep["seat"]["free_directions"] == 0:
+        add(f"{name}: cannot be lifted off the bone along any direction within 40 deg of its seating normal "
+            f"(best direction still has {rep['seat']['best_block_mm2']:.0f} mm2 of bone over the guide); the shell reaches under "
+            "the bone's widest level (undercut): reduce the grid depth / reach or move the cut")
+    elif rep["seat"]["ok"] and rep["seat"]["best_tilt_deg"] > 0:
+        rep["note"] = (f"{name}: seats only tilted ({rep['seat']['best_tilt_deg']:.0f} deg from its seating normal, "
+                       f"{rep['seat']['free_directions']}/{rep['seat']['directions']} directions free)")
+    elif not rep["seat"]["ok"]:
+        add(f"{name}: the seating check could not run (no guide or no bone in the grid)")
 
 
 def fibula_guide(vol, mask, fib, plan, h=0.3, clearance=0.3, wall=2.5, rail=3.0,
@@ -78,6 +141,8 @@ def fibula_guide(vol, mask, fib, plan, h=0.3, clearance=0.3, wall=2.5, rail=3.0,
         guide &= ~_hole(L, np.array([s, 0, 0]), d45, screw_d / 2)
     guide, rep = _largest("fibula_guide", guide, h)
     rep["slot_mm"] = round(sw, 2); rep["screws"] = len(holes)
+    # the shell lies on the +r2 side of the bone (r2 >= -0.5): it is put on along +r2 (local axis 1)
+    _checks("fibula_guide", guide, bone, h, clearance, rep, wall)
     if sw - plan["kerf"] > 0.3 + 1e-9:
         rep["slot_note"] = f"fibula_guide: the slot is {sw:.2f} mm on the {h} mm grid, {sw - plan['kerf']:.2f} mm wider than the {plan['kerf']:.2f} mm blade (at most 0.3 mm advised)"
     if dropped:
@@ -167,16 +232,11 @@ def mandible_guide(vol, mask, arch, plan, which, h=0.3, clearance=0.3, wall=2.5,
     guide, rep = _largest(f"mandible_guide_{which}", guide, h)
     rep["kerf_side"] = "centre" if centred else "resected"
     rep["stump_gap_mm"] = round(float(k / 2 if centred else 0.0), 2)
-    # can the guide be lifted off along the buccal normal (local axis 1) or a direction within 40 deg of it?
-    rep["seat"] = seat_check(guide, bone, h, axis=1, clearance=clearance)
-    if rep["seat"]["ok"] and rep["seat"]["free_directions"] == 0:
-        rep["warning"] = (rep.get("warning", "") + (" " if rep.get("warning") else "")
-                          + f"mandible_guide_{which}: cannot be lifted off the bone along any direction within 40 deg of the buccal normal "
-                          f"(best direction still has {rep['seat']['best_block_mm2']:.0f} mm2 of bone over the guide); the shell reaches under "
-                          "the bone's widest level (undercut): reduce the grid depth / reach or move the cut")
-    elif rep["seat"]["ok"] and rep["seat"]["best_tilt_deg"] > 0:
-        rep["note"] = (f"mandible_guide_{which}: seats only tilted ({rep['seat']['best_tilt_deg']:.0f} deg from the buccal normal, "
-                       f"{rep['seat']['free_directions']}/{rep['seat']['directions']} directions free)")
+    rep["slot_mm"] = round(sw, 2)
+    if sw - plan["kerf"] > 0.3 + 1e-9:
+        rep["slot_note"] = f"mandible_guide_{which}: the slot is {sw:.2f} mm on the {h} mm grid, {sw - plan['kerf']:.2f} mm wider than the {plan['kerf']:.2f} mm blade (at most 0.3 mm advised)"
+    # minimum wall; can the guide be lifted off along the buccal normal (local axis 1) or a direction within 40 deg of it?
+    _checks(f"mandible_guide_{which}", guide, bone, h, clearance, rep, wall)
     return grid.mesh(guide), plane, rep
 
 

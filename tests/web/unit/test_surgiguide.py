@@ -317,9 +317,9 @@ class TestSegmentChoiceAndKerf(unittest.TestCase):
         self.assertEqual(r["n"], 1, "deviations within 0.5 mm: fewer segments")
 
     def test_length_bands_and_gap_error(self):
-        def pw(lens, gap=0.0, joints=()):
+        def pw(lens, gap=0.0):
             segs = [dict(index=i, length_mm=x, angle_start_deg=0.0, angle_end_deg=0.0) for i, x in enumerate(lens)]
-            return P.plan_warnings(segs, 0.0, len(lens), 3.0, 20.0, -1.0, sum(lens), None, gap, "centre", joints)
+            return P.plan_warnings(segs, 0.0, len(lens), 3.0, 20.0, -1.0, sum(lens), None, gap, "centre")
         w = pw([14.0, 40.0])
         self.assertTrue(any(x.startswith("ERROR") and "15 mm" in x for x in w), w)
         w = pw([18.0, 40.0])
@@ -330,7 +330,8 @@ class TestSegmentChoiceAndKerf(unittest.TestCase):
         self.assertTrue(any(x.startswith("ERROR") and "gap" in x for x in pw([30.0, 30.0], 2.5)))
         self.assertFalse(any(x.startswith("ERROR") for x in pw([30.0, 30.0], 1.2)))
         self.assertTrue(any("above 1.0 mm" in x for x in pw([30.0, 30.0], 1.2)))
-        self.assertTrue(any(x.startswith("ERROR") and "between segments 1 and 2" in x for x in pw([30.0, 30.0], 0.0, [2.6])))
+        # between two grafts the gap is 0 by construction (both faces cut to one plane): reported, not checked (D4 P19)
+        self.assertEqual(P.make_plan(self.A, self.F, -25, 25, n_segments=2, kerf=1.0)["joint_gap_mm"], [0.0])
 
     def test_slot_width_separate_from_the_blade(self):
         p = P.make_plan(self.A, self.F, -25, 25, n_segments=2, kerf=1.0)

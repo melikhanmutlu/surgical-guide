@@ -61,7 +61,8 @@ def mandible_phantom(spacing=(0.6, 0.6, 0.6), seed=0):
 
 
 def leg_phantom(spacing=(0.7, 0.7, 0.8), seed=1):
-    """Right lower leg: tibia + slightly tilted fibula, 320 mm long."""
+    """Right lower leg: tibia + slightly tilted fibula, 320 mm long; the fibula lateral to the tibia (patient right = -x in
+    LPS), as on a real right leg."""
     origin = np.array([-55.0, -45.0, 0.0])
     shape = (int(320 / spacing[2]), int(90 / spacing[1]), int(110 / spacing[0]))
     x, y, z = _grid(shape, spacing, origin)
@@ -69,10 +70,10 @@ def leg_phantom(spacing=(0.7, 0.7, 0.8), seed=1):
     arr[((x / 52) ** 2 + (y / 43) ** 2) <= 1] = SOFT
     path_t, path_f = [], []
     for zs in np.arange(5, 315, 0.8):
-        path_t.append((np.array([-12.0, -8.0, zs]), np.array([0, 0, 1.0]), np.array([1.0, 0, 0]), 13.0, 11.0))
-        ft = np.array([0.04, 0.02, 1.0]); ft /= np.linalg.norm(ft)
+        path_t.append((np.array([12.0, -8.0, zs]), np.array([0, 0, 1.0]), np.array([1.0, 0, 0]), 13.0, 11.0))
+        ft = np.array([-0.04, 0.02, 1.0]); ft /= np.linalg.norm(ft)
         r = 7.0 + 1.5 * np.sin(zs / 320 * np.pi)                    # slightly thicker mid-shaft
-        path_f.append((np.array([20.0, 6.0, 0.0]) + (zs - 160) * ft + np.array([0, 0, 160]),
+        path_f.append((np.array([-20.0, 6.0, 0.0]) + (zs - 160) * ft + np.array([0, 0, 160]),
                        ft, np.array([1.0, 0, 0]), r, r * 0.85))
     _sweep(arr, x, y, z, path_t, cortex=3.0)
     _sweep(arr, x, y, z, path_f, cortex=2.0)
