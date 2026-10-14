@@ -2178,4 +2178,6 @@ window.I18N_EN = {
 "Bu adayın kemiği artık yok (ayrılmış olabilir); başka bir aday seçin.": "This candidate's bone is gone (it may have been split); choose another candidate.",
 "Defekt boyu değişti; segment sayısı # → # oldu.": "The defect length changed; the segment count went from # to #.",
 "Segment sınırları, kesi açıları ve rotasyonlar sıfırlandı; kontrol edin.": "Segment boundaries, osteotomy angles and rotations were reset; check them.",
+"Plak hattı defektte # mm boyunca grefte değmiyor; bu yükseklikte greft yok. Plak yüksekliğini ya da fibula segmentinin yerini değiştirin.": "Over # mm of the defect the plate line does not touch the graft; there is no graft at this height. Change the plate height or the position of the fibula segment.",
+"Plak hattı defektte # mm boyunca grefte değmiyor; greft bu noktada # ile # mm yükseklik arasında. Plak yüksekliğini yaklaşık # mm yapın ya da fibula segmentinin yerini değiştirin.": "Over # mm of the defect the plate line does not touch the graft; here the graft lies between # and # mm height. Set the plate height to about # mm or change the position of the fibula segment.",
 };
