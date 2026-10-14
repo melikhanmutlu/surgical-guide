@@ -17,6 +17,10 @@ window.UI = (function () {
   }
   steps.forEach(d => d.addEventListener('toggle', () => { if (d.open) steps.forEach(o => { if (o !== d && o.open) o.open = false; }); store.set('gs.step', d.id); }));
   document.querySelectorAll('button.next').forEach(b => b.addEventListener('click', () => openStep(b.dataset.next, true)));
+  // a click or brush mode belongs to the panel it was started from: moving to another step, or folding the section
+  // that holds the pressed tool button, ends it, so the model never stops turning behind a closed panel
+  document.addEventListener('click', e => { if (e.target.closest && e.target.closest('details.step[name="flow"] > summary, button.next')) St.endModes({ step: true }); }, true);
+  document.addEventListener('toggle', e => { const d = e.target; if (d.tagName === 'DETAILS' && !d.open && d.querySelector('button[aria-pressed="true"][data-t], #fibPick[aria-pressed="true"], #fibSplit[aria-pressed="true"]')) St.endModes({ step: true }); }, true);
 
   // ---------- completion and status tags ----------
   // step rows show only an icon and a count ("0/3", "6"); the full wording is the tooltip. A plain "ok" with no

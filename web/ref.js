@@ -225,6 +225,7 @@ window.Ref = (function () {
     }));
   }
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && picking) { picking = null; $('modeBadge').hidden = true; } });
+  St.onEndModes(() => { picking = null; });
 
   // ---------- plan, events, checks, report ----------
   (window.PlanExt = window.PlanExt || {}).ref = {

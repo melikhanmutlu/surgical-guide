@@ -2899,6 +2899,32 @@
     $('modeBadge').hidden = m === 'orbit';
     $('modeBadge').textContent = m === 'anchor' ? 'Rezeksiyon bölgesinin ortasında kemik yüzeyine tıklayın (guide buraya oturur)' : m === 'screw' ? 'Vida yeri için guide üzerine tıklayın' : $('modeBadge').textContent;
   }
+  // ---------- click / brush modes (cut region, screw site, bone pick, marking and lesion brushes, ...) ----------
+  // Every tool that takes over the clicks on the model shows the mode bar over the view: what the clicks do now,
+  // which step it was started from and a button that ends it (Esc does the same). Each module registers how it
+  // ends its own mode; changing the step ends every mode, so none is left running behind a closed panel.
+  const modeEnders = [];
+  function onEndModes(f, o) { modeEnders.push({ f, view: !!(o && o.view) }); }
+  function endModes(o) {
+    const step = !!(o && o.step);
+    S.autoAfter = false; if (S.mode !== 'orbit') setMode('orbit');
+    modeEnders.forEach(m => { if (step && m.view) return; try { m.f(); } catch (e) { console.error(e); } });
+    if (!step || !(window.Measure && Measure.active())) $('modeBadge').hidden = true;
+  }
+  {
+    const badge = $('modeBadge'), bar = $('modeBar'), from = $('modeFrom');
+    const sync = () => {
+      const was = !bar.hidden; bar.hidden = badge.hidden;
+      if (!bar.hidden && !was) {
+        // the step the mode was started from (the open one), so it is clear where it came from
+        const sm = document.querySelector('details.step[open] > summary'), n = sm && sm.querySelector('.n');
+        const t = sm ? [...sm.childNodes].filter(x => x.nodeType === 3).map(x => x.textContent).join('').replace(/\s+/g, ' ').trim() : '';
+        $('modeStep').textContent = t ? `${n ? n.textContent + ' · ' : ''}${t}` : ''; from.hidden = !t || !!(window.Measure && Measure.active());   // measuring is a view tool, not a step's
+      }
+    };
+    new MutationObserver(sync).observe(badge, { attributes: true, attributeFilter: ['hidden'] }); sync();
+    $('modeExit').addEventListener('click', () => endModes());
+  }
   function fitTo(obj) {
     const box = new THREE.Box3().setFromObject(obj), c = box.getCenter(V()), r = box.getSize(V()).length() / 2;
     controls.target.copy(c);
@@ -3325,7 +3351,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   }
   function serverUrl() { return ($('aiUrl').value || '').trim().replace(/\/+$/, ''); }
   function select(sel) { if (sel) S.guideSel = false; S.sel = sel; emit('select', sel); renderElements(); rebuildElementParts(S.result ? S.result.pls : planesWorld(), S.result ? S.result.screwInfo : []); applyExplode(); render(); }
-  window.Studio = { mandibleView, startLoad, loadStopped, loadBusy: () => committing, LOAD_CANCELLED, renderComps, setGuideRot, setGuideRoll, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, resEnds, splitGap, cutMisses, evalScrew, resectedAt, resectedNear, resPiece, boneTrack, cutAlongBone, bestScrew,
+  window.Studio = { mandibleView, endModes, onEndModes, startLoad, loadStopped, loadBusy: () => committing, LOAD_CANCELLED, renderComps, setGuideRot, setGuideRoll, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, resEnds, splitGap, cutMisses, evalScrew, resectedAt, resectedNear, resPiece, boneTrack, cutAlongBone, bestScrew,
     boneSections, sizeBody, autoBody, buildGuideSet, cutsAngle, cutFrame, pieceFrames, pieceBody, screwBodyOn, pieceWrapTop, frameAt, stumpGap, mergeStl, mergeMeshes, AUTO_DEFAULT, G_DEFAULT, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume, boneField, simplifyMesh, BAR, barPlan, barSdf, buildBarMesh, placeLug, longCase, axisOffBone, ramusAxis, stopSides, LONG_MM };
   bus.addEventListener('planeDragged', () => { renderElements(); schedule(true, true); });
   // messages assembled at run time are written in the language that was active: write them again when it changes
