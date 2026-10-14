@@ -4,18 +4,19 @@
 /* ---------- tokens ---------- */
 :root:root[data-style="k1"] {
   --font-body: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif; --font-mono: "Inter", system-ui, sans-serif;
-  --bg: #f4f6fb; --panel: #ffffff; --sunken: #f7f8fc; --fg: #1b2233; --muted: #3f4759; --faint: #5b6478; --control: #c9cfdc;
+  --bg: #f4f6fb; --panel: #ffffff; --sunken: #f7f8fc; --fg: #1b2233; --muted: #3f4759; --faint: #5b6478; --control: #7a8294;
   --line: #eceff5; --line-strong: #dde2ec; --hover: #f1f3f9; --stage: #e9edf4; --glass: #ffffff;
   --accent: #3f5bd9; --accent-hover: #3249bf; --accent-ink: #ffffff; --accent-soft: #eef1fd; --accent-line: #c6cff6;
-  --ok: #1f9d63; --warn: #c27a12; --crit: #d23c3c; --ok-bg: #e9f7f0; --warn-bg: #fdf3e3; --crit-bg: #fdecec;
+  /* status text must stay >= 4.5:1 on white, the sunken rows and the tinted open step (WCAG 1.4.3): the base theme's values */
+  --ok: #1d7a50; --warn: #9a5a00; --crit: #b42318; --ok-bg: #e9f7f0; --warn-bg: #fdf3e3; --crit-bg: #fdecec;
   --shadow: 0 1px 2px rgba(27,34,51,.05), 0 8px 24px rgba(27,34,51,.07);
   --cardshadow: 0 1px 2px rgba(27,34,51,.04), 0 6px 20px rgba(27,34,51,.05);
   --r: 9px; --R: 16px;
 }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"])[data-style="k1"] { --bg: #0f131c; --panel: #171c27; --sunken: #131822; --fg: #e6e9f2; --muted: #bcc3d2; --faint: #a3abbd; --control: #444d63; --line: #232a38; --line-strong: #2e3647; --hover: #1d2330; --stage: #0b0e14; --glass: #171c27; --accent: #8098ff; --accent-hover: #9aaeff; --accent-ink: #0b1235; --accent-soft: #1c2547; --accent-line: #33437f; --ok: #4cc38a; --warn: #e2a84b; --crit: #f0877c; --ok-bg: #12291f; --warn-bg: #2d2311; --crit-bg: #331715; --cardshadow: none; --shadow: 0 6px 20px rgba(0,0,0,.35); }
+  :root:not([data-theme="light"])[data-style="k1"] { --bg: #0f131c; --panel: #171c27; --sunken: #131822; --fg: #e6e9f2; --muted: #bcc3d2; --faint: #a3abbd; --control: #6b7590; --line: #232a38; --line-strong: #2e3647; --hover: #1d2330; --stage: #0b0e14; --glass: #171c27; --accent: #8098ff; --accent-hover: #9aaeff; --accent-ink: #0b1235; --accent-soft: #1c2547; --accent-line: #33437f; --ok: #4cc38a; --warn: #e2a84b; --crit: #f0877c; --ok-bg: #12291f; --warn-bg: #2d2311; --crit-bg: #331715; --cardshadow: none; --shadow: 0 6px 20px rgba(0,0,0,.35); }
 }
-:root:root[data-style="k1"][data-theme="dark"] { --bg: #0f131c; --panel: #171c27; --sunken: #131822; --fg: #e6e9f2; --muted: #bcc3d2; --faint: #a3abbd; --control: #444d63; --line: #232a38; --line-strong: #2e3647; --hover: #1d2330; --stage: #0b0e14; --glass: #171c27; --accent: #8098ff; --accent-hover: #9aaeff; --accent-ink: #0b1235; --accent-soft: #1c2547; --accent-line: #33437f; --ok: #4cc38a; --warn: #e2a84b; --crit: #f0877c; --ok-bg: #12291f; --warn-bg: #2d2311; --crit-bg: #331715; --cardshadow: none; --shadow: 0 6px 20px rgba(0,0,0,.35); }
+:root:root[data-style="k1"][data-theme="dark"] { --bg: #0f131c; --panel: #171c27; --sunken: #131822; --fg: #e6e9f2; --muted: #bcc3d2; --faint: #a3abbd; --control: #6b7590; --line: #232a38; --line-strong: #2e3647; --hover: #1d2330; --stage: #0b0e14; --glass: #171c27; --accent: #8098ff; --accent-hover: #9aaeff; --accent-ink: #0b1235; --accent-soft: #1c2547; --accent-line: #33437f; --ok: #4cc38a; --warn: #e2a84b; --crit: #f0877c; --ok-bg: #12291f; --warn-bg: #2d2311; --crit-bg: #331715; --cardshadow: none; --shadow: 0 6px 20px rgba(0,0,0,.35); }
 
 html[data-style="k1"] body { font-feature-settings: "tnum" 1, "cv11" 1; letter-spacing: -.003em; }
 
@@ -58,8 +59,10 @@ html[data-style="k1"] .sub-d[open] { border: 0; background: var(--panel); border
 html[data-style="k1"] .sub-d[open] > summary { margin: 0 -12px; background: transparent; box-shadow: none; border: 0; color: var(--accent); }
 
 /* ---------- controls ---------- */
-html[data-style="k1"] button:not(.info):not(.tab), html[data-style="k1"] select, html[data-style="k1"] .filebtn { height: 36px; border-radius: var(--r); border-color: var(--line-strong); padding: 0 12px; }
-html[data-style="k1"] input[type=text], html[data-style="k1"] input[type=number], html[data-style="k1"] input[type=date], html[data-style="k1"] input[type=url], html[data-style="k1"] textarea { height: 36px; border-radius: var(--r); border-color: var(--line-strong); background: var(--panel); }
+/* text-like buttons (review rows, history rows, links) keep their own height: a fixed 36 px made two-line rows overlap */
+html[data-style="k1"] button:not(.info):not(.tab):not(.go):not(.link):not(.hist button), html[data-style="k1"] select, html[data-style="k1"] .filebtn { height: 36px; border-radius: var(--r); border-color: var(--line-strong); padding: 0 12px; }
+html[data-style="k1"] select { border-color: var(--control); }
+html[data-style="k1"] input[type=text], html[data-style="k1"] input[type=number], html[data-style="k1"] input[type=date], html[data-style="k1"] input[type=url], html[data-style="k1"] textarea { height: 36px; border-radius: var(--r); border-color: var(--control); background: var(--panel); }   /* input edge >= 3:1 (WCAG 1.4.11) */
 html[data-style="k1"] textarea { height: auto; }
 html[data-style="k1"] .ctl-row .num input { height: 30px; border-radius: 8px; font-weight: 500; }
 html[data-style="k1"] button.primary, html[data-style="k1"] button.primary:hover { font-weight: 600; box-shadow: none; }

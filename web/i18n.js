@@ -36,13 +36,14 @@
     const wrap = /^([(“"'«]+)(.*?)([)”"'».:…!?]*)$/.exec(k);
     if (wrap && (v = get(wrap[2], off)) != null) return wrap[1] + v + wrap[3];
     const par = /^(.+?) \(([^()]+)\)([.:]?)$/.exec(k);
+    let pv = null;
     if (par) {
       const o2 = off + cnt(par[1]), a = look(par[1], deep, off), b = look(par[2], true, o2);
-      if (a != null || b != null) return (a ?? slots(par[1], off)) + ' (' + (b ?? slots(par[2], o2)) + ')' + par[3];
+      if (a != null || b != null) pv = (a ?? slots(par[1], off)) + ' (' + (b ?? slots(par[2], o2)) + ')' + par[3];
     }
-    if (deep) return null;
+    if (deep) return pv;
     const parts = k.split(SEP);
-    if (parts.length < 3) return null;
+    if (parts.length < 3) return pv;
     // longest run of parts that translates as one, from left to right ("A: b. C" may be known as "b. C")
     let hit = 0, outp = '', o = off;
     for (let i = 0; i < parts.length; i += 2) {
@@ -54,8 +55,11 @@
       o += cnt(parts.slice(i, j + 1).join(''));
       i = j;
     }
-    return hit ? outp : null;
+    // "A: B (c)" can be read as "A: B" + "(c)" or as "A" + ": " + "B (c)"; the reading that leaves less Turkish wins
+    if (!hit || pv == null) return hit ? outp : pv;
+    return residue(outp) < residue(pv) ? outp : pv;
   }
+  const residue = s => (s.match(/[çğıöşüÇĞİÖŞÜ]|\b(ve|ile|ya|da|için|bir|bu|yok|kesi|vida|kemik)\b/g) || []).length;
   // a number as English writes it: Turkish "12,5" → "12.5", "1.234,5" → "1,234.5" (dates such as 01.02.2026 stay)
   const enNum = x => /^[-−+]?[1-9]\d{0,2}(?:\.\d{3})+(?:,\d+)?$/.test(x) ? x.replace(/[.,]/g, c => (c === '.' ? ',' : '.')) : x.replace(/^([-−+]?\d+),(\d+)$/, '$1.$2');
   const NUMS = new RegExp(NUM.source, 'g');
@@ -80,10 +84,10 @@
   const src = new WeakMap(), out = new WeakMap(), touched = new Set();
   // data and code shown as text (the plan JSON in <pre id=json>, anything marked translate="no") are never looked up:
   // they are not interface text, and splitting a long JSON into phrases froze every rebuild for seconds
-  const SKIP = /^(SCRIPT|STYLE|TEXTAREA|PRE|CODE)$/, keep = el => SKIP.test(el.tagName) || (el.getAttribute && el.getAttribute('translate') === 'no');
+  const keep = el => /^(PRE|CODE)$/.test(el.tagName) || (el.getAttribute && el.getAttribute('translate') === 'no');
   function text(n) {
     const p = n.parentElement;
-    if (!p || keep(p) || p.isContentEditable || (p.closest && p.closest('pre,code,[translate="no"]'))) return;
+    if (!p || /^(SCRIPT|STYLE|TEXTAREA)$/.test(p.tagName) || keep(p) || p.isContentEditable || (p.closest && p.closest('pre,code,[translate="no"]'))) return;
     if (out.get(n) === n.data) return;
     const en = t(n.data);
     src.set(n, n.data);

@@ -34,6 +34,15 @@
   }
   // hovering the "i" shows the explanation itself, not a generic word
   const tip = (b, ts) => { const t = ts.map(x => x.textContent.replace(/\s+/g, ' ').trim()).join('\n\n'); b.title = t; b.setAttribute('aria-label', t); };
+  // the copy is taken once; after a language switch it is taken again from the (now translated) text
+  window.addEventListener('langchange', () => document.querySelectorAll('button.info').forEach(b => { if (b._ts) tip(b, b._ts); }));
+  // a button inside a <summary> is a control nested in a control (WCAG 4.1.2): there it stays a pointer shortcut
+  // (out of the Tab order, hidden from screen readers) and the summary itself is described by the explanation
+  function inSummary(b) {
+    const sm = b.parentElement; if (!sm || !sm.matches('summary')) return;
+    b.tabIndex = -1; b.setAttribute('aria-hidden', 'true');
+    sm.setAttribute('aria-describedby', b._ts.map(t => t.id).join(' '));
+  }
   function fold(h) {
     if (h.dataset.folded) return;
     h.dataset.folded = '1';
@@ -43,7 +52,7 @@
     // a heading that already has an "i" gets no second one; its button opens every text under it
     const prev = a && a.at && [...a.at.children].find(c => c.matches('button.info') && c._ts && c._ts.every(t => t.isConnected));
     if (prev) {
-      prev._ts.push(h); prev.setAttribute('aria-controls', prev._ts.map(t => t.id).join(' ')); tip(prev, prev._ts);
+      prev._ts.push(h); prev.setAttribute('aria-controls', prev._ts.map(t => t.id).join(' ')); tip(prev, prev._ts); inSummary(prev);
       h.classList.toggle('shut', prev.getAttribute('aria-expanded') !== 'true');
       prev._ts[prev._ts.length - 2].after(h);
       return;
@@ -60,6 +69,7 @@
       // headings keep trailing counters on the right, so the button sits right after the title text
       const tail = a.at.matches('h3.sub, summary') ? [...a.at.children].find(c => !c.matches('.sn, .info')) : null;
       if (tail) a.at.insertBefore(b, tail); else a.at.appendChild(b);
+      inSummary(b);
       if (a.after) { if (a.inside) a.after.appendChild(h); else a.after.after(h); }
     } else {
       const row = document.createElement('span');
@@ -85,13 +95,15 @@
   // ---------- button tiers ----------
   const DANGER = /(^|\s)(\S+(ı|i|u|ü|yı|yi|yu|yü|ları|leri) sil|Sil|Kaldır|Onayı geri çek|Geri çek|Düzeltmeleri kaldır|Planı sıfırla)$/;
   const GHOST = /^(Varsayılan(a dön)?|Otomatik değerlere dön|Tahmini noktaya dön|İşaretleri temizle|Temizle|Not ekle|Not|Listeyi yenile|Yeniden hesapla|Örnek veriyle dene|Sentetik deneme|HTML)$/;
+  // the same tiers when the button already reads English (the language is switched before the panel renders)
+  const DANGER_EN = /^(Delete( .+)?|Remove( .+)?|Withdraw( approval)?|Reset plan)$/, GHOST_EN = /^(Default|Reset to default|Back to automatic values|Return to estimated point|Clear marks|Clear|Add note|Note|Refresh list|Recalculate|Try with sample data|Synthetic trial)$/;
   function tier(b) {
     if (b.dataset.tier || b.matches('.primary, .ghost, .danger, .link, .ibtn, .tab, .el, .info, .seg button, .presets button, .hud button, .edge, .cellmode')) return;
     b.dataset.tier = '1';
     const t = b.textContent.replace(/\s+/g, ' ').trim();
     const trash = !!b.querySelector('use[href="#i-trash"]');
-    if (trash || DANGER.test(t) || t === '×') b.classList.add('danger');
-    if (GHOST.test(t) || t === '×') b.classList.add('ghost');
+    if (trash || DANGER.test(t) || DANGER_EN.test(t) || t === '×') b.classList.add('danger');
+    if (GHOST.test(t) || GHOST_EN.test(t) || t === '×') b.classList.add('ghost');
   }
 
   // ---------- optional sections remember open/closed ----------
