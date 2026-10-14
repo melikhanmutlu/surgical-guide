@@ -188,7 +188,10 @@ class T3_VersionIntegrity(Base):
         out, errs = [], []
 
         def post(i):
-            st, r = J(call(self.base, "POST", f"/cases/{cid}/versions", {"plan": {"i": i}, "note": str(i), "author": "t"}))
+            try:
+                st, r = J(call(self.base, "POST", f"/cases/{cid}/versions", {"plan": {"i": i}, "note": str(i), "author": "t"}))
+            except OSError as e:                          # a refused / reset connection is a failure too, not a lost thread
+                st, r = None, repr(e)
             (out if st == 200 else errs).append((i, r))
         ths = [threading.Thread(target=post, args=(i,)) for i in range(40)]
         [t.start() for t in ths]; [t.join() for t in ths]

@@ -381,11 +381,18 @@ class Handler(BaseHTTPRequestHandler):
                    (("X-Structures", json.dumps(structs, ensure_ascii=True)),))
 
 
+class Server(ThreadingHTTPServer):
+    """A backlog for bursts of connections (a studio opening a case sends several requests at once; the default of 5
+    resets connections under load) and worker threads that do not hold the process at exit."""
+    request_queue_size = 128
+    daemon_threads = True
+
+
 def make_server(host, port, backend="threshold", allow_origin=None):
     Handler.backend = backend
     if allow_origin is not None:
         Handler.allowed_origins = _origins(allow_origin)
-    return ThreadingHTTPServer((host, port), Handler)
+    return Server((host, port), Handler)
 
 
 if __name__ == "__main__":

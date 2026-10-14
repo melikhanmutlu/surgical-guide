@@ -45,7 +45,6 @@ import sys
 import threading
 import time
 import traceback
-from http.server import ThreadingHTTPServer
 from urllib.parse import urlparse, unquote
 
 import numpy as np
@@ -1259,7 +1258,7 @@ def make_server(host, port, db, backend="threshold", web=None, token=None, allow
         Handler.token = token or None
     if allow_origin is not None:
         Handler.allowed_origins = seg_server._origins(allow_origin)
-    return ThreadingHTTPServer((host, port), Handler)
+    return seg_server.Server((host, port), Handler)
 
 
 if __name__ == "__main__":
