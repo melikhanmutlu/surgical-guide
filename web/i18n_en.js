@@ -2153,4 +2153,10 @@ window.I18N_EN = {
 "ortala": "fit",
 "Akış ve onay": "Flow and approval",
 "Adımlar soldan sırayla ilerler. Her kesi, vida ve rezeksiyon aralığı #. adımda tek tek onaylanır; sonra mühendis teknik, cerrah klinik onayı verir. Onaydan sonra plan değişirse onaylar düşer. Kritik kontrol açıkken onay verilemez ve üretim paketi kilitli kalır; nedeni İndir düğmesinin altında yazar. Kontroller sekmesindeki eşikler örnek değerlerdir.": "The steps on the left run in order. Each cut, screw and the resection extent is approved one by one in step #; then the engineer gives technical and the surgeon clinical approval. If the plan changes after approval, the approvals are revoked. While a critical check is open, approval is blocked and the production package stays locked; the reason is shown under the Download button. The thresholds in the Checks tab are sample values.",
+"Plan sıfırlansın mı? Kesiler, guide ve vidalar silinir; onaylar da düşer.": "Reset the plan? Cuts, guide and screws are deleted and approvals are revoked.",
+"Seri değiştirilsin mi? Bu serideki kesiler ve guide silinir.": "Switch series? The cuts and guide on this series are deleted.",
+"Örnek vaka yüklensin mi? Mevcut plan (kesiler, vidalar, guide) silinir.": "Load the sample case? The current plan (cuts, screws, guide) is replaced.",
+"İmplantlar yeniden yerleştirilsin mi? Mevcut # implant silinir.": "Re-place the implants? The # existing implants are deleted.",
+"Onay verilemez: # kritik kontrol açık. Önce Kontroller sekmesindeki kritik maddeleri çözün.": "Approval blocked: # critical checks are open. Resolve them in the Checks tab first.",
+"Paket kilitli: # öğe onay bekliyor, cerrah adı girilmedi.": "Package locked: # items awaiting approval, surgeon name missing.",
 };
