@@ -15,7 +15,7 @@ window.Plate = (function () {
   };
   // screw lengths each system offers (mm); a hole gets the shortest that passes the far cortex by 1 mm
   const LENS = { recon24: [6, 8, 10, 12, 14, 16, 18, 20, 22, 24], mini20: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16], custom: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 22, 24] };
-  const JOINT_GAP = 3;
+  const JOINT_GAP = 3, GAP = 0.15;   // GAP: modelled clearance between plate and bone (mm)
   const DEF = { on: false, sys: 'recon24', h: 0, ext: 25, w: 7, t: 2.5, pitch: 8, d: 2.4, shift: 0 };
   let P = Object.assign({}, DEF), last = null, timer = null;
 
@@ -41,9 +41,14 @@ window.Plate = (function () {
     return null;
   }
   const clipped = h => { const cp = h.object.material && h.object.material.clippingPlanes; return !!cp && cp.some(pl => pl.distanceToPoint(h.point) < -0.05); };
-  // walk from s along dir until stop(point, length) is true
-  function walk(s, dir, T, stop) {
-    const out = []; let cur = s, d = dir.clone(), len = 0;
+  // walk from s along dir until stop(point, length) is true. prog(point) is the walk's progress away from the defect
+  // (distance past the cut it heads for): a surface walk that runs off the end of the bone, or over the crest or lower
+  // border, wraps round and comes back along the other face (Denetim 4 E1: a 235 mm plate looping back to the start).
+  // The walk therefore must keep moving away from the defect: when its progress falls 1.5 mm below the best reached, or
+  // it goes 20 mm without new progress, it stops at the farthest point (ok false, back true; the plate is short there).
+  const BACK_TOL = 1.5, STALL_MM = 20;
+  function walk(s, dir, T, stop, prog) {
+    const out = []; let cur = s, d = dir.clone(), len = 0, best = prog(s.p), bi = -1, bLen = 0;
     for (let i = 0; i < 160; i++) {
       d.sub(cur.n.clone().multiplyScalar(d.dot(cur.n))).normalize();
       // a short step first; across the saw gap between bone and graft, longer steps bridge it
@@ -53,6 +58,9 @@ window.Plate = (function () {
       d = nx.p.clone().sub(cur.p).normalize(); nx.n.lerp(cur.n, 0.5).normalize();
       len += step; cur = nx; out.push(cur);
       if (stop(cur.p, len)) return { pts: out, ok: true };
+      const g = prog(cur.p);
+      if (g > best) { best = g; bi = out.length - 1; bLen = len; }
+      else if (g < best - BACK_TOL || len - bLen > STALL_MM) return { pts: out.slice(0, bi + 1), ok: false, back: true };
     }
     return { pts: out, ok: false };
   }
@@ -61,15 +69,18 @@ window.Plate = (function () {
     if (!P.on || !S.anchor || !St.parts.bone) return null;
     const E = St.resEnds(); if (!E) return null;
     const T = targets(), { u, v, n } = St.frameAxes();
+    // the rays need current world matrices: graft meshes are placed by their matrices, and a line computed right after a
+    // rebuild (before the next render updates them) would miss the grafts
+    T.forEach(t => t[0].updateMatrixWorld(true));
     const { A, B } = E;
     // start inside the defect: the anchor, or the middle of the two ends when the cuts have moved off it
     const ea = A.p.clone().sub(S.anchor.p).dot(u), eb = B.p.clone().sub(S.anchor.p).dot(u), shift = 0 > Math.min(ea, eb) + 2 && 0 < Math.max(ea, eb) - 2 ? 0 : (ea + eb) / 2;
     const s0 = snap(S.anchor.p.clone().addScaledVector(u, shift).addScaledVector(v, P.h), n, T); if (!s0) return null;
     const out = q => q.clone().sub(A.p).dot(A.N) < -(A.w / 2 + P.ext);
     const toA = A.p.clone().sub(s0.p).dot(u) < 0 ? u.clone().negate() : u.clone();
-    const wa = walk(s0, toA, T, q => out(q));
-    const wb = E.condyle ? walk(s0, toA.clone().negate(), T, q => q.distanceTo(B.p) < 10)
-      : walk(s0, toA.clone().negate(), T, q => q.clone().sub(B.p).dot(B.N) > B.w / 2 + P.ext);
+    const wa = walk(s0, toA, T, q => out(q), q => -q.clone().sub(A.p).dot(A.N));
+    const wb = E.condyle ? walk(s0, toA.clone().negate(), T, q => q.distanceTo(B.p) < 10, q => -q.distanceTo(B.p))
+      : walk(s0, toA.clone().negate(), T, q => q.clone().sub(B.p).dot(B.N) > B.w / 2 + P.ext, q => q.clone().sub(B.p).dot(B.N));
     let raw = wa.pts.reverse().concat([s0], wb.pts);
     if (raw.length < 4) return null;
     // smooth, then resample every 1 mm
@@ -98,11 +109,38 @@ window.Plate = (function () {
       holes.push(h);
     }
     // bending: how much the plate turns, in the plate plane and out of it
-    let inPlane = 0, outPlane = 0;
-    for (let i = 4; i < path.length; i += 4) { const a = path[i - 4], b = path[i]; const tb = V().crossVectors(a.t, a.n); inPlane += Math.abs(Math.asin(Math.max(-1, Math.min(1, b.t.dot(tb))))); outPlane += Math.abs(Math.asin(Math.max(-1, Math.min(1, b.t.dot(a.n))))); }
-    last = { path, holes, L, ok: wa.ok && wb.ok, E, bend: { inPlane: THREE.MathUtils.radToDeg(inPlane), outPlane: THREE.MathUtils.radToDeg(outPlane) } };
+    // (twist: the plate's face turning about its own length, as when the line rolls over the crest or lower border)
+    let inPlane = 0, outPlane = 0, twist = 0;
+    for (let i = 4; i < path.length; i += 4) {
+      const a = path[i - 4], b = path[i]; const tb = V().crossVectors(a.t, a.n); inPlane += Math.abs(Math.asin(Math.max(-1, Math.min(1, b.t.dot(tb))))); outPlane += Math.abs(Math.asin(Math.max(-1, Math.min(1, b.t.dot(a.n)))));
+      const nb = b.n.clone().addScaledVector(a.t, -b.n.dot(a.t)); if (nb.lengthSq() > 1e-6) twist += Math.abs(Math.atan2(nb.dot(tb), nb.dot(a.n)));
+    }
+    const r2d = THREE.MathUtils.radToDeg;
+    last = { path, holes, L, ok: wa.ok && wb.ok, back: !!(wa.back || wb.back), E, bend: { inPlane: r2d(inPlane), outPlane: r2d(outPlane), twist: r2d(twist) } };
+    last.crit = assess(last);
     return last;
   }
+
+  // ---------- plausibility ----------
+  // A line that is longer than the defect and both extensions call for, folds onto itself, or bends/twists more than a
+  // plate can be bent is not a plate: it is reported as critical (blocks approval and the package; Plate.critical()).
+  // Limits: length > 1.6 x expected + 10 mm (expected = cut-to-cut distance + slot halves + extension each side);
+  // two points >= 25 mm apart along the line within 6 mm of each other; total bend through the thickness > 450 deg
+  // (an angle-to-angle arch is about 300 deg with surface noise), across the edge > 150 deg, or twist > 180 deg.
+  const LIM = { lenRatio: 1.6, lenAdd: 10, foldArc: 25, foldGap: 6, outPlane: 450, inPlane: 150, twist: 180 };
+  function assess(R) {
+    const out = [], { A, B } = R.E, d = A.p.distanceTo(B.p);
+    const want = R.E.condyle ? d + A.w / 2 + P.ext : d + (A.w + B.w) / 2 + 2 * P.ext;
+    if (R.L > LIM.lenRatio * want + LIM.lenAdd) out.push({ why: 'length', text: `Plak hattı ${Math.round(R.L)} mm; rezeksiyon ve kesi ötesi uzantıya göre beklenen yaklaşık ${Math.round(want)} mm. Hat kemik çevresinde dolanıyor; plak yüksekliğini ya da uzantıyı değiştirin.` });
+    const pp = R.path; let fold = false;
+    for (let i = 0; i < pp.length && !fold; i += 2) for (let j = i + LIM.foldArc; j < pp.length; j += 2) if (pp[i].p.distanceTo(pp[j].p) < LIM.foldGap) { fold = true; break; }
+    if (fold) out.push({ why: 'fold', text: 'Plak hattı kendi üzerine katlanıyor; plak yüksekliğini ya da kesi ötesi uzantıyı değiştirin.' });
+    const b = R.bend;
+    if (b.outPlane > LIM.outPlane || b.inPlane > LIM.inPlane || b.twist > LIM.twist) out.push({ why: 'bend', text: `Plak bükmesi gerçekçi değil (${Math.round(b.outPlane)}° yüzeye, ${Math.round(b.inPlane)}° kenara, ${Math.round(b.twist)}° burulma); hat kemik kenarından dönüyor olabilir. Plak yüksekliğini değiştirin.` });
+    return out;
+  }
+  // critical reasons of the current plate line ([] when it is plausible or there is none)
+  const critical = () => (P.on && last && last.crit ? last.crit.slice() : []);
 
   // the fibula plan when grafts are shown (plate holes then also avoid the graft joints)
   function graftPlan() {
@@ -129,6 +167,10 @@ window.Plate = (function () {
   }
   // bicortical screw: walk into the bone along the hole axis until 2 mm of no bone follow; length = far cortex + 1 mm,
   // rounded up to the system's lengths. No exit within 30 mm: monocortical, the longest standard length is proposed.
+  // Length convention (conservative, needs confirmation against the plate system's own definition): measured from the
+  // plate's top face, i.e. the head seated flush in the plate, so the plate thickness and the modelled plate-bone gap
+  // are added to the bone path (Denetim 4 W10: from the bone surface alone the proposal was ~2 mm short and could stop
+  // inside the far cortex).
   function screwFor(h, fl) {
     const dir = h.n.clone().negate(), q = V(); let entry = null, lastIn = null, out = 0, t = -1;
     for (; t <= 30; t += 0.25) {
@@ -136,13 +178,13 @@ window.Plate = (function () {
       else if (entry !== null && (out += 0.25) >= 2) break;
     }
     if (entry === null) return { len: null, thick: 0, bi: false };
-    const bi = t <= 30, need = Math.max(0, lastIn) + 1, L = LENS[P.sys] || LENS.custom;
+    const bi = t <= 30, need = Math.max(0, lastIn) + 1 + GAP + P.t, L = LENS[P.sys] || LENS.custom;
     return { len: L.find(x => x >= need) || L[L.length - 1], thick: lastIn - entry, bi: bi && need <= L[L.length - 1] };
   }
 
   // ---------- plate mesh ----------
   function plateMesh(R) {
-    const pos = [], idx = [], gap = 0.15, w = P.w / 2, path = R.path;
+    const pos = [], idx = [], gap = GAP, w = P.w / 2, path = R.path;
     path.forEach(q => {
       const b = V().crossVectors(q.t, q.n).normalize();
       [[-w, gap], [w, gap], [w, gap + P.t], [-w, gap + P.t]].forEach(([x, y]) => { const c = q.p.clone().addScaledVector(b, x).addScaledVector(q.n, y); pos.push(c.x, c.y, c.z); });
@@ -161,7 +203,7 @@ window.Plate = (function () {
     body.name = 'plateBody'; grp.add(body);
     R.holes.forEach(h => {
       const m = new THREE.Mesh(new THREE.CylinderGeometry(P.d / 2 + 0.25, P.d / 2 + 0.25, P.t + 0.3, 20), new THREE.MeshStandardMaterial({ color: h.usable ? (h.matched ? 0x2a9d8f : 0x30363c) : 0xc0504d, roughness: 0.6 }));
-      m.position.copy(h.p.clone().addScaledVector(h.n, 0.15 + P.t / 2)); m.quaternion.setFromUnitVectors(V(0, 1, 0), h.n); grp.add(m);
+      m.position.copy(h.p.clone().addScaledVector(h.n, GAP + P.t / 2)); m.quaternion.setFromUnitVectors(V(0, 1, 0), h.n); grp.add(m);
     });
     St.setPart('plate', `${xl('Plak')} (${SYSTEMS[P.sys].name})`, grp, COLOR);
     if (St.renderParts) St.renderParts();
@@ -169,18 +211,32 @@ window.Plate = (function () {
   }
   async function update() {
     try { compute(); } catch (e) { last = null; }
-    if (last) markMatched();
+    // a message about an earlier line (e.g. "2 guide screws placed") must not stand next to "no plate line" (Denetim 4 E6)
+    if (last) markMatched(); else msg('');
     draw(); renderSum(); St.renderChecks(); St.renderAppr(); if (window.MPR) MPR.redraw();
   }
   const later = () => { clearTimeout(timer); timer = setTimeout(update, 350); };
 
   // ---------- guide screws on plate holes ----------
-  function screwFromHole(h, base) {
-    const { u, v, n } = St.frameAxes(), d = h.p.clone().sub(S.anchor.p), dir = h.n.clone().negate();
-    const a = Math.asin(Math.max(-1, Math.min(1, -dir.dot(u)))), b = Math.atan2(dir.dot(v), -dir.dot(n));
-    return Object.assign({}, base, { u: Math.round(d.dot(u) * 10) / 10, v: Math.round(d.dot(v) * 10) / 10, tiltU: Math.round(THREE.MathUtils.radToDeg(a)), tiltV: Math.round(THREE.MathUtils.radToDeg(b)), ok: false, plate: true });
+  // the frame a screw for hole h is given in: in the two-guide layout (split 2) the frame of the piece on the hole's side
+  // (app.js screwFrame reads u/v/tilts of a screw with `part` there), else the guide frame
+  function holeFrame(h) {
+    const f = S.g.split === 2 && St.pieceFrames ? St.pieceFrames() : null;
+    if (f && (h.region === 'A' || h.region === 'B')) return Object.assign({ part: h.region === 'A' ? -1 : 1 }, h.region === 'A' ? f.a : f.b);
+    return Object.assign({ P: S.anchor.p, part: 0 }, St.frameAxes());
   }
-  function footprint(h) { const { u, v } = St.frameAxes(), d = h.p.clone().sub(S.anchor.p); return Math.abs(d.dot(u)) <= S.g.L / 2 - 2 && Math.abs(d.dot(v)) <= S.g.W / 2 - 2; }
+  function screwFromHole(h, base) {
+    const { P: o, u, v, n, part } = holeFrame(h), d = h.p.clone().sub(o), dir = h.n.clone().negate();
+    const a = Math.asin(Math.max(-1, Math.min(1, -dir.dot(u)))), b = Math.atan2(dir.dot(v), -dir.dot(n));
+    return Object.assign({}, base, { u: Math.round(d.dot(u) * 10) / 10, v: Math.round(d.dot(v) * 10) / 10, tiltU: Math.round(THREE.MathUtils.radToDeg(a)), tiltV: Math.round(THREE.MathUtils.radToDeg(b)), ok: false, plate: true }, part ? { part } : {});
+  }
+  // the hole lies under the guide body: the main body (L x W about the anchor), or in the two-guide layout the piece
+  // on its side (from the cut outwards, as far as the piece reaches for its screws)
+  function footprint(h) {
+    const { P: o, u, v, part } = holeFrame(h), d = h.p.clone().sub(o);
+    if (part) return d.dot(u) >= 2 && d.dot(u) <= 22 && Math.abs(d.dot(v)) <= S.g.W / 2 - 2;
+    return Math.abs(d.dot(u)) <= S.g.L / 2 - 2 && Math.abs(d.dot(v)) <= S.g.W / 2 - 2;
+  }
   function placeScrews() {
     if (!last) return;
     const base = S.screws[0] ? (({ d, D, sleeveH, len }) => ({ d, D, sleeveH, len }))(S.screws[0]) : { d: 2.0, D: 5, sleeveH: 5, len: 10 };
@@ -188,6 +244,7 @@ window.Plate = (function () {
     const hs = [...pick('A'), ...pick('B')];
     if (!hs.length) { msg('Guide alanında kullanılabilir plak deliği yok. Guide\'ı uzatın ya da plak yüksekliğini guide üzerine getirin.'); return; }
     S.screws = hs.map(h => screwFromHole(h, base)); S.sel = null;
+    markMatched(); renderSum();
     msg(`${hs.length} guide vidası plak deliklerine yerleştirildi. Ameliyatta bu deliklerden açılan yuvalar ön bükülmüş plağın delikleriyle eşleşir.`);
     St.schedule(false);
   }
@@ -224,10 +281,12 @@ window.Plate = (function () {
   // ---------- summary, checks, report ----------
   function summary() {
     if (!last) return null;
+    markMatched();   // the guide screws may have moved since the line was computed (Denetim 4 D6: "0 matched" next to 2 placed)
     const cnt = r => last.holes.filter(h => h.region === r && h.usable).length;
     return { sistem: SYSTEMS[P.sys].name, genislik_mm: P.w, kalinlik_mm: P.t, delik_araligi_mm: P.pitch, uzunluk_mm: Math.round(last.L), holes: last.holes.length,
       kullanilabilir: { A: cnt('A'), defekt: cnt('defect'), B: cnt('B') }, kesiye_yakin: last.holes.filter(h => !h.usable).length,
-      bukme_deg: { kalinlik_yonunde: Math.round(last.bend.outPlane), kenar_yonunde: Math.round(last.bend.inPlane) },
+      bukme_deg: { kalinlik_yonunde: Math.round(last.bend.outPlane), kenar_yonunde: Math.round(last.bend.inPlane), burulma: Math.round(last.bend.twist) },
+      kritik: critical().map(c => c.text),
       guide_ile_eslesen: last.holes.filter(h => h.matched).length, greft_eklemine_yakin: last.holes.filter(h => h.why === 'joint').length,
       vida_listesi: screwList(),
       delikler: last.holes.map((h, i) => ({ no: i + 1, bolge: h.region, segment: h.seg == null ? null : h.seg + 1, kullanilabilir: h.usable, neden: h.why === 'cut' ? 'kesiye yakın' : h.why === 'joint' ? 'greft eklemine yakın' : null,
@@ -248,7 +307,9 @@ window.Plate = (function () {
     if (!last) return [['warn', 'Uyarı', 'Plak hattı kemik yüzeyinde izlenemedi; plak yüksekliğini değiştirin.', 'guide']];
     const out = [], need = last.E.condyle ? ['A'] : ['A', 'B'];
     need.forEach(r => { const c = last.holes.filter(h => h.region === r && h.usable).length; if (c < 3) out.push(['warn', 'Uyarı', xl(`Plak ${r === 'A' ? 'birinci' : 'ikinci'} kalan segmentte ${c} vidaya yer bırakıyor; en az 3 önerilir (plak uzantısını artırın).`), 'guide']); });
-    if (!last.ok) out.push(['warn', 'Uyarı', 'Plak hattı istenen uzunluğa ulaşmadan kemik yüzeyinden çıktı.', 'guide']);
+    critical().forEach(c => out.push(['crit', 'Kritik', xl(c.text), 'guide']));
+    if (last.back) out.push(['warn', 'Uyarı', 'Plak hattı kemiğin ucunda ya da kenarında geri dönüyordu; hat orada kesildi, plak istenenden kısa.', 'guide']);
+    else if (!last.ok) out.push(['warn', 'Uyarı', 'Plak hattı istenen uzunluğa ulaşmadan kemik yüzeyinden çıktı.', 'guide']);
     const fl = graftPlan();
     if (fl) fl.segs.filter(g => !g.barrel).forEach(g => { const c = last.holes.filter(h => h.seg === g.i && h.usable).length; if (c < 2) out.push(['warn', 'Uyarı', `Plak greft segmenti ${g.i + 1} üzerinde ${c} vidaya yer bırakıyor; her segmente en az 2 vida önerilir (delik dizisini kaydırın ya da segment boyunu değiştirin).`, 'guide']); });
     const mono = last.holes.filter(h => h.usable && h.len && !h.bi).length, none = last.holes.filter(h => h.usable && !h.len).length;
@@ -281,16 +342,17 @@ window.Plate = (function () {
       ${P.on ? `<div class="ctl"><label for="plSys" class="lbl2">Plak sistemi</label><select id="plSys">${Object.entries(SYSTEMS).map(([k, x]) => `<option value="${k}" ${P.sys === k ? 'selected' : ''}>${x.name}</option>`).join('')}</select></div>
       ${F.filter(f => P.sys === 'custom' || !['w', 't', 'pitch'].includes(f[0])).map(([k, t, mn, mx, st, un]) => `<div class="ctl"><div class="ctl-row"><label for="pl_${k}">${t}</label><output id="plo_${k}">${fmt(P[k], st < 1 ? 1 : 0)} ${un}</output></div><input type="range" id="pl_${k}" min="${mn}" max="${mx}" step="${st}" value="${P[k]}"></div>`).join('')}
       <div id="plSum">${sumHTML(s)}</div>
-      <div class="btns"><button id="plScrews" ${s ? '' : 'disabled'}><svg class="i"><use href="#i-target"/></svg>Vidaları plağa hizala</button></div>
-      <div class="btns"><button id="plBend" class="ghost" ${s ? '' : 'disabled'}><svg class="i"><use href="#i-download"/></svg>Bükme modeli STL</button><button id="plTpl" class="ghost" ${s ? '' : 'disabled'}><svg class="i"><use href="#i-download"/></svg>Plak şablonu STL</button></div>
-      <p class="hint more">Kırmızı delikler kesiye ya da greft eklemine 3 mm'den yakındır, boş bırakılır. Yeşil delikler guide vidalarıyla eşleşir. Vida boyu her delikte karşı kortekse göre ölçülür; sinir kanalı ayrıca kontrol edilmelidir.</p><p class="hint" id="plMsg"></p>` : '<p class="hint more">Plak hattı kalan kemik ve greftlerin dış yüzeyini izler; guide vidaları plak deliklerine yerleştirilebilir.</p>'}`;
+      <div class="btns"><button id="plScrews" ${s && !s.kritik.length ? '' : 'disabled'}><svg class="i"><use href="#i-target"/></svg>Vidaları plağa hizala</button></div>
+      <div class="btns"><button id="plBend" class="ghost" ${s ? '' : 'disabled'}><svg class="i"><use href="#i-download"/></svg>Bükme modeli STL</button><button id="plTpl" class="ghost" ${s && !s.kritik.length ? '' : 'disabled'}><svg class="i"><use href="#i-download"/></svg>Plak şablonu STL</button></div>
+      <p class="hint more">Kırmızı delikler kesiye ya da greft eklemine 3 mm'den yakındır, boş bırakılır. Yeşil delikler guide vidalarıyla eşleşir. Vida boyu her delikte plak üst yüzeyinden karşı korteksin 1 mm ötesine kadar ölçülür (plak kalınlığı dahil); sinir kanalı ayrıca kontrol edilmelidir.</p><p class="hint" id="plMsg"></p>` : '<p class="hint more">Plak hattı kalan kemik ve greftlerin dış yüzeyini izler; guide vidaları plak deliklerine yerleştirilebilir.</p>'}`;
     wire();
   }
-  const sumHTML = s => s ? `<dl class="kv"><dt>Uzunluk</dt><dd>${s.uzunluk_mm} mm · ${s.holes} delik</dd><dt>Kullanılabilir</dt><dd>${s.kullanilabilir.A} · ${s.kullanilabilir.defekt} · ${s.kullanilabilir.B}</dd><dt>Kesiye yakın</dt><dd>${s.kesiye_yakin} delik boş kalır</dd><dt>Bükme</dt><dd>${s.bukme_deg.kalinlik_yonunde}° yüzeye · ${s.bukme_deg.kenar_yonunde}° kenara</dd><dt>Guide ile eşleşen</dt><dd>${s.guide_ile_eslesen}</dd>${s.greft_eklemine_yakin ? `<dt>Greft eklemine yakın</dt><dd>${s.greft_eklemine_yakin} delik boş kalır</dd>` : ''}<dt>Vidalar</dt><dd>${screwText(s)}</dd></dl>` : `<p class="hint">${S.anchor ? 'Plak hattı bulunamadı; yüksekliği değiştirin.' : 'Önce rezeksiyon bölgesini ve kesileri belirleyin.'}</p>`;
+  const sumHTML = s => s ? `<dl class="kv"><dt>Uzunluk</dt><dd>${s.uzunluk_mm} mm · ${s.holes} delik</dd><dt>Kullanılabilir</dt><dd>${s.kullanilabilir.A} · ${s.kullanilabilir.defekt} · ${s.kullanilabilir.B}</dd><dt>Kesiye yakın</dt><dd>${s.kesiye_yakin} delik boş kalır</dd><dt>Bükme</dt><dd>${s.bukme_deg.kalinlik_yonunde}° yüzeye · ${s.bukme_deg.kenar_yonunde}° kenara</dd><dt>Guide ile eşleşen</dt><dd>${s.guide_ile_eslesen}</dd>${s.greft_eklemine_yakin ? `<dt>Greft eklemine yakın</dt><dd>${s.greft_eklemine_yakin} delik boş kalır</dd>` : ''}<dt>Vidalar</dt><dd>${screwText(s)}</dd></dl>${s.kritik.length ? `<p class="hint" style="color:var(--crit)"><b>Kritik</b> · ${s.kritik.map(t => St.esc(xl(t))).join('<br>')}</p>` : ''}` : `<p class="hint">${S.anchor ? 'Plak hattı bulunamadı; yüksekliği değiştirin.' : 'Önce rezeksiyon bölgesini ve kesileri belirleyin.'}</p>`;
   function renderSum() {
     if (!$('plSum')) return;
     const s = summary(); $('plSum').innerHTML = sumHTML(s);
-    ['plScrews', 'plBend', 'plTpl'].forEach(id => { $(id).disabled = !s; });
+    // a critical line is not a plate: no screws on its holes and no template to bend to (the bone model stays available)
+    ['plScrews', 'plBend', 'plTpl'].forEach(id => { $(id).disabled = !s || (id !== 'plBend' && s.kritik.length > 0); });
   }
   function wire() {
     $('plOn').addEventListener('change', e => { P.on = e.target.checked; changed(); });
@@ -314,10 +376,12 @@ window.Plate = (function () {
     set(x) { P = clean(x); if (!(P.sys in SYSTEMS)) P.sys = DEF.sys; render(); update(); },
   };
   bus.addEventListener('parts', () => { if (P.on && !S.restoring) later(); });
+  // guide screws moved, added or removed: the "matched" count in the panel follows
+  bus.addEventListener('changed', () => { if (P.on && last) renderSum(); });
   // a plan restore (undo, redo, reopen) sets the plate while bone/graft parts are still being rebuilt and silences 'parts':
   // recompute once the restore has finished, or the plate stays empty and the package loses its plate files
   bus.addEventListener('planApplied', () => { if (P.on) later(); });
   bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring)) { P = Object.assign({}, DEF); last = null; draw(); render(); } });
   render();
-  return { summary, compute, update, placeScrews, get: () => last, params: () => P, missing: () => !!(P.on && !last) };
+  return { summary, compute, update, placeScrews, get: () => last, params: () => P, missing: () => !!(P.on && !last), critical, assess, LIM };
 })();

@@ -2258,4 +2258,14 @@ window.I18N_EN = {
 "Adım": "Step",
 "Bitir": "Exit",
 "Bu modu kapat; model yeniden döndürülebilir": "Leave this mode; the model can be turned again",
+// plate line plausibility, screw length convention, fibula re-planning (Denetim 4 E1, W10, W8, W9)
+"Plak hattı # mm; rezeksiyon ve kesi ötesi uzantıya göre beklenen yaklaşık # mm. Hat kemik çevresinde dolanıyor; plak yüksekliğini ya da uzantıyı değiştirin.": "The plate line is # mm; about # mm is expected from the resection and the extension past the cuts. The line wraps around the bone; change the plate height or the extension.",
+"Plak hattı kendi üzerine katlanıyor; plak yüksekliğini ya da kesi ötesi uzantıyı değiştirin.": "The plate line folds back over itself; change the plate height or the extension past the cuts.",
+"Plak bükmesi gerçekçi değil (#° yüzeye, #° kenara, #° burulma); hat kemik kenarından dönüyor olabilir. Plak yüksekliğini değiştirin.": "The plate bending is not realistic (#° through the thickness, #° across the edge, #° twist); the line may be turning over a bone edge. Change the plate height.",
+"Plak hattı kemiğin ucunda ya da kenarında geri dönüyordu; hat orada kesildi, plak istenenden kısa.": "The plate line was turning back at the end or edge of the bone; it was cut there and the plate is shorter than requested.",
+"Kırmızı delikler kesiye ya da greft eklemine # mm'den yakındır, boş bırakılır. Yeşil delikler guide vidalarıyla eşleşir. Vida boyu her delikte plak üst yüzeyinden karşı korteksin # mm ötesine kadar ölçülür (plak kalınlığı dahil); sinir kanalı ayrıca kontrol edilmelidir.": "Red holes are closer than # mm to a cut or graft junction and are left empty. Green holes match the guide screws. Screw length is measured at each hole from the top of the plate to # mm past the far cortex (plate thickness included); the nerve canal must be checked separately.",
+"Açıklama: Kırmızı delikler kesiye ya da greft eklemine # mm'den yakındır, boş bırakılır. Yeşil delikler guide vidalarıyla eşleşir. Vida boyu her delikte plak üst yüzeyinden karşı korteksin # mm ötesine kadar ölçülür (plak kalınlığı dahil); sinir kanalı ayrıca kontrol edilmelidir.": "Note: Red holes are closer than # mm to a cut or graft junction and are left empty. Green holes match the guide screws. Screw length is measured at each hole from the top of the plate to # mm past the far cortex (plate thickness included); the nerve canal must be checked separately.",
+"Bu adayın kemiği artık yok (ayrılmış olabilir); başka bir aday seçin.": "This candidate's bone is gone (it may have been split); choose another candidate.",
+"Defekt boyu değişti; segment sayısı # → # oldu.": "The defect length changed; the segment count went from # to #.",
+"Segment sınırları, kesi açıları ve rotasyonlar sıfırlandı; kontrol edin.": "Segment boundaries, osteotomy angles and rotations were reset; check them.",
 };
