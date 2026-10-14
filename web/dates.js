@@ -3,6 +3,20 @@
    so the step warns. Only dates are kept; no patient name or ID. */
 'use strict';
 var xl = s => (window.I18N ? I18N.t(s) : s);
+// Shared date / time display for the interface language (approval stamps, case list, audit trail, PDF report header).
+// EN spells the month ("Oct 14, 2026"), never 10/14 against 14.10; times are 24 h in both languages.
+window.DateFmt = (function () {
+  const en = () => !!(window.I18N && I18N.lang === 'en');
+  const ok = t => t != null && t !== '' && !isNaN(new Date(t).getTime());
+  const HM = { hour: '2-digit', minute: '2-digit', hour12: false };
+  const f = (trOpt, enOpt) => t => (!ok(t) ? '–' : en() ? new Date(t).toLocaleString('en-US', enOpt) : new Date(t).toLocaleString('tr-TR', trOpt));
+  return {
+    date: f({ day: '2-digit', month: '2-digit', year: 'numeric' }, { day: 'numeric', month: 'short', year: 'numeric' }),
+    dateTime: f({ day: '2-digit', month: '2-digit', year: 'numeric', ...HM }, { day: 'numeric', month: 'short', year: 'numeric', ...HM }),
+    short: f({ day: '2-digit', month: '2-digit', ...HM }, { day: 'numeric', month: 'short', ...HM }),   // no year: recent items (case list)
+    time: f(HM, HM),
+  };
+})();
 window.Dates = (function () {
   const St = window.Studio; if (!St) return null;
   const { S, fmt, bus } = St, $ = id => document.getElementById(id);
