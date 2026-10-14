@@ -2254,5 +2254,8 @@ window.I18N_EN = {
 "Vaka tipi": "Case type",
 "Çene rekonstrüksiyonu": "Jaw reconstruction",
 "Mandibula rezeksiyonu, fibula grefti ile rekonstrüksiyon, kesi ve fibula guide'ları.": "Mandibular resection, fibula free-flap reconstruction, cutting and fibula guides.",
-"Adımlar ve paneller seçilen vaka tipine göre açılır; yeni tipler buraya eklenecek.": "Steps and panels follow the selected case type; new types will be added here."
+"Adımlar ve paneller seçilen vaka tipine göre açılır; yeni tipler buraya eklenecek.": "Steps and panels follow the selected case type; new types will be added here.",
+"Adım": "Step",
+"Bitir": "Exit",
+"Bu modu kapat; model yeniden döndürülebilir": "Leave this mode; the model can be turned again",
 };

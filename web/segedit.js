@@ -87,8 +87,8 @@ window.SegEdit = (function () {
     m.position.copy(p); mk.add(m); St.render();
   }
   function clearMarkers() { while (mk.children.length) { const c = mk.children.pop(); c.geometry.dispose(); c.material.dispose(); } St.render(); }
-  document.addEventListener('keydown', e => { if (e.key === 'Alt' && tool) St.controls.enabled = true; });
-  document.addEventListener('keyup', e => { if (e.key === 'Alt' && tool) St.controls.enabled = false; });
+  document.addEventListener('keydown', e => { if (e.key === 'Alt' && tool) St.controls.enableRotate = true; });
+  document.addEventListener('keyup', e => { if (e.key === 'Alt' && tool) St.controls.enableRotate = false; });
 
   // ---------- scissors: lasso on the 3D view removes every bone voxel whose projection falls inside ----------
   let lasso = null;
@@ -194,7 +194,7 @@ window.SegEdit = (function () {
     if (tool && window.Measure && Measure.active()) $('toolMeasure').click();
     if (tool && window.Lesion) Lesion.off();
     if (tool && window.Masks) Masks.off();
-    St.controls.enabled = !tool; cv.style.cursor = tool ? 'crosshair' : '';
+    St.controls.enableRotate = !tool; cv.style.cursor = tool ? 'crosshair' : '';
     document.querySelectorAll('#seTools [data-t]').forEach(b => b.setAttribute('aria-pressed', b.dataset.t === tool));
     const b = $('modeBadge');
     if (tool) { b.hidden = false; b.textContent = tool === 'scissors' ? 'Makas: 3B görünümde çıkarılacak bölgeyi çevreleyin (Shift: içini tut). Döndürmek için Alt. Bitirmek için Esc.' : `${NAMES[tool]}: kesitlerde ya da 3B görünümde sürükleyin. Döndürmek için Alt basılı tutun. Bitirmek için Esc.`; }
@@ -229,6 +229,7 @@ window.SegEdit = (function () {
   $('seFragRun').addEventListener('click', guard(fragments));
   $('seReset').addEventListener('click', guard(reset));
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && tool) setTool(tool); });
+  St.onEndModes(() => { if (tool) setTool(tool); });
   bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring)) { add = del = null; status(); } });
   status();
 

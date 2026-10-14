@@ -124,6 +124,7 @@ window.Vessels = (function () {
     },
   };
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && picking) { picking = false; $('modeBadge').hidden = true; } });
+  St.onEndModes(() => { picking = false; });
 
   // ---------- summary, checks, report ----------
   function summary() {

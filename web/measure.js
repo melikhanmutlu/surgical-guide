@@ -121,6 +121,8 @@ window.Measure = (function () {
     if (e.key === 'm' || e.key === 'M') { setOn(!on); render(); }
     else if (e.key === 'Escape' && on) { if (pts.length) { pts = []; draw(); } else { setOn(false); render(); } }
   });
+  // measuring is a view tool: it ends from the mode bar, not when the step changes
+  St.onEndModes(() => { if (on) { setOn(false); render(); } }, { view: true });
   bus.addEventListener('planApplied', e => { S.measures = (e.detail && e.detail.measures || []).map(m => JSON.parse(JSON.stringify(m))); render(); });
   bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring)) { S.measures = []; render(); } });
   render();

@@ -85,6 +85,7 @@ window.Implants = (function () {
     },
   };
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && picking) { picking = false; $('modeBadge').hidden = true; } });
+  St.onEndModes(() => { picking = false; });
 
   // next implant: the longest free stretch on any lower segment, keeping clear of the segment ends
   function freeSpot() {

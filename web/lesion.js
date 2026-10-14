@@ -82,8 +82,8 @@ window.Lesion = (function () {
   });
   cv.addEventListener('pointermove', e => { if (!down3) return; const p = hit3D(e); if (p) paint(p.toArray(), null, false); });
   cv.addEventListener('pointerup', () => { if (!down3) return; down3 = false; strokeEnd(); });
-  document.addEventListener('keydown', e => { if (e.key === 'Alt' && tool) St.controls.enabled = true; });
-  document.addEventListener('keyup', e => { if (e.key === 'Alt' && tool) St.controls.enabled = false; });
+  document.addEventListener('keydown', e => { if (e.key === 'Alt' && tool) St.controls.enableRotate = true; });
+  document.addEventListener('keyup', e => { if (e.key === 'Alt' && tool) St.controls.enableRotate = false; });
 
   // ---------- slices: painted voxels red, brush outline while painting ----------
   (window.SliceOverlays = window.SliceOverlays || []).push((v, ctx, T, dpr, A) => {
@@ -120,7 +120,7 @@ window.Lesion = (function () {
       // on narrower screens give the slices the room: close the review panel while painting
       if (window.innerWidth < 1280 && window.Layout) Layout.setRight(false);
     }
-    St.controls.enabled = !tool;
+    St.controls.enableRotate = !tool;
     document.querySelectorAll('#lsTools [data-t]').forEach(b => b.setAttribute('aria-pressed', b.dataset.t === tool));
     const b = $('modeBadge');
     if (tool) { b.hidden = false; b.textContent = shown = `Lezyon ${tool === 'erase' ? 'silgisi' : 'fırçası'}: kesitlerde ya da 3B görünümde sürükleyin · döndürmek için Alt · Esc ile bitir`; }
@@ -171,6 +171,7 @@ window.Lesion = (function () {
   $('lsPlan').addEventListener('click', plan);
   $('lsClear').addEventListener('click', () => { mask = null; changed(); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && tool) setTool(tool); });
+  St.onEndModes(() => { if (tool) setTool(tool); });
   bus.addEventListener('volume', e => { if (tool) setTool(tool); if (!(e.detail && e.detail.restoring)) { mask = null; St.setPart('lesionPaint', null, null); status(); } });
   bus.addEventListener('changed', () => { if (!stroke) status(); });
 

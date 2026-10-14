@@ -11,7 +11,7 @@ window.Masks = (function () {
   const PALETTE = [0x46c98b, 0x4f8fe6, 0xe0a03a, 0x9b6ad6, 0x2bb0b0, 0xd46a9a], OTHER = 0x9aa5b1, BASE = 100000, MAXL = 6;
   const hex = c => '#' + c.toString(16).padStart(6, '0');
   let layers = defaults(), cur = 1, tool = null, radius = 3, seeds = null, seedRed = null, stroke = null, lastPaint = null;
-  let planIdx = new Set([1]), active = false, msg = '';
+  let planIdx = new Set([1]), active = false, msg = '', shown = '';
   const ctxOn = new Set(); let ctxLabels = null;
   function defaults() { return [{ name: 'Kemik A', color: PALETTE[0] }, { name: 'Kemik B', color: PALETTE[1] }]; }
 
@@ -148,7 +148,7 @@ window.Masks = (function () {
     St.renderParts(); renderList();
   });
 
-  // ---------- 3D marking / picking (orbit is off while a tool is on; hold Alt to orbit) ----------
+  // ---------- 3D marking / picking (while marking the model does not turn, hold Alt to turn it; picking is a click, so it turns as usual) ----------
   const cv = St.renderer.domElement, mouse = new THREE.Vector2();
   function hit3D(e) {
     const rect = cv.getBoundingClientRect(), rw = S.split ? rect.width / 2 : rect.width;
@@ -160,17 +160,24 @@ window.Masks = (function () {
     const nrm = h.face.normal.clone().transformDirection(h.object.matrixWorld); if (nrm.dot(St.ray.ray.direction) > 0) nrm.negate();
     return h.point.clone().addScaledVector(nrm, -Math.min(1.5, radius * 0.5));
   }
-  let down3 = false;
+  let down3 = false, pickDown = null;
   cv.addEventListener('pointerdown', e => {
     if (!tool || e.altKey || e.button !== 0) return;
+    // a pick is taken on release without a drag, so dragging still turns the model
+    if (tool === 'pick') { pickDown = [e.clientX, e.clientY]; return; }
     const p = hit3D(e); if (!p) return;
-    if (tool === 'pick') { pickAt(p.toArray(), e.shiftKey); return; }
     down3 = true; cv.setPointerCapture(e.pointerId); paint(p.toArray(), null, true);
   });
   cv.addEventListener('pointermove', e => { if (!down3) return; const p = hit3D(e); if (p) paint(p.toArray(), null, false); });
-  cv.addEventListener('pointerup', () => { if (!down3) return; down3 = false; strokeEnd(); });
-  document.addEventListener('keydown', e => { if (e.key === 'Alt' && tool) St.controls.enabled = true; if (e.key === 'Escape' && tool) setTool(tool); });
-  document.addEventListener('keyup', e => { if (e.key === 'Alt' && tool) St.controls.enabled = false; });
+  cv.addEventListener('pointerup', e => {
+    const d = pickDown; pickDown = null;
+    if (d && tool === 'pick' && Math.hypot(e.clientX - d[0], e.clientY - d[1]) <= 4) { const p = hit3D(e); if (p) pickAt(p.toArray(), e.shiftKey); return; }
+    if (!down3) return; down3 = false; strokeEnd();
+  });
+  const rotOk = () => !tool || tool === 'pick';
+  document.addEventListener('keydown', e => { if (e.key === 'Alt' && tool) St.controls.enableRotate = true; if (e.key === 'Escape' && tool) setTool(tool); });
+  document.addEventListener('keyup', e => { if (e.key === 'Alt' && tool) St.controls.enableRotate = rotOk(); });
+  St.onEndModes(() => { if (tool) setTool(tool); });
 
   // ---------- slices: split layers tinted, marks strong, brush outline ----------
   const rgba = (c, a) => `rgba(${c >> 16 & 255},${c >> 8 & 255},${c & 255},${a})`;
@@ -210,7 +217,7 @@ window.Masks = (function () {
       if (window.Measure && Measure.active()) $('toolMeasure').click();
       if (tool !== 'pick' && $('vm3d') && $('vm3d').getAttribute('aria-pressed') === 'true') $('vmStrip').click();
     }
-    St.controls.enabled = !tool; cv.style.cursor = tool ? 'crosshair' : '';
+    St.controls.enableRotate = rotOk(); cv.style.cursor = tool ? 'crosshair' : '';
     document.querySelectorAll('#mkTools [data-t]').forEach(b => b.setAttribute('aria-pressed', b.dataset.t === tool));
     const b = $('modeBadge');
     if (tool) {
@@ -228,7 +235,8 @@ window.Masks = (function () {
       <input type="text" class="mk-name" data-n="${i + 1}" value="${St.esc(L.name)}" maxlength="40" aria-label="Kemik etiketi adı"></label>
       <span class="hu">${c[i + 1] ? xl(`${fmt(c[i + 1] * vox, 2)} cm³ işaret`) : xl('işaret yok')}</span>
       ${layers.length > 1 ? `<button class="x" data-del="${i + 1}" title="Etiketi kaldır" aria-label="${St.esc(L.name)} etiketini kaldır">×</button>` : ''}</li>`).join('');
-    $('mkLayers').querySelectorAll('input[type=radio]').forEach(el => el.addEventListener('change', () => { cur = +el.value; setTool('paint', true); renderLayers(); }));
+    // choosing a label only switches the colour; marking starts from the "İşaretle" button (a marking tool already on keeps marking, now in this colour)
+    $('mkLayers').querySelectorAll('input[type=radio]').forEach(el => el.addEventListener('change', () => { cur = +el.value; if (tool && tool !== 'pick') setTool('paint', true); renderLayers(); }));
     $('mkLayers').querySelectorAll('.mk-name').forEach(el => el.addEventListener('change', () => {
       const i = +el.dataset.n, nm = el.value.trim().slice(0, 40) || `Kemik ${String.fromCharCode(64 + i)}`;
       layers[i - 1].name = nm; if (S.compNames && S.compNames[BASE + i] !== undefined) S.compNames[BASE + i] = nm;
@@ -288,7 +296,7 @@ window.Masks = (function () {
     if (layers.length >= MAXL) return;
     const used = new Set(layers.map(L => L.color));
     layers.push({ name: `Kemik ${String.fromCharCode(65 + layers.length)}`, color: PALETTE.find(c => !used.has(c)) || OTHER });
-    cur = layers.length; setTool('paint', true); status();
+    cur = layers.length; if (tool && tool !== 'pick') setTool('paint', true); status();
   });
   bus.addEventListener('volume', e => {
     if (tool) setTool(tool);

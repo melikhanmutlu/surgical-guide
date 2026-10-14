@@ -1102,7 +1102,7 @@ window.Fibula = (function () {
       if (!c) { c = boneStats(F.red, F.labels, [{ label: l }])[0]; c.picked = true; c.tibia = (F.c && F.cands[F.c.i] && F.cands[F.c.i].tibia && F.cands[F.c.i].tibia.label !== l) ? F.cands[F.c.i].tibia : null; }
       useCandidate(c); note(xl(`Fibula olarak seçildi (${fmt(c.len, 0)} mm, Ø${fmt(2 * c.rad, 0)} mm).`)); return;
     }
-    if (!fsel.first) { fsel.first = q.clone(); fsel.firstL = l; marker(q, 0x46c98b); note('Şimdi aynı parçada tibiaya tıklayın.'); return; }
+    if (!fsel.first) { fsel.first = q.clone(); fsel.firstL = l; marker(q, 0x46c98b); note('Şimdi aynı parçada tibiaya tıklayın.'); badge('Şimdi aynı parçada tibiaya tıklayın.'); return; }
     const pf = fsel.first, lf = fsel.firstL; endMode();
     if (l !== lf) { note('İki tıklama aynı (birleşik) kemik parçasında olmalı. Ayrı parçalarsa "Fibulayı modelde seç"i kullanın.'); return; }
     const out = splitLeg(pf, q); if (!out) { note(xl('Ayrılamadı; tıklamaları kemik gövdesinin ortasına yakın yapın.')); return; }
@@ -1148,13 +1148,21 @@ window.Fibula = (function () {
     showAll(true); setActive('f');
     $('fibPick').setAttribute('aria-pressed', m === 'pick'); $('fibSplit').setAttribute('aria-pressed', m === 'split');
     note(m === 'pick' ? 'Fibula görünümünde fibula olacak kemiğe tıklayın.' : 'Birleşik görünen kemikte önce fibulaya, sonra tibiaya tıklayın.');
+    badge($('fibPickMsg').textContent);
+  }
+  // the mode bar over the view says the clicks now pick a bone (and how to leave); hidden only while it still shows ours
+  let shown = '';
+  function badge(t) {
+    const b = $('modeBadge');
+    if (t) { b.hidden = false; b.textContent = shown = t; } else if (shown && (b.textContent === shown || b.textContent === xl(shown))) { b.hidden = true; shown = ''; }
   }
   function endMode() {
-    fsel.mode = null; fsel.first = null; if (!F) return;
+    fsel.mode = null; fsel.first = null; badge(''); if (!F) return;
     leg.children.filter(o => o.userData.marker).forEach(o => { leg.remove(o); o.geometry.dispose(); o.material.dispose(); });
     showAll(false); $('fibPick').setAttribute('aria-pressed', 'false'); $('fibSplit').setAttribute('aria-pressed', 'false');
   }
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && fsel.mode) { endMode(); note(''); } });
+  St.onEndModes(() => { if (fsel.mode) { endMode(); note(''); } });
   // opening a step makes its structure the active one
   document.querySelectorAll('details.step[name="flow"]').forEach(d => d.addEventListener('toggle', () => { if (d.open && S.split) setActive(d.id === 'st4' ? 'f' : 'm'); }));
 
