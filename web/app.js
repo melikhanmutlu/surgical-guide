@@ -182,8 +182,21 @@
   };
   const bus = new EventTarget(), emit = (t, d) => bus.dispatchEvent(new CustomEvent(t, { detail: d }));
   const SCREW_DEFAULT = { mandible: { d: 2.0, D: 5, sleeveH: 5, len: 10 }, leg: { d: 2.5, D: 5.5, sleeveH: 6, len: 20 }, dicom: { d: 2.0, D: 5, sleeveH: 5, len: 12 } };
-  const stamp = o => { o.ok = true; o.by = $('surgeon').value.trim(); o.at = new Date().toISOString(); };
-  const unapprove = o => { o.ok = false; delete o.by; delete o.at; };
+  // an item's approval stamp is bound to what was approved (D-7): its own values and the guide centre they are measured from
+  // (the stored centre comes back exactly; the normals are renormalised on reading, so they are left out).
+  // A stored plan whose approved item was edited afterwards (or whose stamp was copied onto another item) opens with that
+  // approval removed. Tamper-evident for a hand-edited file, not a signature: the audit chain (audit.js) is the record.
+  const SIG_KEYS = { l: ['from', 'to', 'margin', 'condyle'], p: ['off', 'yaw', 'pitch', 'w', 'pv', 'pn'], s: ['u', 'v', 'tiltU', 'tiltV', 'd', 'D', 'sleeveH', 'len', 'part', 'plate'] };
+  const kindOf = o => (o === S.lesion ? 'l' : S.planes.includes(o) ? 'p' : S.screws.includes(o) ? 's' : null);
+  function itemSig(o, k) {
+    const r3 = q => [q.x, q.y, q.z].map(x => Math.round(x * 1000) / 1000);
+    const t = JSON.stringify([k, SIG_KEYS[k].map(x => (o[x] === undefined ? null : o[x])), S.anchor ? r3(S.anchor.p) : null]);
+    let a = 0x811c9dc5, b = 0x5bd1e995;
+    for (let i = 0; i < t.length; i++) { const c = t.charCodeAt(i); a = Math.imul(a ^ c, 16777619); b = Math.imul(b ^ c, 0x5bd1e995) ^ (b >>> 15); }
+    return (a >>> 0).toString(16).padStart(8, '0') + (b >>> 0).toString(16).padStart(8, '0');
+  }
+  const stamp = o => { o.ok = true; o.by = $('surgeon').value.trim(); o.at = new Date().toISOString(); const k = kindOf(o); if (k) o.sig = itemSig(o, k); };
+  const unapprove = o => { o.ok = false; delete o.by; delete o.at; delete o.sig; };
   const unapproveAll = () => { unapprove(S.lesion); S.planes.forEach(unapprove); S.screws.forEach(unapprove); };
 
   // ---------- loading ----------
@@ -3186,7 +3199,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     const bin = atob(js.stl_b64), u8 = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
     return { stl: u8, watertight: js.watertight, bodies: js.bodies, volume: js.volume_mm3, clear: js.bone_clear_mm, inBone: js.in_bone_verts };
   }
-  const prodKey = () => JSON.stringify([S.source && S.source.fp, S.g, S.anchor && vec(S.anchor.p), S.anchor && vec(S.anchor.n), S.planes.map(p => [p.off, p.yaw, p.pitch, p.w]), S.screws.map(s => [s.u, s.v, s.tiltU, s.tiltV, s.d, s.D, s.sleeveH]), S.segMethod, $('thr').value, [...S.selected].sort((a, b) => a - b), window.SegEdit ? SegEdit.key() : '']);
+  const prodKey = () => JSON.stringify([S.source && S.source.fp, S.g, S.anchor && vec(S.anchor.p), S.anchor && vec(S.anchor.n), S.planes.map(p => [p.off, p.yaw, p.pitch, p.w]), S.screws.map(s => [s.u, s.v, s.tiltU, s.tiltV, s.d, s.D, s.sleeveH, s.part || 0]), S.segMethod, $('thr').value, [...S.selected].sort((a, b) => a - b), window.SegEdit ? SegEdit.key() : '']);
   const segThr = () => (/^Eşik/.test(S.segMethod) && !(window.SegEdit && SegEdit.edited()) ? +$('thr').value : null);
   async function productionSTL() {
     if (!parts.guide || !S.anchor) return;
@@ -3289,7 +3302,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
       const ab = S.anchor && plan.anchor.base && { p: v3(plan.anchor.base.p), n: v3(plan.anchor.base.n), c: v3(plan.anchor.base.c) };
       if (ab && ab.p && ab.c && ab.n && ab.n.lengthSq() > 1e-6) S.anchor.base = { p: ab.p, n: ab.n.normalize(), c: ab.c };
       const num = (o, keys, d) => { const r = {}; keys.forEach(k => { const v = Number(o && o[k]); r[k] = Number.isFinite(v) ? v : d[k]; }); return r; };
-      const who = o => ({ ok: !!(o && o.ok), ...(o && o.ok && typeof o.by === 'string' ? { by: o.by.slice(0, 120) } : {}), ...(o && o.ok && typeof o.at === 'string' ? { at: o.at.slice(0, 40) } : {}) });
+      const who = o => ({ ok: !!(o && o.ok), ...(o && o.ok && typeof o.by === 'string' ? { by: o.by.slice(0, 120) } : {}), ...(o && o.ok && typeof o.at === 'string' ? { at: o.at.slice(0, 40) } : {}), ...(o && o.ok && typeof o.sig === 'string' ? { sig: o.sig.slice(0, 32) } : {}) });
       const G0 = G_DEFAULT;
       Object.assign(S.g, num(plan.g, Object.keys(G0), G0));
       // plans saved before the kerf setting existed had the slot centred on the plane: keep them as they were approved
@@ -3311,14 +3324,24 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
       const P0 = { off: 0, yaw: 0, pitch: 0, w: 1.2 }, C0 = Object.assign({ u: 0, v: 0, tiltU: 0, tiltV: 0 }, SCREW_DEFAULT.mandible);
       // pv / pn: the cut's point moved within its plane (a cut turned with the bone, cutAlongBone). The plane is the same
       // without them, but the cut point is where the defect, the graft ends and the plan hash start from: keep them
+      const dropKey = p => [p.off, p.yaw, p.pitch, p.pv, p.pn].join('|'), drops = (S.screwDrops || []).filter(d => d.pl).map(d => Object.assign({}, d, { key: dropKey(d.pl) }));
       S.planes = (Array.isArray(plan.planes) ? plan.planes : []).slice(0, 8).map(p => Object.assign(num(p, Object.keys(P0), P0), who(p),
         ...['pv', 'pn'].map(k => (p && p[k] !== undefined && p[k] !== null ? { [k]: Number(p[k]) } : {}))));
+      // a side the automatic placement left without a screw stays reported while the same cut is there (liveDrops then
+      // compares with the restored screws), and is gone with that cut (W7)
+      S.screwDrops = drops.map(d => { const pl = S.planes.find(p => dropKey(p) === d.key); if (!pl) return null; d.pl = pl; delete d.key; return d; }).filter(Boolean);
       // older versions could save an empty (null) screw when no position reached bone: drop it, re-place the screws
       const rawScrews = (Array.isArray(plan.screws) ? plan.screws : []).slice(0, 16), lostScrew = rawScrews.some(c => !c || typeof c !== 'object');
-      S.screws = rawScrews.filter(c => c && typeof c === 'object').map(c => Object.assign(num(c, Object.keys(C0), C0), who(c), c.plate === true ? { plate: true } : {}, c.hand === 1 || c.hand === true ? { hand: 1 } : {}));
+      // part: the piece frame (two-guide layout) a screw's (u, v, tilts) are written in; without it the screw would be read
+      // in the guide frame and land somewhere else (between the cuts) while still looking approved (W1)
+      S.screws = rawScrews.filter(c => c && typeof c === 'object').map(c => Object.assign(num(c, Object.keys(C0), C0), who(c), c.plate === true ? { plate: true } : {}, c.hand === 1 || c.hand === true ? { hand: 1 } : {}, c.part === -1 || c.part === 1 ? { part: c.part } : {}));
       S.planes.forEach(p => { clampTo(p, 'off', -80, 80); ['pv', 'pn'].forEach(k => { if (p[k] !== undefined) { if (typeof p[k] !== 'number' || !isFinite(p[k])) delete p[k]; else clampTo(p, k, -80, 80); } }); clampTo(p, 'yaw', -89, 89); clampTo(p, 'pitch', -89, 89); clampTo(p, 'w', 0.6, 2.5); });
       S.screws.forEach(c => { if (c.part !== -1 && c.part !== 1) delete c.part; clampTo(c, 'u', -80, 80); clampTo(c, 'v', -40, 40); clampTo(c, 'tiltU', -89, 89); clampTo(c, 'tiltV', -89, 89); clampTo(c, 'd', 0.5, 6); clampTo(c, 'D', c.d, 12); clampTo(c, 'sleeveH', 0, 20); clampTo(c, 'len', 2, 40); });
       ['from', 'to'].forEach(k => clampTo(S.lesion, k, -45, 45)); clampTo(S.lesion, 'margin', 0, 15);
+      // approvals whose stamp does not match the restored values (edited after approval, or saved before stamps were bound)
+      let unbound = 0;
+      [[S.lesion, 'l']].concat(S.planes.map(p => [p, 'p']), S.screws.map(c => [c, 's'])).forEach(([o, k]) => { if (o.ok && o.sig !== itemSig(o, k)) { unapprove(o); unbound++; } else if (!o.ok) delete o.sig; });
+      if (unbound) alertMsg(xl(`Plandaki ${unbound} öğe onayı kayıtlı değerlerle eşleşmiyor (onaydan sonra değiştirilmiş ya da eski sürümde kaydedilmiş); bu öğeleri yeniden onaylayın.`));
       if (plan.perSide === 1 || plan.perSide === 2) $('perSide').value = String(plan.perSide);
       // plans from before the explicit 'Guide oluştur' step always had a guide when they had screws
       S.guideOn = typeof plan.guideOn === 'boolean' ? plan.guideOn : S.screws.length > 0; S.resRemoved = !!plan.resRemoved;

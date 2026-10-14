@@ -236,9 +236,20 @@ test('applyPlan: a null screw record triggers re-placement; with a degenerate cu
   assert.ok(S.screws.length + (S.screwDrops || []).length > 0, 're-placement happened');
   S.screws.forEach(sc => assert.ok(Math.abs(sc.u) <= 80 && Math.abs(sc.u) + sc.D / 2 <= S.g.L / 2 + 0.5, JSON.stringify(sc)));
 });
-test('applyPlan: approvals in a stored plan come back as approvals (ok/by/at are trusted from the file)', async () => {
+test('applyPlan (D-7): an approval stamped in the app comes back; one written into the file by hand, or kept on an item edited after approval, does not', async () => {
+  // a stamp without its binding (hand-written, or saved before stamps were bound) is not an approval
   await St.applyPlan({ seg: { thr: 250 }, anchor: { p: [0, 0, 0], n: [0, 0, 1], axis: [1, 0, 0] }, planes: [{ off: -10, ok: true, by: 'Dr X', at: '2026-01-01' }, { off: 10, ok: true, by: 'Dr X' }], lesion: { ok: true, by: 'Dr X' } });
-  assert.equal(S.planes[0].ok, true); assert.equal(S.planes[0].by, 'Dr X'); assert.equal(S.lesion.ok, true);
+  assert.equal(S.planes[0].ok, false); assert.equal(S.planes[0].by, undefined); assert.equal(S.lesion.ok, false);
+  // stamped here: the saved plan reopens approved
+  P.doc.getElementById('surgeon').value = 'Dr Y';
+  St.stamp(S.planes[0]); St.stamp(S.lesion);
+  const saved = St.clone(St.planOf());
+  await St.applyPlan(St.clone(saved));
+  assert.equal(S.planes[0].ok, true); assert.equal(S.planes[0].by, 'Dr Y'); assert.equal(S.lesion.ok, true); assert.equal(S.planes[1].ok, false);
+  // the approved cut moved in the file (the stamp kept): the approval is dropped; a stamp copied onto the other cut too
+  const edited = St.clone(saved); edited.planes[0].off = -12; edited.planes[1] = Object.assign({}, edited.planes[1], { ok: true, by: 'Dr Y', at: saved.planes[0].at, sig: saved.planes[0].sig });
+  await St.applyPlan(edited);
+  assert.equal(S.planes[0].ok, false); assert.equal(S.planes[1].ok, false); assert.equal(S.lesion.ok, true);
 });
 
 await run('app.js guide kernel (Studio)');

@@ -2258,4 +2258,13 @@ window.I18N_EN = {
 "Adım": "Step",
 "Bitir": "Exit",
 "Bu modu kapat; model yeniden döndürülebilir": "Leave this mode; the model can be turned again",
+// Denetim 4 fixes (app.js, condyle.js): approval binding, layout change, production / plate gate, plan file, condyle side
+"Plandaki # öğe onayı kayıtlı değerlerle eşleşmiyor (onaydan sonra değiştirilmiş ya da eski sürümde kaydedilmiş); bu öğeleri yeniden onaylayın.": "# item approvals in the plan do not match the stored values (changed after approval, or saved by an older version); approve these items again.",
+"Elle yerleştirilen vidalar yeni guide düzenine taşındı; konumlarını kontrol edip yeniden onaylayın.": "The screws placed by hand were moved to the new guide layout; check their positions and approve them again.",
+"Üretim STL'i su geçirmez değil ya da beklenenden fazla parçalı (guide, köprü ya da fibula guide'ı); bu dosyalar basılamaz. Guide'ı değiştirip üretim STL'ini yeniden alın.": "The production STL is not watertight or has more pieces than expected (guide, bar or fibula guide); these files cannot be printed. Change the guide and generate the production STL again.",
+"Plak hattı kalan kemik boyunca tamamlanamadı (kemik yüzeyinden çıktı ya da kendi üstüne döndü); bu plak onaylanamaz ve pakete girmez. Plak yüksekliğini ya da uzantısını değiştirin veya plak planını kapatın.": "The plate path could not be completed along the remaining bone (it left the bone surface or turned back on itself); this plate cannot be approved and is not packaged. Change the plate height or extension, or turn plate planning off.",
+"Plan dosyası açılınca mevcut plan (kesiler, vidalar, guide) silinir. Devam edilsin mi?": "Opening the plan file replaces the current plan (cuts, screws, guide). Continue?",
+"dosya bir plan değil": "the file is not a plan",
+"Kondil dahil rezeksiyon sağ kondile ayarlı, ama lezyon orta hattın sol tarafında (orta hattan # mm, sol kondile # mm daha yakın). Rezeksiyon tarafını kontrol edin.": "The condylar resection is set to the right condyle, but the lesion lies left of the midline (# mm from the midline, # mm closer to the left condyle). Check the resection side.",
+"Kondil dahil rezeksiyon sol kondile ayarlı, ama lezyon orta hattın sağ tarafında (orta hattan # mm, sağ kondile # mm daha yakın). Rezeksiyon tarafını kontrol edin.": "The condylar resection is set to the left condyle, but the lesion lies right of the midline (# mm from the midline, # mm closer to the right condyle). Check the resection side.",
 };
