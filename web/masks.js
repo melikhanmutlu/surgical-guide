@@ -19,6 +19,8 @@ window.Masks = (function () {
   function ensure() { if (!seeds || seedRed !== S.red || seeds.length !== N()) { seeds = new Uint8Array(N()); seedRed = S.red; } }
   const counts = () => { const c = new Array(MAXL + 1).fill(0); if (seeds && seedRed === S.red) for (let v = 0; v < seeds.length; v++) if (seeds[v]) c[seeds[v]]++; return c; };
   const hasSeeds = () => counts().some((x, i) => i && x);
+  // a split needs two bones marked: with one label the whole touching mask becomes that one layer (nothing is separated)
+  const markedN = () => counts().filter((x, i) => i && x).length;
   const isSplit = l => l >= BASE;
 
   // ---------- marking: a disc in the slice, a ball on the 3D model ----------
@@ -106,6 +108,7 @@ window.Masks = (function () {
   async function run() {
     if (!S.red) return;
     if (!hasSeeds()) { msg = 'Önce kesitlerde ya da 3B modelde her kemiği kendi renginde işaretleyin.'; status(); return; }
+    if (markedN() < 2) { msg = 'Ayırmak için en az iki kemiği kendi renginde işaretleyin; şu an yalnız bir etiket işaretli.'; status(); return; }
     if (St.unapproveAll) St.unapproveAll();
     if ($('segMode').value !== 'thr') { $('segMode').value = 'thr'; $('aiBox').hidden = true; $('thrBox').hidden = false; }
     await St.segment(false);
@@ -231,7 +234,7 @@ window.Masks = (function () {
   function renderLayers() {
     const c = counts(), vox = S.red ? S.red.sp[0] * S.red.sp[1] * S.red.sp[2] / 1000 : 0;
     $('mkLayers').innerHTML = layers.map((L, i) => `<li class="lay${cur === i + 1 ? ' on' : ''}">
-      <label><input type="radio" name="mkCur" value="${i + 1}" ${cur === i + 1 ? 'checked' : ''} aria-label="${St.esc(L.name)} ${xl('ile işaretle')}"><i style="background:${hex(L.color)}"></i>
+      <label><input type="radio" name="mkCur" value="${i + 1}" ${cur === i + 1 ? 'checked' : ''} aria-label="İşaretle: ${St.esc(L.name)}"><i style="background:${hex(L.color)}"></i>
       <input type="text" class="mk-name" data-n="${i + 1}" value="${St.esc(L.name)}" maxlength="40" aria-label="Kemik etiketi adı"></label>
       <span class="hu">${c[i + 1] ? xl(`${fmt(c[i + 1] * vox, 2)} cm³ işaret`) : xl('işaret yok')}</span>
       ${layers.length > 1 ? `<button class="x" data-del="${i + 1}" title="Etiketi kaldır" aria-label="${St.esc(L.name)} etiketini kaldır">×</button>` : ''}</li>`).join('');
@@ -253,8 +256,9 @@ window.Masks = (function () {
   function status() {
     renderLayers();
     const c = counts();
-    $('mkStat').textContent = msg || (active ? 'Katmanlara ayrıldı.' : c.some((x, i) => i && x) ? xl('İşaretler hazır; "Ayır"a basın.') : '');
-    $('mkRun').disabled = !hasSeeds(); $('mkClear').disabled = !hasSeeds() && !active;
+    const n = c.filter((x, i) => i && x).length;
+    $('mkStat').textContent = msg || (active ? 'Katmanlara ayrıldı.' : n >= 2 ? xl('İşaretler hazır; "Ayır"a basın.') : n ? 'Bir etiket işaretli; ayırmak için ikinci kemiği başka bir etiketle işaretleyin.' : '');
+    $('mkRun').disabled = n < 2; $('mkClear').disabled = !hasSeeds() && !active;
     msg = '';
   }
   function renderList() {
@@ -264,7 +268,7 @@ window.Masks = (function () {
       <p class="hint more">İşaretli parçalar planlama kemiğidir: kesi, rezeksiyon, vida ve guide yalnız bunlardan hesaplanır. Diğerleri silinmez, gizlenir; göz düğmesiyle açılıp kapanır.</p>
       <ul class="layers">` + (S.comps.map(c => { const sel = S.selected.has(c.label), on = ctxOn.has(c.label);
       return `<li class="lay"><label><input type="checkbox" data-l="${c.label}" ${sel ? 'checked' : ''}><i style="background:${hex(sel ? St.COLORS.bone : colorOf(c.label))}"></i>${St.esc(nameOf(c.label))}</label>
-        <span class="hu">${fmt(c.size * vox)} cm³ <button class="eye" data-eye="${c.label}" aria-pressed="${sel || on}" ${sel ? 'disabled title="Planlama kemiği her zaman görünür"' : `title="${on ? 'Gizle' : 'Göster'}"`} aria-label="${St.esc(nameOf(c.label))} ${xl(on ? 'gizle' : 'göster')}"><svg class="i"><use href="#i-eye"/></svg></button></span></li>`; }).join('')
+        <span class="hu">${fmt(c.size * vox)} cm³ <button class="eye" data-eye="${c.label}" aria-pressed="${sel || on}" ${sel ? 'disabled title="Planlama kemiği her zaman görünür"' : `title="${on ? 'Gizle' : 'Göster'}"`} aria-label="${on ? 'Gizle' : 'Göster'}: ${St.esc(nameOf(c.label))}"><svg class="i"><use href="#i-eye"/></svg></button></span></li>`; }).join('')
       || '<li class="hint">Eşiğin üstünde yapı bulunamadı.</li>') + '</ul>';
     $('comps').querySelectorAll('input[data-l]').forEach(el => el.addEventListener('change', async () => {
       const l = +el.dataset.l;
