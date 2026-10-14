@@ -16,7 +16,7 @@ window.Report = (function () {
     const r = St.renderer, cam = St.camera, ctl = St.controls, keep = { pos: cam.position.clone(), tgt: ctl.target.clone(), aspect: cam.aspect, layers: cam.layers.mask };
     const size = r.getSize(new THREE.Vector2()), pr = r.getPixelRatio(), split = S.split;
     S.split = false; r.setPixelRatio(1); r.setSize(w, h, false); cam.aspect = w / h; cam.layers.set(layer);
-    const objs = layer === 0 ? Object.values(St.parts).filter(p => p.visible && (focus || /^(bone|guide|resected|screw|plate)$/).test(p.id)).map(p => p.obj) : [];
+    const objs = layer === 0 ? Object.values(St.parts).filter(p => p.visible && (focus || /^(bone|guide|resected|screw\d*|plate)$/).test(p.id)).map(p => p.obj) : [];
     // tissue layers and other context surfaces would cover the plan: hidden for the picture
     const hid = Object.values(St.parts).filter(p => p.obj.visible && (/^(layer_|ctx_|mirror)/.test(p.id) || (hide && hide.test(p.id)))); hid.forEach(p => { p.obj.visible = false; });
     const box = new THREE.Box3(); objs.forEach(o => box.expandByObject(o));
@@ -140,7 +140,7 @@ window.Report = (function () {
       shots.push({ img: await loadImg(snapshot([0, -0.05, 1])), cap: 'Üstten' });
       const has = id => St.parts[id] && St.parts[id].visible, n = S.anchor.n;
       // close views of what the surgeon builds: the guide on the bone, the plate, the implants on the grafts
-      if (has('guide')) shots.push({ img: await loadImg(snapshot([n.x, n.y, n.z], 1000, 640, 0, /^(guide|screw)$/, 1.5)), cap: 'Guide yakın görünüm (kemiğe bakış)' });
+      if (has('guide')) shots.push({ img: await loadImg(snapshot([n.x, n.y, n.z], 1000, 640, 0, /^(guide|screw\d*)$/, 1.5)), cap: 'Guide yakın görünüm (kemiğe bakış)' });
       if (has('plate')) shots.push({ img: await loadImg(snapshot([n.x, n.y, n.z], 1000, 640, 0, /^plate$/, 1.15)), cap: 'Plak ve vida delikleri' });
       if (has('implants') && window.Fibula && Fibula.active() && Fibula.state().last) { const up = Fibula.state().last.D.vup; shots.push({ img: await loadImg(snapshot([up.x, up.y, up.z], 1000, 640, 0, /^implants$/, 2.2, /^(guide|screw|plate|lesion|resected)/)), cap: 'İmplantlar (oklüzal bakış)' }); }
       if (window.Fibula && Fibula.active()) { St.scene.traverse(o => { if (o.isLight) o.layers.enableAll(); }); shots.push({ img: await loadImg(snapshot([0, -1, 0.3], 1000, 640, 1)), cap: 'Fibula ve fibula guide\'ı' }); }
