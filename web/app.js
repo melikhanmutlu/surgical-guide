@@ -213,9 +213,16 @@
     const [nx, ny, nz] = d.dims;
     return { hu, nx, ny, nz, sp: d.spacing, origin: d.origin, axes: [[1, 0, 0], [0, 1, 0], [0, 0, 1]] };
   }
+  // the sample replaces whatever is being read (W6): a DICOM / zip read still running is cancelled (and says so) before
+  // its volume could land over the sample; a newer load in turn replaces the sample before it is committed
   async function loadSample(name) {
+    if (loadCtl) loadCtl.byUser = true;
+    const ctl = startLoad();
     busy(true, 'Örnek vaka indiriliyor…');
-    const vol = await readSample(name);
+    let vol;
+    try { vol = await readSample(name); } catch (e) { if (loadCtl === ctl) loadCtl = null; throw e; }
+    if (loadStopped(ctl)) return;
+    if (loadCtl === ctl) loadCtl = null;
     S.source = { type: 'sample', name, fp: 'sample:' + name };
     await setVolume(vol, name === 'mandible' ? 'Örnek: mandibula (sentetik BT)' : 'Örnek: alt bacak (sentetik BT)', name);
   }
@@ -279,10 +286,14 @@
       const want = S.pendingPlan && S.pendingPlan.source && S.pendingPlan.source.fp;
       let hit = null;
       if (want) for (const g of groups) { const d = g[0].ds; if (await sha256(`${g[0].series}|${d.uint16('x00280011')}x${d.uint16('x00280010')}x${g.length}`) === want) { hit = g; break; } }
-      ser = hit || groups.find(g => !seriesInfo(g).warn) || groups[0];
+      // among the real series, a bone-kernel reconstruction (the one a guide is designed on) of about the same coverage
+      // is preferred to a soft-tissue / standard one (D4)
+      const real = groups.filter(g => !seriesInfo(g).warn), most = real.length ? real[0].length : 0;
+      const bone = real.find(g => g.length >= 0.8 * most && BONE_RX.test(`${dstr(g[0].ds, 'x00181210')} ${dstr(g[0].ds, 'x0008103e')}`));
+      ser = hit || bone || real[0] || groups[0];
     }
     const sc = { groups, zipName, skipped }, res = await decodeSeries(ser, prog, zw + pw, dw, sc);
-    if (!res.error) res.scan = sc;
+    if (!res.error) { sc.cur = res.cur; res.scan = sc; }
     return res;
   }
   // header only (up to the pixel data tag) from the first 64 kB: a whole study is never held in memory while it is
@@ -298,8 +309,9 @@
   // series kept from the last DICOM load, so another one can be opened without reading the files again
   let scan = null;
   async function decodeSeries(ser, prog, p0, dw, sc) {
-    const { groups, zipName, skipped } = sc, bySeries = Object.fromEntries(groups.map(g => [g[0].series, g]));
-    sc.cur = groups.indexOf(ser);
+    // (the index of this series is returned as `cur`; the caller marks it current once the volume is in, so a failed or
+    // cancelled switch leaves the list on the series that is actually loaded, W17)
+    const { groups, zipName, skipped } = sc, bySeries = Object.fromEntries(groups.map(g => [g[0].series, g])), cur = groups.indexOf(ser);
     const r = V(...ser[0].iop.slice(0, 3)), c = V(...ser[0].iop.slice(3)), nrm = V().crossVectors(r, c);
     ser.sort((a, b) => V(...a.ipp).dot(nrm) - V(...b.ipp).dot(nrm));
     // two images at the same position (a repeated or second acquisition): keep the first
@@ -342,10 +354,11 @@
       for (let i = 0; i < rows * cols; i++) hu[k * rows * cols + i] = Math.max(-1024, Math.min(32000, px[i] * slope + icpt));
       await prog(p0 + dw * (k + 1) / ser.length, `${what} (${k + 1} / ${ser.length})…`);
     }
-    return { source, vol: { hu, nx: cols, ny: rows, nz: ser.length, sp: [ps[1], ps[0], dz], origin: ser[0].ipp,
+    return { cur, source, vol: { hu, nx: cols, ny: rows, nz: ser.length, sp: [ps[1], ps[0], dz], origin: ser[0].ipp,
       axes: [[r.x, r.y, r.z], [c.x, c.y, c.z], [nrm.x, nrm.y, nrm.z]], meta }, label: `${zipName || ((ser[0].path || '').includes('/') ? ser[0].path.split('/')[0] : 'DICOM')}${groups.length > 1 && source.name ? ' · ' + source.name : ''} · ${xl(`${ser.length} kesit`)}${skipped ? xl(`, ${skipped} dosya atlandı`) : ''}` };
   }
   const dstr = (ds, tag) => (ds.string(tag) || '').replace(/\0/g, '').trim();
+  const BONE_RX = /bone|kemik|osteo/i;
   // one line per series for the series switcher: description, size, slice thickness, kernel, and a warning for scouts
   function seriesInfo(g) {
     const d = g[0].ds, desc = dstr(d, 'x0008103e') || 'Açıklamasız seri', th = parseFloat(dstr(d, 'x00180050')), ps = dstr(d, 'x00280030').split('\\').map(Number);
@@ -370,7 +383,7 @@
     if (loadStopped(ctl) || !r) { renderSeries(); return; }
     if (loadCtl === ctl) loadCtl = null;
     if (r.error) { busy(false); alertMsg(r.error); renderSeries(); return; }
-    S.source = r.source; await setVolume(r.vol, r.label, 'dicom');
+    scan.cur = r.cur; S.source = r.source; await setVolume(r.vol, r.label, 'dicom');
   }
   async function sha256(t) {
     try { const h = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t)); return [...new Uint8Array(h)].slice(0, 12).map(b => b.toString(16).padStart(2, '0')).join(''); }
@@ -3074,7 +3087,18 @@
   $('dicomFiles').addEventListener('change', e => { if (e.target.files.length) loadDicom([...e.target.files]); });
   stage.addEventListener('dragover', e => e.preventDefault());
   // dropped folders are walked (dataTransfer.files does not enter them); a dropped zip is opened by readDicom
-  stage.addEventListener('drop', async e => { e.preventDefault(); const files = window.Unzip ? await Unzip.fromDrop(e.dataTransfer) : [...e.dataTransfer.files]; if (files.length) loadDicom(files); });
+  // a plan file (plan.json from a package) dropped on the view opens that plan (on its own series / sample)
+  stage.addEventListener('drop', async e => {
+    e.preventDefault();
+    const dropped = [...e.dataTransfer.files];
+    if (dropped.length === 1 && /\.json$/i.test(dropped[0].name)) {
+      if (loadBlocked()) return;
+      if (planned() && !confirm('Plan dosyası açılınca mevcut plan (kesiler, vidalar, guide) silinir. Devam edilsin mi?')) return;
+      try { await openPlan(JSON.parse(await dropped[0].text())); emit('changed'); } catch (err) { busy(false); alertMsg(`${xl('Vaka açılamadı:')} ${err.message}`); }
+      return;
+    }
+    const files = window.Unzip ? await Unzip.fromDrop(e.dataTransfer) : dropped; if (files.length) loadDicom(files);
+  });
 
   // ---------- export: STL + report + plan, packed as .zip (STL alone is not an allowed download type) ----------
   function stlOf(mesh) {
@@ -3246,7 +3270,10 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     if (window.Fibula) Fibula.exportFiles(files);
     (window.ExportHooks || []).forEach(f => { try { f(files); } catch (e) { /* optional files */ } });
     if (parts.resected) files.push({ name: 'rezeke_parca.stl', data: stlOf(parts.resected.obj) });
-    files.push({ name: 'plan.json', data: $('json').textContent }, { name: 'rapor.html', data: reportHTML() });
+    // plan.json is the whole plan (planOf), so the package can be opened again (dropped on the view, D2); the short
+    // summary that used to be the file stays in it under `ozet`
+    let summary = null; try { summary = JSON.parse($('json').textContent || 'null'); } catch (e) { /* none yet */ }
+    files.push({ name: 'plan.json', data: JSON.stringify(Object.assign(planOf(), { ozet: summary }), null, 2) }, { name: 'rapor.html', data: reportHTML() });
     let pdfFailed = false;
     if (window.Report) try { files.push({ name: 'cerrahi_rapor.pdf', data: new Uint8Array(await (await Report.build()).arrayBuffer()) }); } catch (e) { pdfFailed = true; console.warn('pdf report', e); }   // the HTML report is still in the package
     await offer('guide_paketi.zip', zip(files));
@@ -3363,6 +3390,9 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   }
   // open a stored plan: load its volume first when it is a built-in sample; DICOM needs the user to pick the series
   async function openPlan(plan) {
+    // a package's plan.json or a plan kept under `plan` by another tool; anything else is not a plan
+    if (plan && typeof plan === 'object' && !plan.schema && plan.plan && typeof plan.plan === 'object') plan = plan.plan;
+    if (!plan || typeof plan !== 'object' || Array.isArray(plan) || !(plan.schema || plan.planes || plan.anchor)) throw new Error(xl('dosya bir plan değil'));
     const src = plan.source;
     if (src && src.type === 'sample' && !(S.source && S.source.fp === src.fp)) { S.autoAnchor = false; S.restoring = true; await loadSample(src.name); }
     else if (src && src.type === 'dicom' && !(S.source && S.source.fp === src.fp)) {
