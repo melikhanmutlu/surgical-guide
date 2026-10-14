@@ -1,0 +1,33 @@
+# Fast test suites on every push and pull request (synthetic data only; no secrets, no deploy).
+# The slow suites (sh tests/run_all.sh slow) and the Playwright scenarios (tests/web/e2e) run by hand before a release.
+name: tests
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  fast:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - name: Install Python dependencies (pinned)
+        run: pip install -r requirements.txt
+      - name: Fast suites
+        env:
+          YOLMED_TOKEN: ""
+          YOLMED_ALLOWED_ORIGINS: ""
+        run: sh tests/run_all.sh fast

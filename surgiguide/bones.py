@@ -8,6 +8,8 @@ local maximum is a bone core, and two cores are one bone when the neck between t
 as the thinner core (a bone is thick everywhere; a joint or a tooth contact is a thin neck). The cores grow back over the
 whole mask, so each piece keeps its full surface.
 """
+from array import array
+
 import numpy as np
 from scipy import ndimage as ndi
 
@@ -19,15 +21,22 @@ FIBULA_LENGTH = (120.0, 500.0)                # mm: shortest / longest fibula (C
 FIBULA_RATIOS = (0.45, 0.5, 0.4, 0.55, 0.35, 0.6)
 
 
-def _flood(edt, cmask, ratio):
-    """Watershed with neck / core merging on a padded coarse grid; int32 labels (0 = outside), pieces numbered by root."""
-    shape = edt.shape
-    ny, nx = shape[1], shape[2]
+def _flood_order(edt, cmask):
+    """The flood's visiting order (bone voxels, thickest first) and the distances as a flat float array: the same for every
+    ratio, so a Separator computes them once (D4 P16: compact arrays instead of whole-box Python lists, ~12 B per voxel)."""
     order = np.flatnonzero(cmask.ravel())
     order = order[np.argsort(-edt.ravel()[order], kind="stable")].tolist()
-    D = edt.ravel().tolist()
+    return order, array("d", edt.ravel().astype(np.float64).tobytes())
+
+
+def _flood(edt, cmask, ratio, pre=None):
+    """Watershed with neck / core merging on a padded coarse grid; int32 labels (0 = outside), pieces numbered by root.
+    pre: _flood_order(edt, cmask), when the caller floods the same grid at several ratios."""
+    shape = edt.shape
+    ny, nx = shape[1], shape[2]
+    order, D = pre or _flood_order(edt, cmask)
     nb = (-1, 1, -nx, nx, -nx * ny, nx * ny)
-    lab = [0] * cmask.size
+    lab = array("l", bytes(array("l").itemsize * cmask.size))
     parent, peak = [0], [0.0]
 
     def find(r):
@@ -85,7 +94,9 @@ class Separator:
     def run_coarse(self, ratio):
         """Coarse-grid labels (no padding, root numbers, 0 = outside): everything the pieces' statistics need, at a fraction of
         the cost of lifting them to the native grid."""
-        return _flood(self.edt, self.cmask, ratio)[1:-1, 1:-1, 1:-1]
+        if getattr(self, "_pre", None) is None:
+            self._pre = _flood_order(self.edt, self.cmask)
+        return _flood(self.edt, self.cmask, ratio, self._pre)[1:-1, 1:-1, 1:-1]
 
     def lift(self, coarse, label=None):
         """Native-grid labels (shape of the input mask's box) from coarse labels: a native voxel takes the label of its coarse
@@ -196,7 +207,8 @@ def pick_mandible(mask, spacing, origin_idx=(0, 0, 0), world=None, scan_z=None):
                 sub = np.repeat(np.repeat(np.repeat(coarse[p["slices"]] == p["label"], f[0], 0), f[1], 1), f[2], 2)
                 e[2] = trimmed_height(sub, sz)
             if mandible_like(p["vol"], e):
-                touches = scan_z is not None and (p["slices"][0].start * f[0] + org[0] <= scan_z[0] or p["slices"][0].stop * f[0] + org[0] >= scan_z[1])
+                # first / last slice of the piece (inclusive) against the scan's first / last slice (web/bones.js box[2] <= 0, box[5] >= nz - 1)
+                touches = scan_z is not None and (p["slices"][0].start * f[0] + org[0] <= scan_z[0] or p["slices"][0].stop * f[0] - 1 + org[0] >= scan_z[1])
                 fits.append((touches, -p["vol"], p, e))
         if fits:
             touches, _, best, e = min(fits, key=lambda t: (t[0], t[1]))
@@ -227,12 +239,18 @@ def fibula_candidates(ps):
     return out, longp
 
 
+def leg_of(p):
+    """'right' or 'left': the leg of a fibula candidate from its tibia (the fibula is lateral; LPS +x = patient left)."""
+    return "right" if p["centroid"][0] < p["tibia"]["centroid"][0] else "left"
+
+
 def pick_fibula(comps, spacing, side="right", world=None):
     """comps: [(mask crop (z, y, x), origin_idx)] of the largest threshold components of the working grid (at most 6, largest
     first; mirror of web/fibula.js load()), spacing (sx, sy, sz) of that grid, world: grid index (x, y, z) -> patient mm.
     Returns (index of comp, mask of the fibula in that comp's crop, info). info['status']: 'ok' | 'failed' (no tibia partner
-    found: the longest slender piece is returned and info['warning'] says so). With both legs in the scan the fibulas of
-    both are candidates (all within 70 % of the longest): right leg = smaller x (patient right is -x in LPS)."""
+    found: the longest slender piece is returned and info['warning'] says so). side: 'right' | 'left' | 'auto' (the leg of a
+    one-leg scan). The leg of a candidate is told by its tibia (the fibula is lateral to it); RuntimeError when the asked leg
+    has no fibula, never a bone of the other leg. info['side'] is the leg used."""
     allp = []
     for i, (m, o) in enumerate(comps):
         for p in pieces(m.astype(np.int32), spacing, o, 200, world=world):
@@ -261,7 +279,8 @@ def pick_fibula(comps, spacing, side="right", world=None):
                 best = (len(f2), f2, ratio)
             if len(f2) >= len(thick):
                 break
-        if best[1]:
+        # the cut is taken only when it finds more fibulas than the plain threshold pieces (web/fibula.js: best.n > first.length)
+        if best[1] and best[0] > len(found):
             found, ratio_used = best[1], best[2]
         elif not found:
             warn = ("fibula: tibia and fibula are joined in the threshold mask and could not be separated; "
@@ -270,15 +289,41 @@ def pick_fibula(comps, spacing, side="right", world=None):
     if not found:
         found = sorted(longp, key=lambda p: p["radius"])[:1]
         warn = ((warn + "; ") if warn else "") + "fibula: no slender long bone with a tibia beside it was found; the slenderest long piece is used"
-    # the fibula is the longest slender bone with a tibia beside it (arms and ribs are shorter); both legs: choose the side by x
+    # a piece that is the tibia of another candidate is not a fibula (with one leg's tibia and fibula fused, the other leg's
+    # tibia is slender next to that fused leg and would pass as a fibula)
+    partners = {id(p["tibia"]) for p in found if p.get("tibia") is not None}
+    found = [p for p in found if id(p) not in partners] or found
+    # the fibula is the longest slender bone with a tibia beside it (arms and ribs are shorter)
     found = sorted(found, key=lambda p: (-p["len"], p["radius"]))
     found = [p for p in found if p["len"] >= 0.7 * found[0]["len"]]
-    if len(found) >= 2:
-        xs = [p["centroid"][0] for p in found]
-        mid = 0.5 * (min(xs) + max(xs))
-        pick = ([p for p in found if (p["centroid"][0] < mid) == (side == "right")] or found)[0]
+    # the leg: a fibula lies lateral to its tibia (LPS: patient right is -x), as web/fibula.js legSide. A bone of the other
+    # leg is never returned: with no fibula on the asked side the pipeline stops and says why.
+    sided = [p for p in found if p.get("tibia") is not None]
+    if sided:
+        legs = {id(p): leg_of(p) for p in sided}
+        if side == "auto":
+            sides = sorted(set(legs.values()))
+            if len(sides) > 1:
+                raise RuntimeError("fibula: the scan holds both legs; choose the donor leg (--side right / left)")
+            side = sides[0]
+        mine = [p for p in sided if legs[id(p)] == side]
+        if not mine:
+            other = sorted(set(legs.values()))
+            raise RuntimeError(f"fibula: no fibula of the {side} leg was found; the candidates lie lateral to a tibia of the "
+                               f"{' and '.join(other)} leg. On the {side} leg tibia and fibula may be joined in the threshold mask "
+                               f"(try another --hu or series), or the {side} leg is not in the scan (check --side)")
+        pick = mine[0]
     else:
-        pick = found[0]
+        # no tibia beside any candidate (warned above): the leg cannot be told apart, the scanner x decides as before
+        if len(found) >= 2:
+            xs = [p["centroid"][0] for p in found]
+            mid = 0.5 * (min(xs) + max(xs))
+            pick = ([p for p in found if (p["centroid"][0] < mid) == (side != "left")] or found)[0]
+        else:
+            pick = found[0]
+        warn = ((warn + "; ") if warn else "") + "fibula: no tibia beside the candidate, so its leg (side) could not be checked"
+        if side == "auto":
+            side = "right" if pick["centroid"][0] < 0 else "left"
     if pick["lab"] is None:
         mask = comps[pick["comp"]][0].copy()
     else:
@@ -286,7 +331,8 @@ def pick_fibula(comps, spacing, side="right", world=None):
     if pick["radius"] > FIBULA_RADIUS[1]:
         warn = ((warn + "; ") if warn else "") + f"fibula radius {pick['radius']:.0f} mm is above {FIBULA_RADIUS[1]:.0f} mm: this is not a fibula"
     info = dict(status="ok" if warn is None else "failed", volume_cm3=pick["vol"], length_mm=pick["len"], radius_mm=pick["radius"],
-                candidates=len(found), side_x_mm=float(pick["centroid"][0]), cut_ratio=ratio_used)
+                candidates=len(found), side_x_mm=float(pick["centroid"][0]), cut_ratio=ratio_used, side=side,
+                side_from="tibia" if pick.get("tibia") is not None else "scanner x")
     if warn:
         info["warning"] = warn
     return pick["comp"], mask, info

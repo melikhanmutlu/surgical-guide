@@ -32,12 +32,15 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 sys.path.insert(0, REPO)
 
-THR = {"p95": 0.6, "max": 3.0, "vol": 0.15}      # mm, mm, relative (synthetic bone and the sample: measured 0.2-0.45 / 1-2.4 / 4-5 %)
+# mm, mm, mm, relative. Synthetic bone and the sample, measured after the pass-0 fix (D4 E4/P4; before it the server's
+# body edge included the bridge band and the rib moved: p99 1.2-1.4 mm, Hausdorff 1.8-2.5 mm, volume -4..-5 %):
+# p95 0.16-0.26, p99 0.29-0.41, Hausdorff 0.53-0.82 mm, volume -1..-2 %.
+THR = {"p95": 0.35, "p99": 0.6, "max": 1.2, "vol": 0.04}
 # A real CT differs more, for reasons outside the guide design: the preview's bone is the 0.8 mm work mask (teeth and the
 # alveolar crest merge into one blob, thin plates vanish), the server's the full-resolution threshold mask within the
 # request's halo around the planning bone (so a body ends 1-2 mm later at a bone-component boundary). Measured on the
 # anonymised mandible (body L 45, angle L 60): p95 0.8-1.2 mm, Hausdorff 4.7-4.9 mm, volume within 1.5 %.
-THR_REAL = {"p95": 1.5, "max": 6.0, "vol": 0.15}
+THR_REAL = {"p95": 1.5, "p99": 3.0, "max": 6.0, "vol": 0.15}
 
 
 def load_stl(data):
@@ -151,6 +154,9 @@ def verdict(res):
     p95 = max(res["preview_to_server_mm"]["p95"], res["server_to_preview_mm"]["p95"])
     if p95 > thr["p95"]:
         bad.append(f"p95 {p95:.2f} > {thr['p95']}")
+    p99 = max(res["preview_to_server_mm"]["p99"], res["server_to_preview_mm"]["p99"])
+    if p99 > thr["p99"]:
+        bad.append(f"p99 {p99:.2f} > {thr['p99']}")
     if res["hausdorff_mm"] > thr["max"]:
         bad.append(f"hausdorff {res['hausdorff_mm']:.2f} > {thr['max']}")
     if res["vol_ratio"] is None or abs(res["vol_ratio"] - 1) > thr["vol"]:
@@ -192,7 +198,7 @@ def main():
         json.dump(res, open(os.path.join(out, name + "_compare.json"), "w"), indent=1)
         a_, b_ = res["preview_to_server_mm"], res["server_to_preview_mm"]
         line = (f"{name:22s} split {res['split']}  vol preview {res['preview']['volume']:8.0f} server {res['server']['volume']:8.0f} mm3 ({res['vol_ratio']:.3f})  "
-                f"preview->server p50 {a_['p50']:.2f} p95 {a_['p95']:.2f} max {a_['max']:.2f}  server->preview p50 {b_['p50']:.2f} p95 {b_['p95']:.2f} max {b_['max']:.2f}  "
+                f"preview->server p50 {a_['p50']:.2f} p95 {a_['p95']:.2f} p99 {a_['p99']:.2f} max {a_['max']:.2f}  server->preview p50 {b_['p50']:.2f} p95 {b_['p95']:.2f} p99 {b_['p99']:.2f} max {b_['max']:.2f}  "
                 f"bodies {res['server']['bodies']} watertight {res['server']['watertight']} deterministic {res['server']['deterministic']} seat {res['preview']['seat']} / {res['server']['seat']}  "
                 f"server {sum(i['ms'] for i in res['pieces_info'])} ms, {res['server']['faces']} faces")
         if "bar" in res and "error" not in res["bar"]:
@@ -204,7 +210,7 @@ def main():
         failed += bool(bad)
     if not names:
         print("FAIL: no cases were dumped"); return 1
-    print(f"{len(names) - failed} of {len(names)} cases within thresholds (synthetic: p95 <= {THR['p95']} mm, Hausdorff <= {THR['max']} mm; real CT: p95 <= {THR_REAL['p95']} mm, Hausdorff <= {THR_REAL['max']} mm; volume within {THR['vol'] * 100:.0f} %)")
+    print(f"{len(names) - failed} of {len(names)} cases within thresholds (synthetic: p95 <= {THR['p95']} mm, p99 <= {THR['p99']} mm, Hausdorff <= {THR['max']} mm; real CT: p95 <= {THR_REAL['p95']} mm, Hausdorff <= {THR_REAL['max']} mm; volume within {THR['vol'] * 100:.0f} %)")
     if a.keep or a.out:
         print("outputs:", out)
     else:

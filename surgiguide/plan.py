@@ -292,10 +292,10 @@ def make_plan(arch, fibula, s_a, s_b, n_segments=None, tol_mm=2.5, min_len=20.0,
         prev_end_normal_f = n1f
     overflow = s_cursor - (fibula.s_max - proximal_margin)
     stump_gap = 0.0 if kerf_side == "resected" else slot_w / 2
-    # between segments the kerf is taken from the fibula between the grafts and both faces are cut to the same plane:
-    # the planned gap is 0 (checked by the same rule as the stumps)
+    # between segments the kerf is taken from the fibula between the grafts and both faces are cut to the same plane: the
+    # gap between two grafts is 0 by construction (reported as such, nothing to check)
     joint_gap = [0.0] * (n_segments - 1)
-    warnings = plan_warnings(segs, dev, n_segments, tol_mm, min_len, overflow, s_b - s_a, decision, stump_gap, kerf_side, joint_gap)
+    warnings = plan_warnings(segs, dev, n_segments, tol_mm, min_len, overflow, s_b - s_a, decision, stump_gap, kerf_side)
     if slot_w - kerf > 0.3 + 1e-9:
         warnings.append(f"saw slot {slot_w:.2f} mm is {slot_w - kerf:.2f} mm wider than the {kerf:.2f} mm blade; at most 0.3 mm is advised "
                         "(a wider slot lets the blade tilt and angle errors add up)")
@@ -309,7 +309,7 @@ def make_plan(arch, fibula, s_a, s_b, n_segments=None, tol_mm=2.5, min_len=20.0,
 ANGLE_WARN = 35.0               # deg: a cut this oblique is hard to saw and to fit (web/fibula.js ANGLE_WARN)
 
 
-def plan_warnings(segs, dev, n_segments, tol_mm, min_len, overflow, arc, decision=None, stump_gap=0.0, kerf_side="resected", joint_gap=()):
+def plan_warnings(segs, dev, n_segments, tol_mm, min_len, overflow, arc, decision=None, stump_gap=0.0, kerf_side="resected"):
     """What the plan does outside its own tolerances (web/fibula.js reports the same): never silent. Entries that
     web/fibula.js reports as critical start with "ERROR" (make_plan lists them again under "errors")."""
     w = []
@@ -338,11 +338,6 @@ def plan_warnings(segs, dev, n_segments, tol_mm, min_len, overflow, arc, decisio
         w.append(f"ERROR: graft-to-stump gap {stump_gap:.2f} mm per end (kerf {kerf_side}) is at or above {STUMP_GAP_ERR:.1f} mm (non-union risk)")
     elif stump_gap > STUMP_GAP_WARN:
         w.append(f"graft-to-stump gap {stump_gap:.2f} mm per end (kerf {kerf_side}) is above {STUMP_GAP_WARN:.1f} mm")
-    for j, gj in enumerate(joint_gap):
-        if gj >= STUMP_GAP_ERR:
-            w.append(f"ERROR: gap between segments {j + 1} and {j + 2} is {gj:.2f} mm, at or above {STUMP_GAP_ERR:.1f} mm (non-union risk)")
-        elif gj > STUMP_GAP_WARN:
-            w.append(f"gap between segments {j + 1} and {j + 2} is {gj:.2f} mm, above {STUMP_GAP_WARN:.1f} mm")
     if overflow > 0:
         w.append(f"the fibula is {overflow:.1f} mm too short for this plan (distal / proximal safety margins included)")
     return w
