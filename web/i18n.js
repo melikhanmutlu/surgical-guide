@@ -19,41 +19,58 @@
   try { lang = localStorage.getItem(KEY) === 'en' ? 'en' : 'tr'; } catch (e) { /* storage blocked */ }
 
   // a key not in the dictionary as a whole is often several known phrases joined by the code ("Kesi 1 · onaylı",
-  // "onay bekleyen: Kesi 1, Vida 2"), or one with a closing period or bracket; those parts are looked up one by one
+  // "onay bekleyen: Kesi 1, Vida 2"), or one with a closing period or bracket; those parts are looked up one by one.
+  // An English entry may reorder the numbers: "#2" names the second "#" of the Turkish key ("Vida # kovanının %#'i" →
+  // "#2% of the sleeve of screw #1"); plain "#" fills left to right. look() turns every slot into an absolute marker
+  // (\u0002n\u0003 = number n of the whole string, off = numbers before this part) so joined parts keep their own order.
   const SEP = /( · | — | – |; |: |, | \/ | \| |\. (?=[A-ZÇĞİÖŞÜ]))/;
-  function look(k, deep) {
-    if (D[k] != null) return D[k];
+  const POS = /#(\d{1,2})(?![0-9A-Za-z])/g, MK = /\u0002(\d+)\u0003/g;
+  const cnt = s => (s.match(/#/g) || []).length;
+  const slots = (v, off) => { if (/#\d/.test(v)) return v.replace(POS, (_, n) => '\u0002' + (off + +n - 1) + '\u0003'); let i = off; return v.replace(/#/g, () => '\u0002' + i++ + '\u0003'); };
+  const get = (k, off) => (D[k] != null ? slots(D[k], off) : null);
+  function look(k, deep, off = 0) {
+    let v = get(k, off);
+    if (v != null) return v;
     const end = /^(.*?)([.:…!?)]+)$/.exec(k);
-    if (end && D[end[1]] != null) return D[end[1]] + end[2];
+    if (end && (v = get(end[1], off)) != null) return v + end[2];
     const wrap = /^([(“"'«]+)(.*?)([)”"'».:…!?]*)$/.exec(k);
-    if (wrap && D[wrap[2]] != null) return wrap[1] + D[wrap[2]] + wrap[3];
+    if (wrap && (v = get(wrap[2], off)) != null) return wrap[1] + v + wrap[3];
     const par = /^(.+?) \(([^()]+)\)([.:]?)$/.exec(k);
-    if (par) { const a = look(par[1], deep), b = look(par[2], true); if (a != null || b != null) return (a ?? par[1]) + ' (' + (b ?? par[2]) + ')' + par[3]; }
+    if (par) {
+      const o2 = off + cnt(par[1]), a = look(par[1], deep, off), b = look(par[2], true, o2);
+      if (a != null || b != null) return (a ?? slots(par[1], off)) + ' (' + (b ?? slots(par[2], o2)) + ')' + par[3];
+    }
     if (deep) return null;
     const parts = k.split(SEP);
     if (parts.length < 3) return null;
     // longest run of parts that translates as one, from left to right ("A: b. C" may be known as "b. C")
-    let hit = 0, outp = '';
+    let hit = 0, outp = '', o = off;
     for (let i = 0; i < parts.length; i += 2) {
       let j = parts.length - 1, v = null;
-      for (; j > i; j -= 2) if ((v = look(parts.slice(i, j + 1).join(''), true)) != null) break;
-      if (v == null && parts[i]) v = look(parts[i], true);
+      for (; j > i; j -= 2) if ((v = look(parts.slice(i, j + 1).join(''), true, o)) != null) break;
+      if (v == null && parts[i]) v = look(parts[i], true, o);
       if (v != null) hit++;
-      outp += (v ?? parts[i]) + (parts[j + 1] ?? '');
+      outp += (v ?? slots(parts[i], o)) + (parts[j + 1] ?? '');
+      o += cnt(parts.slice(i, j + 1).join(''));
       i = j;
     }
     return hit ? outp : null;
   }
-  // one string: keeps the surrounding whitespace, puts the numbers back in order
+  // a number as English writes it: Turkish "12,5" → "12.5", "1.234,5" → "1,234.5" (dates such as 01.02.2026 stay)
+  const enNum = x => /^[-−+]?[1-9]\d{0,2}(?:\.\d{3})+(?:,\d+)?$/.test(x) ? x.replace(/[.,]/g, c => (c === '.' ? ',' : '.')) : x.replace(/^([-−+]?\d+),(\d+)$/, '$1.$2');
+  const NUMS = new RegExp(NUM.source, 'g');
+  // one string: keeps the surrounding whitespace, puts the numbers back where the English entry wants them
   function t(s) {
     if (lang !== 'en' || !s) return s;
     const m = /^(\s*)([\s\S]*?)(\s*)$/.exec(s), core = m[2].replace(/\s+/g, ' ');
-    if (!core || !/[A-Za-zÇĞİÖŞÜçğıöşü%]/.test(core)) return s;
+    if (!core) return s;
+    // text with no words (a value readout such as "12,5 mm" or "−11,0 mm · 0,0°") still gets English numbers
+    const bare = () => s.replace(NUMS, enNum);
+    if (!/[A-Za-zÇĞİÖŞÜçğıöşü%]/.test(core)) return bare();
     const nums = [], k = core.replace(SUF, '$1').replace(TOK, x => { nums.push(x); return '#'; });
     const v = look(k);
-    if (v == null) { if (/[çğıöşüÇĞİÖŞÜ]|\b(ve|ile|için|seç|yok|kesi|vida|onay|göster|ekle|sil|hazır|parça|kemik|açı|uzunluk)\b/i.test(k)) miss.add(k); return s; }
-    let i = 0;
-    const en = v.replace(/#/g, () => (i < nums.length ? nums[i++].replace(/^([-−+]?\d+),(\d+)$/, '$1.$2') : '#')).replace(ONE, '$1$2');
+    if (v == null) { if (/[çğıöşüÇĞİÖŞÜ]|\b(ve|ile|için|seç|yok|kesi|vida|onay|göster|ekle|sil|hazır|parça|kemik|açı|uzunluk)\b/i.test(k)) miss.add(k); return bare(); }
+    const en = v.replace(MK, (_, n) => (nums[n] != null ? enNum(nums[n]) : '#')).replace(ONE, '$1$2');
     return m[1] + en + m[3];
   }
   // a multi-line message (alerts, confirms) falls back to line by line
@@ -61,9 +78,12 @@
 
   // per-node memory: the Turkish source and the English we wrote, so our own writes are recognised
   const src = new WeakMap(), out = new WeakMap(), touched = new Set();
+  // data and code shown as text (the plan JSON in <pre id=json>, anything marked translate="no") are never looked up:
+  // they are not interface text, and splitting a long JSON into phrases froze every rebuild for seconds
+  const SKIP = /^(SCRIPT|STYLE|TEXTAREA|PRE|CODE)$/, keep = el => SKIP.test(el.tagName) || (el.getAttribute && el.getAttribute('translate') === 'no');
   function text(n) {
     const p = n.parentElement;
-    if (!p || /^(SCRIPT|STYLE|TEXTAREA)$/.test(p.tagName) || p.isContentEditable) return;
+    if (!p || keep(p) || p.isContentEditable || (p.closest && p.closest('pre,code,[translate="no"]'))) return;
     if (out.get(n) === n.data) return;
     const en = t(n.data);
     src.set(n, n.data);
@@ -81,7 +101,7 @@
   }
   function walk(n) {
     if (n.nodeType === 3) return text(n);
-    if (n.nodeType !== 1) return;
+    if (n.nodeType !== 1 || keep(n)) return;
     attrs(n);
     for (let c = n.firstChild; c; c = c.nextSibling) walk(c);
   }
