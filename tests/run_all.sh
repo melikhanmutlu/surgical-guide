@@ -2,7 +2,8 @@
 # Every automated test of the repository; synthetic volumes and the built-in sample only, no patient data.
 #   sh tests/run_all.sh          fast suites (~5 min on 4 cores; what CI runs)
 #   sh tests/run_all.sh slow     the slow ones: slow-client timing, guide-quality stress, STL vs browser preview,
-#                                browser unit suites (~20-30 min)
+#                                browser unit suites, the guide consistency harness on the sample + phantom
+#                                (tests/consistency; Playwright + Chromium, skipped without them) (~60-90 min)
 #   sh tests/run_all.sh all      both
 # Each suite runs under SUITE_TIMEOUT seconds (default 1200). Exits 1 when any suite fails; prints a summary.
 # The browser end-to-end scenarios (tests/web/e2e, Playwright) are separate: see tests/web/e2e/README.md.
@@ -39,6 +40,8 @@ if [ "$MODE" = slow ] || [ "$MODE" = all ]; then
   # ~25 browser unit suites, each under its own limit inside: one SUITE_TIMEOUT for all of them ran out on a loaded
   # 4-core machine (Denetim 4 verification), so the wrapper gets three
   TO0=$TO; TO=$(( TO * 3 )); suite unit/all sh tests/web/unit/run_all.sh; TO=$TO0
+  # preview, production STL and pipeline guides against the bone and each other (synthetic data, 2 runs each)
+  TO0=$TO; TO=$(( TO * 4 )); suite consistency python3 tests/consistency/consistency.py --reps 2 --port "${CONSISTENCY_PORT:-8861}"; TO=$TO0
 fi
 echo "=== summary ($MODE)$summary"
 exit $fail
