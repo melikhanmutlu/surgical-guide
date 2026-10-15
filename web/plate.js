@@ -140,6 +140,9 @@ window.Plate = (function () {
       const h = { s, p: q.p.clone(), n: q.n.clone(), t: q.t.clone(), region, kind: q.kind, dCut, dJoint, usable: dCut >= 3 && dJoint >= JOINT_GAP, why: dCut < 3 ? 'cut' : dJoint < JOINT_GAP ? 'joint' : null };
       h.seg = region === 'defect' && lower.length ? segOf(lower, h.p) : null;
       Object.assign(h, screwFor(h, fl));
+      // over the defect a plate screw holds only in graft bone: its axis must run at least the minimum screw bone length
+      // in a graft (a graze of the graft's edge is not a hold); otherwise the hole is left empty (why 'graft')
+      if (fl && region === 'defect') { h.graft = graftRun(h, fl); if (h.usable && h.graft < minBone()) { h.usable = false; h.why = 'graft'; } }
       holes.push(h);
     }
     // bending: how much the plate turns, in the plate plane and out of it
@@ -220,6 +223,15 @@ window.Plate = (function () {
   // plate's top face, i.e. the head seated flush in the plate, so the plate thickness and the modelled plate-bone gap
   // are added to the bone path (Denetim 4 W10: from the bone surface alone the proposal was ~2 mm short and could stop
   // inside the far cortex).
+  // minimum bone along a screw: the clinical profile's screwMinDepth (fibula guide screws; app.js SCREW_MIN_DEPTH, 4 mm,
+  // for the mandible guide screws)
+  const minBone = () => (window.Fibula && Fibula.rules && Fibula.rules().screwMinDepth) || 4;
+  // mm of graft bone along the hole axis (the first 30 mm)
+  function graftRun(h, fl) {
+    const dir = h.n.clone().negate(), q = V(); let run = 0;
+    for (let t = 0; t <= 30; t += 0.25) { q.copy(h.p).addScaledVector(dir, t); if (fl.segs.some((g, i) => Fibula.graftBone(i, q))) run += 0.25; }
+    return run;
+  }
   function screwFor(h, fl) {
     const dir = h.n.clone().negate(), q = V(); let entry = null, lastIn = null, out = 0, t = -1;
     for (; t <= 30; t += 0.25) {
@@ -333,12 +345,12 @@ window.Plate = (function () {
     markMatched();   // the guide screws may have moved since the line was computed (Denetim 4 D6: "0 matched" next to 2 placed)
     const cnt = r => last.holes.filter(h => h.region === r && h.usable).length;
     return { sistem: SYSTEMS[P.sys].name, genislik_mm: P.w, kalinlik_mm: P.t, delik_araligi_mm: P.pitch, uzunluk_mm: Math.round(last.L), holes: last.holes.length,
-      kullanilabilir: { A: cnt('A'), defekt: cnt('defect'), B: cnt('B') }, kesiye_yakin: last.holes.filter(h => !h.usable).length,
+      kullanilabilir: { A: cnt('A'), defekt: cnt('defect'), B: cnt('B') }, kesiye_yakin: last.holes.filter(h => h.why === 'cut' || h.why === 'joint').length,
       bukme_deg: { kalinlik_yonunde: Math.round(last.bend.outPlane), kenar_yonunde: Math.round(last.bend.inPlane), burulma: Math.round(last.bend.twist) },
       kritik: critical().map(c => c.text),
-      guide_ile_eslesen: last.holes.filter(h => h.matched).length, greft_eklemine_yakin: last.holes.filter(h => h.why === 'joint').length,
+      guide_ile_eslesen: last.holes.filter(h => h.matched).length, greft_eklemine_yakin: last.holes.filter(h => h.why === 'joint').length, grefte_tutunmuyor: last.holes.filter(h => h.why === 'graft').length,
       vida_listesi: screwList(),
-      delikler: last.holes.map((h, i) => ({ no: i + 1, bolge: h.region, segment: h.seg == null ? null : h.seg + 1, kullanilabilir: h.usable, neden: h.why === 'cut' ? 'kesiye yakın' : h.why === 'joint' ? 'greft eklemine yakın' : null,
+      delikler: last.holes.map((h, i) => ({ no: i + 1, bolge: h.region, segment: h.seg == null ? null : h.seg + 1, kullanilabilir: h.usable, neden: h.why === 'cut' ? 'kesiye yakın' : h.why === 'joint' ? 'greft eklemine yakın' : h.why === 'graft' ? `greftte ${minBone()} mm kemik yok` : null, greftte_kemik_mm: h.graft == null ? null : h.graft,
         kesiye_mm: +h.dCut.toFixed(1), eklem_mm: Number.isFinite(h.dJoint) ? +h.dJoint.toFixed(1) : null, vida_boyu_mm: h.usable ? h.len : null, kemik_kalinligi_mm: +h.thick.toFixed(1), bikortikal: h.usable && h.len ? h.bi : null,
         konum: h.p.toArray().map(x => +x.toFixed(2)), eksen: h.n.clone().negate().toArray().map(x => +x.toFixed(4)) })) };
   }
@@ -373,7 +385,7 @@ window.Plate = (function () {
   (window.ReportSections = window.ReportSections || []).push(d => {
     const s = summary(); if (!s) return;
     if (d.keep) d.keep(380); d.h2('Plak');
-    d.table(['Özellik', 'Değer'], [['Sistem', `${s.sistem} · ${fmt(s.genislik_mm)} × ${fmt(s.kalinlik_mm)} mm · ${xl(`${fmt(s.delik_araligi_mm)} mm aralık`)}`], ['Uzunluk / delik', `${s.uzunluk_mm} mm · ${s.holes} delik`], ['Kullanılabilir delik', `kalan 1: ${s.kullanilabilir.A} · defekt: ${s.kullanilabilir.defekt} · kalan 2: ${s.kullanilabilir.B}`], ['Kesiye yakın (boş bırakılacak)', `${s.kesiye_yakin}`], ['Toplam bükme', `kalınlık yönünde ${s.bukme_deg.kalinlik_yonunde}° · kenar yönünde ${s.bukme_deg.kenar_yonunde}°`], ['Guide vidalarıyla eşleşen delik', `${s.guide_ile_eslesen}`], ['Greft eklemine yakın (boş bırakılacak)', `${s.greft_eklemine_yakin}`], ['Vida boyları (bikortikal)', screwText(s)], ['Not', 'Vida boyları kemik modelinden ölçülür; sinir kanalı ve diş kökleri ayrıca kontrol edilmelidir.']], [0.34, 0.66]);
+    d.table(['Özellik', 'Değer'], [['Sistem', `${s.sistem} · ${fmt(s.genislik_mm)} × ${fmt(s.kalinlik_mm)} mm · ${xl(`${fmt(s.delik_araligi_mm)} mm aralık`)}`], ['Uzunluk / delik', `${s.uzunluk_mm} mm · ${s.holes} delik`], ['Kullanılabilir delik', `kalan 1: ${s.kullanilabilir.A} · defekt: ${s.kullanilabilir.defekt} · kalan 2: ${s.kullanilabilir.B}`], ['Kesiye yakın (boş bırakılacak)', `${s.kesiye_yakin}`], ['Toplam bükme', `kalınlık yönünde ${s.bukme_deg.kalinlik_yonunde}° · kenar yönünde ${s.bukme_deg.kenar_yonunde}°`], ['Guide vidalarıyla eşleşen delik', `${s.guide_ile_eslesen}`], ['Greft eklemine yakın (boş bırakılacak)', `${s.greft_eklemine_yakin}`], ['Grefte tutunmuyor (boş bırakılacak)', `${s.grefte_tutunmuyor}`], ['Vida boyları (bikortikal)', screwText(s)], ['Not', 'Vida boyları kemik modelinden ölçülür; sinir kanalı ve diş kökleri ayrıca kontrol edilmelidir.']], [0.34, 0.66]);
   });
 
   // ---------- slices: plate cross-section where it meets the slice ----------
@@ -398,7 +410,7 @@ window.Plate = (function () {
       <p class="hint more">Kırmızı delikler kesiye ya da greft eklemine 3 mm'den yakındır, boş bırakılır. Yeşil delikler guide vidalarıyla eşleşir. Vida boyu her delikte plak üst yüzeyinden karşı korteksin 1 mm ötesine kadar ölçülür (plak kalınlığı dahil); sinir kanalı ayrıca kontrol edilmelidir.</p><p class="hint" id="plMsg"></p>` : '<p class="hint more">Plak hattı kalan kemik ve greftlerin dış yüzeyini izler; guide vidaları plak deliklerine yerleştirilebilir.</p>'}`;
     wire();
   }
-  const sumHTML = s => s ? `<dl class="kv"><dt>Uzunluk</dt><dd>${s.uzunluk_mm} mm · ${s.holes} delik</dd><dt>Kullanılabilir</dt><dd>${s.kullanilabilir.A} · ${s.kullanilabilir.defekt} · ${s.kullanilabilir.B}</dd><dt>Kesiye yakın</dt><dd>${s.kesiye_yakin} delik boş kalır</dd><dt>Bükme</dt><dd>${s.bukme_deg.kalinlik_yonunde}° yüzeye · ${s.bukme_deg.kenar_yonunde}° kenara</dd><dt>Guide ile eşleşen</dt><dd>${s.guide_ile_eslesen}</dd>${s.greft_eklemine_yakin ? `<dt>Greft eklemine yakın</dt><dd>${s.greft_eklemine_yakin} delik boş kalır</dd>` : ''}<dt>Vidalar</dt><dd>${screwText(s)}</dd></dl>${s.kritik.length ? `<p class="hint" style="color:var(--crit)"><b>Kritik</b> · ${s.kritik.map(t => St.esc(xl(t))).join('<br>')}</p>` : ''}` : `<p class="hint">${S.anchor ? 'Plak hattı bulunamadı; yüksekliği değiştirin.' : 'Önce rezeksiyon bölgesini ve kesileri belirleyin.'}</p>`;
+  const sumHTML = s => s ? `<dl class="kv"><dt>Uzunluk</dt><dd>${s.uzunluk_mm} mm · ${s.holes} delik</dd><dt>Kullanılabilir</dt><dd>${s.kullanilabilir.A} · ${s.kullanilabilir.defekt} · ${s.kullanilabilir.B}</dd><dt>Kesiye yakın</dt><dd>${s.kesiye_yakin} delik boş kalır</dd><dt>Bükme</dt><dd>${s.bukme_deg.kalinlik_yonunde}° yüzeye · ${s.bukme_deg.kenar_yonunde}° kenara</dd><dt>Guide ile eşleşen</dt><dd>${s.guide_ile_eslesen}</dd>${s.greft_eklemine_yakin ? `<dt>Greft eklemine yakın</dt><dd>${s.greft_eklemine_yakin} delik boş kalır</dd>` : ''}${s.grefte_tutunmuyor ? `<dt>Grefte tutunmuyor</dt><dd>${s.grefte_tutunmuyor} delik boş kalır</dd>` : ''}<dt>Vidalar</dt><dd>${screwText(s)}</dd></dl>${s.kritik.length ? `<p class="hint" style="color:var(--crit)"><b>Kritik</b> · ${s.kritik.map(t => St.esc(xl(t))).join('<br>')}</p>` : ''}` : `<p class="hint">${S.anchor ? 'Plak hattı bulunamadı; yüksekliği değiştirin.' : 'Önce rezeksiyon bölgesini ve kesileri belirleyin.'}</p>`;
   function renderSum() {
     if (!$('plSum')) return;
     const s = summary(); $('plSum').innerHTML = sumHTML(s);

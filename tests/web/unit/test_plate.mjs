@@ -152,4 +152,36 @@ test('E1: a graft placed above the plate height: the line crosses the defect on 
   } finally { St.setPart('grafts', '', null); W.PlanExt.plate.set(Object.assign({}, W.PlanExt.plate.get(), { h: 0 })); await sleep(50); }
 });
 
+test('E1: over the defect a hole is usable only when its screw runs >= 4 mm in graft bone; a segment left with < 2 is named', async () => {
+  await volume(bar, BAR_BOX);
+  await plan(10, { L: 50 });
+  // stand-in graft and fibula plan: one segment, bone 1.5 .. 10.5 mm above the plate's height 0, 12 mm deep, across the defect
+  const g = new T.Group(), m = new T.Mesh(new T.BoxGeometry(22, 9, 12), new T.MeshBasicMaterial()); m.position.set(0, 6, -6); g.add(m);
+  St.setPart('grafts', 'Greft', g, 0xffffff); g.updateMatrixWorld(true);
+  const seg = { i: 0, P0: V(-10, 6, -6), N0: V(1, 0, 0), P1: V(10, 6, -6), N1: V(1, 0, 0), x: V(1, 0, 0), L: 20, barrel: false };
+  const inG = q => Math.abs(q.x) <= 10 && q.y >= 1.5 && q.y <= 10.5 && q.z <= 0 && q.z >= -12;
+  const had = W.Fibula, hadFib = S.fib; S.fib = { plan: { n: 1 } };
+  // (a proxy: the app's other calls into Fibula get a no-op)
+  W.Fibula = new Proxy({ active: () => true, state: () => ({ last: { segs: [seg] } }), plan: () => ({ kerf: 1 }), rules: () => ({ screwMinDepth: 4 }), graftBone: (i, q) => inG(q), checks: () => [] }, { get: (o, k) => (k in o ? o[k] : () => null) });
+  const setH = async h => { W.PlanExt.plate.set(Object.assign({}, W.PlanExt.plate.get(), { h })); await sleep(50); return W.Plate.compute(); };
+  try {
+    // height 0: the defect holes' axes pass under the graft (a graze at most): unusable, reason given, segment 1 warned
+    let R = await setH(0); const d0 = R.holes.filter(h => h.region === 'defect');
+    assert.ok(d0.length && d0.every(h => !h.usable && (h.why === 'graft' || h.why === 'cut')) && d0.some(h => h.why === 'graft'), JSON.stringify(d0.map(h => [h.why, h.graft])));
+    const s0 = W.Plate.summary();
+    assert.equal(s0.kullanilabilir.defekt, 0); assert.equal(s0.grefte_tutunmuyor, d0.filter(h => h.why === 'graft').length);
+    assert.ok(s0.delikler.some(h => h.neden === 'greftte 4 mm kemik yok'));
+    assert.match($('plSum').innerHTML, /Grefte tutunmuyor/);
+    assert.ok(plateChecks().some(c => c[0] === 'warn' && /Plak greft segmenti 1 üzerinde 0 vidaya yer bırakıyor/.test(c[2])), JSON.stringify(plateChecks()));
+    // a graze: the axis touches the graft's lower edge for < 4 mm
+    R = await setH(1); assert.ok(R.holes.filter(h => h.region === 'defect' && h.why !== 'cut').every(h => !h.usable && h.graft < 4), JSON.stringify(R.holes.map(h => [h.region, h.why, h.graft])));
+    // height 5: the axis runs 12 mm through the graft: usable (the 20 mm defect has room for one hole clear of the cuts,
+    // so the segment is still named, now with 1)
+    R = await setH(5); const d5 = R.holes.filter(h => h.region === 'defect' && h.usable);
+    assert.ok(d5.length === 1 && d5.every(h => h.graft >= 4 && h.seg === 0 && h.len), JSON.stringify(R.holes.map(h => [h.region, h.why, h.graft])));
+    assert.equal(W.Plate.summary().grefte_tutunmuyor, 0);
+    assert.ok(plateChecks().some(c => /Plak greft segmenti 1 üzerinde 1 vidaya/.test(c[2])) && !plateChecks().some(c => /segmenti 1 üzerinde 0/.test(c[2])));
+  } finally { if (had) W.Fibula = had; else delete W.Fibula; S.fib = hadFib; St.setPart('grafts', '', null); W.PlanExt.plate.set(Object.assign({}, W.PlanExt.plate.get(), { h: 0 })); await sleep(50); }
+});
+
 await run('plate.js');

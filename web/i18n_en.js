@@ -2180,4 +2180,7 @@ window.I18N_EN = {
 "Segment sınırları, kesi açıları ve rotasyonlar sıfırlandı; kontrol edin.": "Segment boundaries, osteotomy angles and rotations were reset; check them.",
 "Plak hattı defektte # mm boyunca grefte değmiyor; bu yükseklikte greft yok. Plak yüksekliğini ya da fibula segmentinin yerini değiştirin.": "Over # mm of the defect the plate line does not touch the graft; there is no graft at this height. Change the plate height or the position of the fibula segment.",
 "Plak hattı defektte # mm boyunca grefte değmiyor; greft bu noktada # ile # mm yükseklik arasında. Plak yüksekliğini yaklaşık # mm yapın ya da fibula segmentinin yerini değiştirin.": "Over # mm of the defect the plate line does not touch the graft; here the graft lies between # and # mm height. Set the plate height to about # mm or change the position of the fibula segment.",
+"Grefte tutunmuyor": "Not holding in the graft",
+"Grefte tutunmuyor (boş bırakılacak)": "Not holding in the graft (left empty)",
+"greftte # mm kemik yok": "no # mm of graft bone",
 };
