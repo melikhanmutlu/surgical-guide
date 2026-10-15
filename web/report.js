@@ -160,7 +160,8 @@ window.Report = (function () {
     d.status(draft ? 'TASLAK' : 'ONAYLI PLAN', draft ? 'warn' : 'ok');
     d.text(`${xl('Sürüm:')} ${version}${surgeon ? ' · ' + xl('Onaylayan:') + ' ' + surgeon : ''}`, { size: 22 });
     if (draft) d.text(`${xl('Onay bekleyen:')} ${miss.map(xl).join(', ') || '–'}${S.crit ? ` · ${xl(`${S.crit} kritik kontrol`)}` : ''}`, { size: 22, color: C.warn });
-    d.text(`${xl('Görüntü:')} ${St.caseLine()} · ${xl('Segmentasyon:')} ${S.segMethod || '–'}`, { size: 20, color: C.muted, after: 10 });
+    d.text(`${xl('Görüntü:')} ${St.caseLine()} · ${xl('Segmentasyon:')} ${S.segMethod || '–'}`, { size: 20, color: C.muted, after: St.swLine ? 4 : 10 });
+    if (St.swLine) d.text(St.swLine(), { size: 18, color: C.muted, after: 10 });
     if (shots.length) { d.h2('Görünümler'); d.images(shots); }
     if (slices.length) { d.h2('BT kesitleri'); d.images(slices); }
     d.h2('Kesim tablosu');

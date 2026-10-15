@@ -491,10 +491,10 @@ button.ghost.danger { color: var(--crit); }
 :is(#apprMsg, #auMsg, #expMsg, #fibMirrorMsg, #fibPickMsg, #fibSideMsg, #fibStatus, #guideStat, #imMsg, #lesStatus, #lsStat, #mkStat, #oneMsg, #prodMsg, #plMsg, #seStat, #verMsg, #xMsg):empty { display: none; }
 </style>
 <link rel="stylesheet" href="styles/kart.css">
-<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/TransformControls.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/dicom-parser@1.8.21/dist/dicomParser.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js" integrity="sha384-vV17nr/rMaJqmeZkFUzXLpHdQ+ME5QHKdydaqqN+3Ga39RJlNrTatJxHwGV4ml2C" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js" integrity="sha384-I0DMsfimAPIqWT8lF+oA997gRgdUi3jhidoTq3fN0zmn35smXZukD01FLnsPRU9i" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/TransformControls.js" integrity="sha384-SjERJYpTdHmOG5rlq45HOnSIMuoKT8RhFFBBzYsBsUM83IMtE6xyPrP4e//GMWBC" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/dicom-parser@1.8.21/dist/dicomParser.min.js" integrity="sha384-Z8ua3fbU1i9fPqw0gGLF0aw6yqnTK3GO6R9CFvnlvXB0x0AIFi6JqYvQ6v+s9kuw" crossorigin="anonymous"></script>
 <script src="i18n_en.js"></script>
 <script src="i18n.js"></script>
 <script src="codecs.js"></script>
@@ -854,12 +854,23 @@ button.ghost.danger { color: var(--crit); }
     <h3 class="sub">Kayıt</h3>
     <input id="aiUrl" type="hidden" value="">
     <dl class="kv"><dt>Kayıt yeri</dt><dd id="stBackend">–</dd><dt>Durum</dt><dd id="stSave">–</dd><dt>Sunucu</dt><dd id="stConn">–</dd></dl>
+    <div class="btns" id="tokBox" hidden><button type="button" id="tokSet">Erişim anahtarını gir</button></div>
     <p class="hint more">Yayındaki sitede vakalar, yapay zeka segmentasyonu ve üretim STL'i sitenin kendi sunucusunu kullanır. Önizlemede kayıt bu sayfanın veritabanında ya da tarayıcıda tutulur.</p>
     <h3 class="sub">Görünüm</h3>
     <div class="ctl"><label for="lightP" class="lbl2">Işık</label><select id="lightP"><option value="balanced">Dengeli</option><option value="soft">Yumuşak</option><option value="contrast">Kontrastlı</option></select></div>
     <div class="ctl"><div class="ctl-row"><label for="lightK">Işık şiddeti</label><output id="lightKO">%100</output></div><input type="range" id="lightK" min="0.4" max="1.6" step="0.05" value="1"></div>
     <div class="btns"><button type="button" id="lightReset">Varsayılana dön</button></div>
     <label class="switch"><input type="checkbox" id="devMode"><span>Geliştirici modu (plan JSON sekmesi)</span></label>
+  </form>
+</dialog>
+
+<dialog id="dlgTok" aria-labelledby="dlgTokT">
+  <form method="dialog" class="dlg">
+    <header><h2 id="dlgTokT">Sunucu erişim anahtarı</h2><button class="ibtn" value="cancel" aria-label="Kapat"><svg><use href="#i-x"/></svg></button></header>
+    <p class="hint">Bu sunucu vakalar ve üretim STL'i için erişim anahtarı istiyor. Anahtarı sunucu yöneticisinden alın; yalnız bu sekmede tutulur, sekme kapanınca unutulur.</p>
+    <div class="ctl"><label for="tokIn" class="lbl2">Erişim anahtarı</label><input id="tokIn" type="password" autocomplete="off" spellcheck="false"></div>
+    <p class="hint" id="tokErr" role="alert"></p>
+    <div class="btns"><button value="cancel" formnovalidate>Vazgeç</button><button class="primary" value="ok">Bağlan</button></div>
   </form>
 </dialog>
 
@@ -886,6 +897,7 @@ button.ghost.danger { color: var(--crit); }
 </dialog>
 
 <script src="config.js"></script>
+<script src="auth.js"></script>
 <script src="geom.js"></script>
 <script src="bones.js"></script>
 <script src="seat.js"></script>

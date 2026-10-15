@@ -44,7 +44,7 @@ window.Audit = (function () {
     return JSON.stringify(x === undefined ? null : x);
   }
   function planHash() {
-    const p = St.planOf(); delete p.surgeon; delete p.measures; if (p.ext) delete p.ext.audit;
+    const p = St.planOf(); delete p.surgeon; delete p.measures; delete p.software; if (p.ext) delete p.ext.audit;   // (a new software version does not undo an approval)
     return sha256(canon(p));
   }
   const entryHash = e => sha256([e.prev, e.n, e.at, e.role, e.name, e.action, e.comment, e.plan].join('|'));

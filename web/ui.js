@@ -171,11 +171,14 @@ window.UI = (function () {
     if (!url) { $('stConn').textContent = 'yok (önizleme)'; return; }
     try {
       const ac = new AbortController(), t = setTimeout(() => ac.abort(), 2500);
-      const r = await fetch(url + '/health', { signal: ac.signal }); clearTimeout(t);
+      // (/health needs no token; the token goes along when there is one, the light never asks for it)
+      const r = await fetch(url + '/health', { signal: ac.signal, headers: window.ServerAuth ? ServerAuth.header() : {} }); clearTimeout(t);
       $('stConn').textContent = r.ok ? 'bağlı' : `yanıt ${r.status}`;
     } catch (e) { $('stConn').textContent = 'ulaşılamıyor'; }
   }
   ping(); setInterval(ping, 30000);
+  // a server that wants an access token (G2): Settings can enter it again (after the dialog was closed, or a new token)
+  if (window.ServerAuth && ServerAuth.need()) { $('tokBox').hidden = false; $('tokSet').addEventListener('click', () => { $('dlgSet').close && $('dlgSet').close(); ServerAuth.enter(); }); }
 
   // ---------- keyboard ----------
   const PRESET = { ant: [0, -1, 0.12], right: [-1, 0, 0.12], left: [1, 0, 0.12], sup: [0, -0.03, 1], inf: [0, -0.03, -1] };

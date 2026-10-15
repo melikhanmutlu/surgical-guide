@@ -508,7 +508,7 @@
     busy(true, 'Segmentasyon sunucusunda çalışıyor…', { bar: true, cancel: () => ac.abort() });
     try {
       const q = new URLSearchParams({ nx: r.nx, ny: r.ny, nz: r.nz, sp: r.sp.join(','), origin: r.origin.join(','), axes: r.axes.flat().join(','), structures: $('aiStruct').value });
-      const res = await fetch(`${url}/segment?${q}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: r.hu, signal: ac.signal });
+      const res = await sfetch(`${url}/segment?${q}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: r.hu, signal: ac.signal });
       if (!res.ok) throw new Error(xl(`sunucu ${res.status} döndü`));
       const lab = new Uint8Array(await res.arrayBuffer()), names = JSON.parse(res.headers.get('X-Structures') || '[]');
       if (lab.length !== r.hu.length) throw new Error('etiket hacmi boyutu uyuşmuyor');
@@ -2525,6 +2525,20 @@
     const out = [], P = S.prod && S.prod.key === prodKey() ? S.prod : null, fp = S.fib && S.fib.prod && S.fib.guide && S.fib.prod.key === S.fib.guide.key ? S.fib.prod : null;
     const bad = (P && (!P.watertight || P.bodies > (S.g.split ? 2 : 1) || (P.bar && !P.bar.watertight))) || (fp && (!fp.watertight || fp.bodies > 1));
     if (bad) out.push(['crit', 'Kritik', "Üretim STL'i su geçirmez değil ya da beklenenden fazla parçalı (guide, köprü ya da fibula guide'ı); bu dosyalar basılamaz. Guide'ı değiştirip üretim STL'ini yeniden alın.", 'guide']);
+    // what the server itself refuses to call printable (P5, P6, E3): a screw it gave no sleeve and no hole, a grid
+    // coarser than the preview's, an open mesh. A coarser grid that is still finer than the preview is information.
+    [[P, ''], [fp, 'Fibula guide\'ı: ']].forEach(([x, pre]) => {
+      if (!x || !x.issues) return;
+      const n0 = out.filter(o => o[0] === 'crit').length;
+      x.screwNos.forEach(n => out.push(n > 0 ? ['crit', 'Kritik', pre + `Vida ${n} üretim STL'inde yok: sunucu bu vidaya kovan ve delik açamadı. Vidayı kaydırıp üretim STL'ini yeniden alın.`, 's' + (n - 1)]
+        : ['crit', 'Kritik', pre + `Bir vida (köprü bağlantısı ya da fibula vidası) üretim STL'inde yok: sunucu ona kovan ve delik açamadı. Guide'ı değiştirip üretim STL'ini yeniden alın.`, pre ? 'fib' : 'guide']));
+      if (x.issues.some(i => i.code === 'not_manifold') && x.watertight !== false) out.push(['crit', 'Kritik', pre + `Sunucu üretim STL'inin ağını kapalı bulmadı (manifold dışı kenar); bu dosya basılamaz. Üretim STL'ini yeniden alın.`, pre ? 'fib' : 'guide']);
+      const co = x.issues.find(i => i.code === 'resolution_coarsened');
+      if (co) out.push(co.coarser_than_preview ? ['crit', 'Kritik', pre + `Üretim STL'inin ızgarası ${fmt(co.used_mm, 2)} mm'ye kabalaştırıldı (istenen ${fmt(co.requested_mm, 2)} mm); önizlemeden kaba, delik ve yuvalar planı tutmayabilir. Guide'ı küçültüp üretim STL'ini yeniden alın.`, pre ? 'fib' : 'guide']
+        : ['info', 'Bilgi', pre + `Üretim STL'inin ızgarası ${fmt(co.used_mm, 2)} mm'ye kabalaştırıldı (istenen ${fmt(co.requested_mm, 2)} mm); önizlemeden yine ince.`, pre ? 'fib' : 'guide']);
+      // anything else the server counts against printing, said once
+      if (x.productionOk === false && !bad && out.filter(o => o[0] === 'crit').length === n0) out.push(['crit', 'Kritik', pre + `Sunucu üretim STL'ini basılabilir bulmadı; üretim STL'ini yeniden alın.`, pre ? 'fib' : 'guide']);
+    });
     if (window.Plate && Plate.params && Plate.params().on && typeof Plate.critical !== 'function') {
       const pl = Plate.get && Plate.get();
       if (pl && pl.ok === false) out.push(['crit', 'Kritik', 'Plak hattı kalan kemik boyunca tamamlanamadı (kemik yüzeyinden çıktı ya da kendi üstüne döndü); bu plak onaylanamaz ve pakete girmez. Plak yüksekliğini ya da uzantısını değiştirin veya plak planını kapatın.', 'guide']);
@@ -3283,9 +3297,10 @@ ${draft ? `<p>Onay bekleyen: ${esc(miss.join(', ') || '-')}${S.crit ? ` · ${S.c
 <h2>Kesi düzlemleri</h2><table><tr><th>Kesi</th><th>Konum</th><th>Yatay açı</th><th>Dikey açı</th><th>Yuva</th><th>Durum</th></tr>${S.planes.map((p, i) => `<tr><td>${i + 1}</td><td>${fmt(p.off)} mm</td><td>${fmt(p.yaw)}°</td><td>${fmt(p.pitch)}°</td><td>${fmt(p.w)} mm</td><td>${st(p)}</td></tr>`).join('')}</table>
 <h2>Vidalar</h2><table><tr><th>Vida</th><th>Konum (eksen, yanal)</th><th>Eğim</th><th>Matkap / kovan</th><th>Boy</th><th>Kemik içinde</th><th>Durum</th></tr>${S.screws.map((s, i) => { const si = R && R.screwInfo[i]; return `<tr><td>${i + 1}</td><td>${fmt(s.u)}, ${fmt(s.v)} mm</td><td>${fmt(s.tiltU, 0)}°, ${fmt(s.tiltV, 0)}°</td><td>${fmt(s.d)} / ${fmt(s.D)} mm</td><td>${fmt(s.len, 0)} mm</td><td>${si && si.ok ? fmt(si.inBone) + ' mm' : '-'}</td><td>${st(s)}</td></tr>`; }).join('')}</table>
 <h2>Guide gövdesi</h2><table>${gp.map(([k, v, u]) => `<tr><td>${k}</td><td>${fmt(v)} ${u}</td></tr>`).join('')}${R ? `<tr><td>Temas alanı</td><td>${fmt(R.contact, 0)} mm²</td></tr><tr><td>Hacim</td><td>${fmt(R.volume / 1000, 2)} cm³</td></tr>` : ''}</table>
-${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanlı boolean ile üretildi: ${S.prod.watertight ? 'su geçirmez' : 'su geçirmez değil'}, ${S.prod.bodies} parça, ${fmt(S.prod.volume / 1000, 2)} cm³ (guide_uretim.stl).</p>` : '<p>Üretim STL\'i alınmadı; guide.stl 0,4 mm voksel önizlemesidir.</p>'}
+${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanlı boolean ile üretildi: ${S.prod.watertight ? 'su geçirmez' : 'su geçirmez değil'}, ${S.prod.bodies} parça, ${fmt(S.prod.volume / 1000, 2)} cm³${S.prod.resolution ? `, ızgara ${fmt(S.prod.resolution, 2)} mm` : ''} (guide_uretim.stl).${S.prod.productionOk === false ? ' <b>Sunucu bu STL\'i basılabilir bulmadı.</b>' : ''}</p>` : '<p>Üretim STL\'i alınmadı; guide.stl 0,4 mm voksel önizlemesidir.</p>'}
 <h2>Otomatik kontroller</h2><ul>${checks}</ul>${window.Fibula ? Fibula.reportHTML() : ''}
 <h2>Koordinatlar</h2><p>Guide merkezi ${S.anchor ? [S.anchor.p.x, S.anchor.p.y, S.anchor.p.z].map(x => fmt(x)).join(', ') : '-'} mm (DICOM hasta koordinatı, LPS). STL dosyaları aynı koordinatlardadır; BT ile üst üste açılabilir.</p>
+<p><small>${esc(swLine(t => t))}</small></p>
 <p><small>Araştırma prototipi çıktısıdır, klinik kullanım için doğrulanmamıştır. Guide 0,4 mm voksel çözünürlüğünde üretilmiştir.</small></p></html>`;
   }
   async function offer(filename, blob) {
@@ -3332,20 +3347,31 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     const ac = new AbortController(), to = setTimeout(() => ac.abort(), 180000);
     if (outer) outer.addEventListener('abort', () => ac.abort());
     let res;
-    try { res = await fetch(url + '/guide', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(guideRequest(c)), signal: ac.signal }); }
+    try { res = await sfetch(url + '/guide', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(guideRequest(c)), signal: ac.signal }); }
     catch (e) { if (outer && outer.aborted) throw new Error('Üretim STL\'i iptal edildi.'); throw new Error(`Sunucuya ulaşılamadı. Pakette önizleme STL'i vardır.`); }
     finally { clearTimeout(to); }
     const js = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(`${xl('Sunucu hatası:')} ${js.error || res.status}`);
     const bin = atob(js.stl_b64), u8 = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
-    return { stl: u8, watertight: js.watertight, bodies: js.bodies, volume: js.volume_mm3, faces: js.faces, ms: js.ms };
+    return Object.assign({ stl: u8, watertight: js.watertight, bodies: js.bodies, volume: js.volume_mm3, faces: js.faces, ms: js.ms }, prodReply(js, c.scs.filter(s => s.entry)));
+  }
+  // what the server says about printing this STL (P5, P6, E3): production_ok, why not (issues: screw_no_body with the
+  // index of the request's screw, resolution_coarsened, not_manifold), its grid and its version. A reply without
+  // production_ok (an older server) is judged by watertight alone. screwNos: the plan's screw numbers (1-based) of the
+  // screws the server could not give a body; a screw that is not one of the plan's (the bar's lug, a fibula screw) is 0.
+  function prodReply(js, sent) {
+    const issues = Array.isArray(js.issues) ? js.issues.filter(i => i && typeof i.code === 'string') : [];
+    const ok = typeof js.production_ok === 'boolean' ? js.production_ok : !!js.watertight;
+    const screwNos = issues.filter(i => i.code === 'screw_no_body').map(i => { const s = sent && sent[i.screw]; return s ? S.screws.indexOf(s.sc) + 1 : 0; });
+    return { productionOk: ok, issues, screwsMissing: Number.isFinite(js.screws_missing) ? js.screws_missing : screwNos.length, screwNos,
+      resolution: Number.isFinite(js.resolution) ? js.resolution : null, requestedResolution: Number.isFinite(js.requested_resolution) ? js.requested_resolution : null, version: typeof js.version === 'string' ? js.version : null };
   }
   async function serverBar(spec, outer) {
     const url = serverUrl(); if (!url) throw new Error('Bu işlem sunucu gerektirir; yayındaki sitede (sguide.up.railway.app) çalışır. Pakette önizleme STL\'i vardır.');
     const ac = new AbortController(), to = setTimeout(() => ac.abort(), 180000);
     if (outer) outer.addEventListener('abort', () => ac.abort());
     let res;
-    try { res = await fetch(url + '/guide', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(barRequest(spec, { vol: S.vol, red: S.red, F: S.maskF, thr: segThr() })), signal: ac.signal }); }
+    try { res = await sfetch(url + '/guide', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(barRequest(spec, { vol: S.vol, red: S.red, F: S.maskF, thr: segThr() })), signal: ac.signal }); }
     catch (e) { if (outer && outer.aborted) throw new Error('Üretim STL\'i iptal edildi.'); throw new Error(`Sunucuya ulaşılamadı. Pakette önizleme STL'i vardır.`); }
     finally { clearTimeout(to); }
     const js = await res.json().catch(() => ({}));
@@ -3367,18 +3393,34 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
         // a two-frame guide: one server call per piece on its own frame, the two STLs joined into one file
         const rs = [];
         for (const pt of S.result.parts) rs.push(await serverGuide(Object.assign({ vol: S.vol, red: S.red, F: S.maskF, thr: segThr(), g: pt.g, P: pt.frame.P, pls: pt.pls, scs: pt.lug ? pt.scs.concat([pt.lug]) : pt.scs, wrapProfile: pt.wrapProfile, seatDir: pt.result.seatDir }, pt.frame), ac.signal));
-        r = { stl: mergeStl(rs[0].stl, rs[1].stl), watertight: rs.every(x => x.watertight), bodies: rs.reduce((s, x) => s + x.bodies, 0), volume: rs.reduce((s, x) => s + x.volume, 0), faces: rs.reduce((s, x) => s + x.faces, 0), ms: rs.reduce((s, x) => s + x.ms, 0) };
+        r = { stl: mergeStl(rs[0].stl, rs[1].stl), watertight: rs.every(x => x.watertight), bodies: rs.reduce((s, x) => s + x.bodies, 0), volume: rs.reduce((s, x) => s + x.volume, 0), faces: rs.reduce((s, x) => s + x.faces, 0), ms: rs.reduce((s, x) => s + x.ms, 0),
+          productionOk: rs.every(x => x.productionOk), issues: rs.flatMap((x, k) => x.issues.map(i => Object.assign({ piece: k + 1 }, i))), screwsMissing: rs.reduce((s, x) => s + x.screwsMissing, 0), screwNos: rs.flatMap(x => x.screwNos),
+          resolution: Math.max(...rs.map(x => x.resolution || 0)) || null, requestedResolution: rs[0].requestedResolution, version: rs[0].version };
       } else r = await serverGuide(Object.assign({ vol: S.vol, red: S.red, F: S.maskF, thr: segThr(), g: S.g, P: S.anchor.p, pls: planesWorld(), scs: screwsWorld(), wrapProfile: S.result && S.result.wrapProfile, seatDir: S.result && S.result.seatDir }, frameAxes()), ac.signal);
       // the connecting bar: a separate part, its own server call (exact solids; the server also measures its bone clearance)
       if (S.result && S.result.bar && S.result.bar.ok) stage('Sunucuda bağlantı köprüsü hazırlanıyor…');
       if (S.result && S.result.bar && S.result.bar.ok) r.bar = await serverBar(S.result.bar.spec, ac.signal);
       S.prod = Object.assign(r, { key: prodKey() });
       $('prodMsg').textContent = `${xl("Üretim STL'i hazır:")} ${r.watertight ? xl('su geçirmez') : xl('SU GEÇİRMEZ DEĞİL')}, ${xl(`${r.bodies} parça`)}${r.bodies > (S.g.split ? 2 : 1) ? ' ' + xl("(BEKLENENDEN FAZLA PARÇA, guide'ı kontrol edin)") : ''}, ${fmt(r.volume / 1000, 2)} cm³, ${xl(`${r.faces} üçgen`)}. ${xl('Pakete guide_uretim.stl olarak eklenir.')}`;
+      const pw = prodWhy(r); if (pw) $('prodMsg').textContent += ' ' + pw;
       if (r.bar) $('prodMsg').textContent += ` ${xl("Köprü STL'i:")} ${r.bar.watertight ? xl('su geçirmez') : xl('SU GEÇİRMEZ DEĞİL')}${r.bar.clear != null ? ', ' + xl(`kemiğe en yakın ${fmt(r.bar.clear)} mm`) : ''}. ${xl('Pakete kopru_uretim.stl olarak eklenir.')}`;
       if (S.fib && S.fib.guide && window.Fibula && !ac.signal.aborted) try { stage('Sunucuda fibula guide\'ı hazırlanıyor…'); await Fibula.production(ac.signal); } catch (e) { $('prodMsg').textContent += ` Fibula guide'ı: ${e.message}`; }
     } catch (e) { S.prod = null; $('prodMsg').textContent = e.message; }
     busy(false);
     renderChecks(); renderAppr();
+  }
+  // the server's reasons not to print an STL, in words (the production message, the checks, the reports)
+  function prodWhy(r) {
+    if (!r || !r.issues) return '';
+    const out = [];
+    if (r.productionOk === false) out.push(xl('SUNUCU: BU STL BASILAMAZ.'));
+    const nos = (r.screwNos || []).filter(n => n > 0), other = (r.screwNos || []).length - nos.length;
+    if (nos.length) out.push(xl(`Vida ${nos.join(', ')} üretim STL'inde yok (kovan ve delik açılamadı).`));
+    if (other) out.push(xl(`${other} vida (köprü bağlantısı ya da fibula) üretim STL'inde yok.`));
+    const co = r.issues.find(i => i.code === 'resolution_coarsened');
+    if (co) out.push(co.coarser_than_preview ? xl(`Izgara ${fmt(co.used_mm, 2)} mm'ye kabalaştırıldı (istenen ${fmt(co.requested_mm, 2)} mm), önizlemeden kaba.`) : xl(`Izgara ${fmt(co.used_mm, 2)} mm'ye kabalaştırıldı (istenen ${fmt(co.requested_mm, 2)} mm).`));
+    if (r.issues.some(i => i.code === 'not_manifold')) out.push(xl('Ağ kapalı değil (manifold dışı kenar).'));
+    return out.join(' ');
   }
   async function exportPackage() {
     if (!parts.guide || $('expZip').disabled) return;   // (the button's own gate: approvals, critical checks, surgeon)
@@ -3404,7 +3446,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     // plan.json is the whole plan (planOf), so the package can be opened again (dropped on the view, D2); the short
     // summary that used to be the file stays in it under `ozet`
     let summary = null; try { summary = JSON.parse($('json').textContent || 'null'); } catch (e) { /* none yet */ }
-    files.push({ name: 'plan.json', data: JSON.stringify(Object.assign(planOf(), { ozet: summary }), null, 2) }, { name: 'rapor.html', data: reportHTML() });
+    files.push({ name: 'plan.json', data: JSON.stringify(Object.assign(planOf(), { ozet: summary, software: swInfo() }), null, 2) }, { name: 'rapor.html', data: reportHTML() });
     let pdfFailed = false;
     if (window.Report) try { files.push({ name: 'cerrahi_rapor.pdf', data: new Uint8Array(await (await Report.build()).arrayBuffer()) }); } catch (e) { pdfFailed = true; console.warn('pdf report', e); }   // the HTML report is still in the package
     await offer('guide_paketi.zip', zip(files));
@@ -3438,7 +3480,21 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
       g: clone(S.g), gAuto: clone(S.gAuto), lesion: clone(S.lesion), planes: clone(S.planes), screws: clone(S.screws),
       perSide: +$('perSide').value || 2, guideOn: !!S.guideOn, resRemoved: !!S.resRemoved, surgeon: $('surgeon').value.trim(), fibula: S.fib ? clone(S.fib.plan) : null,
       measures: clone(S.measures || []), ext: window.PlanExt ? Object.fromEntries(Object.entries(PlanExt).map(([k, f]) => [k, f.get()])) : {},
+      // the studio version that wrote the plan (not part of the approval hash: audit.js leaves it out)
+      software: { studio: studioVersion() },
     };
+  }
+  // which software made the plan and the files (traceability): the studio's version from the server's config.js and the
+  // production server's version from its /guide reply (only while that STL still matches the plan)
+  function studioVersion() { return typeof window.YOLMED_VERSION === 'string' && window.YOLMED_VERSION ? window.YOLMED_VERSION : null; }
+  function swInfo() {
+    const p = S.prod && S.prod.key === prodKey() ? S.prod : null;
+    return { studio: studioVersion(), guide_server: (p && p.version) || null };
+  }
+  // the "Yazılım sürümü" line of the reports (t: the translation; rapor.html is always Turkish)
+  function swLine(t = xl) {
+    const v = swInfo();
+    return `${t('Yazılım sürümü:')} ${v.studio || t('bilinmiyor (sunucusuz önizleme)')}${v.guide_server && v.guide_server !== v.studio ? ` · ${t('üretim sunucusu')} ${v.guide_server}` : ''}`;
   }
   async function applyPlan(plan) {
     S.restoring = true; S.autoAnchor = false;
@@ -3533,10 +3589,12 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     }
     await applyPlan(plan); return true;
   }
+  // every call to the server goes through auth.js: it carries the access token and asks for it again on a 401 (G2)
+  function sfetch(u, o) { return window.ServerAuth ? ServerAuth.fetch(u, o) : fetch(u, o); }
   function serverUrl() { return ($('aiUrl').value || '').trim().replace(/\/+$/, ''); }
   function select(sel) { if (sel) S.guideSel = false; S.sel = sel; emit('select', sel); renderElements(); rebuildElementParts(S.result ? S.result.pls : planesWorld(), S.result ? S.result.screwInfo : []); applyExplode(); render(); }
   window.Studio = { mandibleView, endModes, onEndModes, startLoad, loadStopped, loadBusy: () => committing, LOAD_CANCELLED, renderComps, setGuideRot, setGuideRoll, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, resEnds, splitGap, cutMisses, evalScrew, resectedAt, resectedNear, resPiece, boneTrack, cutAlongBone, bestScrew,
-    boneSections, sizeBody, autoBody, buildGuideSet, cutsAngle, cutFrame, pieceFrames, pieceBody, screwBodyOn, pieceWrapTop, frameAt, stumpGap, mergeStl, mergeMeshes, AUTO_DEFAULT, G_DEFAULT, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume, boneField, simplifyMesh, BAR, barPlan, barSdf, buildBarMesh, placeLug, longCase, axisOffBone, ramusAxis, stopSides, LONG_MM, CUT_OFF_MAX, prodKey, bonelessCut, reframe, exclusive, settled, makeGuide };
+    boneSections, sizeBody, autoBody, buildGuideSet, cutsAngle, cutFrame, pieceFrames, pieceBody, screwBodyOn, pieceWrapTop, frameAt, stumpGap, mergeStl, mergeMeshes, AUTO_DEFAULT, G_DEFAULT, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume, boneField, simplifyMesh, BAR, barPlan, barSdf, buildBarMesh, placeLug, longCase, axisOffBone, ramusAxis, stopSides, LONG_MM, CUT_OFF_MAX, prodKey, bonelessCut, reframe, exclusive, settled, makeGuide, prodReply, prodWhy, gateChecks, swInfo, swLine, sfetch, reportHTML };
   bus.addEventListener('planeDragged', () => { renderElements(); schedule(true, true); });
   // messages assembled at run time are written in the language that was active: write them again when it changes
   if (window.addEventListener) window.addEventListener('langchange', () => { try { renderChecks(); renderAppr(); syncLesion(); } catch (e) { /* no case open yet */ } });
