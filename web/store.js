@@ -14,10 +14,14 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
   const rid = () => Math.random().toString(36).slice(2, 10);
   const esc = t => String(t).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
 
+  // server calls carry the access token when the server asks for one (auth.js, G2)
+  const sfetch = (u, o) => (window.ServerAuth ? ServerAuth.fetch(u, o) : fetch(u, o));
+
   // ---------- backends ----------
   function RestBackend(base) {
     const req = async (method, path, body) => {
-      const r = await fetch(base + path, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
+      const r = await sfetch(base + path, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
+      if (r.status === 401) throw new Error(xl('sunucu erişim anahtarını kabul etmedi (Ayarlar → Erişim anahtarını gir)'));
       if (!r.ok) throw new Error(`sunucu ${r.status}`);
       return r.json();
     };
@@ -70,9 +74,13 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
   async function pickBackend() {
     const url = St.serverUrl();
     if (url) {
+      if (window.ServerAuth) await ServerAuth.ready();   // the token first (G2), so the probe below carries it
       try {
         const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 1500);
-        const r = await fetch(url + '/cases', { signal: ctl.signal }); clearTimeout(t);
+        // (a plain probe that never asks for the token: a 401 means the server is there and wants one, which the
+        // backend's first call asks for; it is not "offline")
+        const r = await fetch(url + '/cases', { signal: ctl.signal, headers: window.ServerAuth ? ServerAuth.header() : {} }); clearTimeout(t);
+        if (r.status === 401) return RestBackend(url);
         if (r.ok && Array.isArray(await r.json())) return RestBackend(url);
       } catch (e) { /* not reachable from here */ }
     }
