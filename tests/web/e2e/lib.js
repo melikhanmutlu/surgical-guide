@@ -146,6 +146,21 @@ async function start(opt = {}) {
       await page.waitForFunction(() => window.Studio && !(Studio.loadBusy && Studio.loadBusy()), null, { timeout });
       await page.evaluate(() => Studio.settled && Studio.settled()); await h.idle(timeout, 400);
     },
+    // the plan has been written to the case store: settled, then "Kaydedildi …" shown for longer than the autosave
+    // debounce (1 s, store.js queueSave), so no save is still queued behind it
+    async saved(timeout = 60000) {
+      await h.settle(); const end = Date.now() + timeout; let since = 0;
+      while (Date.now() < end) {
+        const ok = await page.evaluate(() => /^Kaydedildi/.test((document.getElementById('saveState') || {}).textContent || '')).catch(() => false);
+        if (ok) { if (!since) since = Date.now(); if (Date.now() - since >= 1500) return true; } else since = 0;
+        await sleep(150);
+      }
+      return false;
+    },
+    // the fibula plan has been computed (segments exist) and every rebuild has settled
+    async fibReady(timeout = 240000) {
+      await page.waitForFunction(() => window.Fibula && Fibula.state().last, null, { timeout }); await h.settle(timeout);
+    },
     async waitReady(timeout = 240000) {
       await page.waitForFunction(() => window.Studio && Studio.S && Studio.S.vol && Studio.parts && Studio.parts.bone, null, { timeout });
       await h.idle(timeout);
