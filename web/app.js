@@ -2684,6 +2684,9 @@
     previewElements();
     // while dragging only the cut discs and screws move; the resected piece and the guide follow on release
     clearTimeout(timer); rebuildPending = true;
+    // an edit that dropped an approval locks the package (and turns the status from "Onaylı plan") at once, not when the
+    // rebuild ends seconds later (the download itself also waits for the rebuild)
+    if (!$('expZip').disabled && pending().length) renderAppr();
     timer = setTimeout(() => exclusive(async () => { if (timer !== t) return; live.jobs = (live.jobs || 0) + 1; try {
       if (live.resDirty) { live.planes = live.resDirty = false; busy(true, 'Rezeksiyon güncelleniyor…'); await sleep(); await rebuildResection(); }
       if (S.screwRefit) { S.screwRefit = false; if (S.guideOn && S.anchor) { placeScrews(); S.sel = null; renderElements(); } }
