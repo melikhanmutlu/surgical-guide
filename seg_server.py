@@ -61,13 +61,19 @@ WRITE_MIN_RATE = 64 * 1024            # bytes per second a client must read an a
 # Content-Security-Policy of every answer (the studio's page is the one that matters): its own files, three.js /
 # dicom-parser / the DICOM codecs from jsDelivr (the codecs are WebAssembly), the Google fonts stylesheet. Inline style
 # attributes are used by the studio's templates; there are no inline scripts.
+# third-party code is pinned to the exact package versions web/index.html and web/codecs.js load (a path ending in "/"
+# matches that package only), so a script from any other package on the same CDN is refused (G4)
+CDN_PKGS = " ".join("https://cdn.jsdelivr.net/npm/%s/" % p for p in (
+    "three@0.147.0", "dicom-parser@1.8.21", "jpeg-lossless-decoder-js@2.1.2", "@cornerstonejs/codec-charls@1.2.7",
+    "@cornerstonejs/codec-libjpeg-turbo-12bit@0.4.7", "@cornerstonejs/codec-libjpeg-turbo-8bit@1.2.8",
+    "@cornerstonejs/codec-openjpeg@1.3.6"))
 CSP_BASE = {
     "default-src": "'self'",
-    "script-src": "'self' https://cdn.jsdelivr.net 'wasm-unsafe-eval'",
+    "script-src": "'self' " + CDN_PKGS + " 'wasm-unsafe-eval'",
     "style-src": "'self' 'unsafe-inline' https://fonts.googleapis.com",
     "font-src": "'self' https://fonts.gstatic.com data:",
     "img-src": "'self' data: blob:",
-    "connect-src": "'self' https://cdn.jsdelivr.net",
+    "connect-src": "'self' " + CDN_PKGS,
     "worker-src": "'self' blob:",
     "object-src": "'none'",
     "base-uri": "'self'",

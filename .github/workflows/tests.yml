@@ -3,6 +3,7 @@
 name: tests
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 permissions:
@@ -31,3 +32,21 @@ jobs:
           YOLMED_TOKEN: ""
           YOLMED_ALLOWED_ORIGINS: ""
         run: sh tests/run_all.sh fast
+  web-unit:
+    # the browser modules' suites (tests/web/unit: node + vendored three.js, no browser); slower than the fast job
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - name: Install Python dependencies (pinned)
+        run: pip install -r requirements.txt
+      - name: Web unit suites
+        run: sh tests/web/unit/run_all.sh
