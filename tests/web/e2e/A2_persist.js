@@ -131,18 +131,25 @@ const diff = (a, b) => Object.keys(Object.assign({}, a, b)).filter(k => JSON.str
     await h.openStep(3); await page.click('#autoPrep'); await h.idle();
     await h.openStep(4); await page.click('#fibN button[data-n="1"]'); await h.idle();
     await h.openStep(5); await page.evaluate(() => { const d = document.getElementById('secPlate'); if (!d.open) d.querySelector('summary').click(); });
+    // the default guide (L=43) leaves no plate hole inside the guide area, so "align" would move no screw and the plate
+    // flag would not be exercised at all (Denetim 4 e2e H2): a 50 mm guide gives the plate holes under the guide
+    if (alignPlate) { const twin = page.locator('#g_L').locator('xpath=ancestor::div[contains(@class,"ctl")]//input[not(@type="range")]').first();
+      if (await twin.count()) { await twin.fill('50'); await twin.press('Enter'); } else await h.setRange('#g_L', 50); await h.sleep(800); await h.idle(); }
     await page.check('#plOn'); await h.sleep(800); await h.idle();
     if (alignPlate) { await page.click('#plScrews'); await h.sleep(800); await h.idle(); await h.sleep(600); await h.idle(); }
+    return h.ev(() => Studio.S.screws.map(s => !!(s && s.plate)));
   };
-  await h.run('A2.9', 'Onaylı plan + yeniden aç', 'Plak + "Vidaları plağa hizala" + tüm onaylar (mühendis + cerrah) → sayfayı yenile', 'Plan aynı, onaylar geçerli kalır, paket indirilebilir', async () => {
-    await fullPlan(true);
+  await h.run('A2.9', 'Onaylı plan + yeniden aç', 'Guide 50 mm + plak + "Vidaları plağa hizala" + tüm onaylar (mühendis + cerrah) → sayfayı yenile', 'Hizalama en az 1 vidayı plağa koyar; plan ve plate bayrakları aynı, onaylar geçerli kalır, paket indirilebilir', async () => {
+    const f0 = await fullPlan(true);
     const a = await approveAll();
     await h.sleep(3000);
     await page.reload({ waitUntil: 'domcontentloaded' }); await h.waitReady(); await h.sleep(3000); await h.idle(); await h.sleep(1500); await h.idle();
     const b = { pend: await h.ev(() => Studio.pendingList()), zip: await page.$eval('#expZip', x => !x.disabled), pill: await page.textContent('#readyPill'), plateFlag: await h.ev(() => Studio.S.screws.map(s => !!s.plate)) };
     await h.openStep(7);
     const ev = await h.shot('A2.9_onayli_yeniden');
-    return { pass: a.zip && b.zip && !b.pend.length, actual: `onay sonrası: paket=${a.zip}, durum "${a.pill}", bekleyen ${JSON.stringify(a.pend)}; yeniden açınca: paket=${b.zip}, durum "${b.pill}", bekleyen ${JSON.stringify(b.pend)}, vidalarda plate bayrağı ${JSON.stringify(b.plateFlag)}`, evidence: ev };
+    // Y2: alignment must put at least one screw on the plate, and the flags must come back unchanged after the reload
+    const flagsOk = f0.some(Boolean) && JSON.stringify(f0) === JSON.stringify(b.plateFlag);
+    return { pass: a.zip && b.zip && !b.pend.length && flagsOk, actual: `hizalama sonrası plate bayrağı ${JSON.stringify(f0)}; onay sonrası: paket=${a.zip}, durum "${a.pill}", bekleyen ${JSON.stringify(a.pend)}; yeniden açınca: paket=${b.zip}, durum "${b.pill}", bekleyen ${JSON.stringify(b.pend)}, vidalarda plate bayrağı ${JSON.stringify(b.plateFlag)}`, evidence: ev };
   });
   await h.run('A2.10', 'Onaylı plan + geri al', 'Plak (hizalamasız) + tüm onaylar → kesi 1 değişikliği → ↶ geri al → paket indir', 'Onaylar geri gelir; paket plak dosyalarını içerir', async () => {
     await fullPlan(false);
