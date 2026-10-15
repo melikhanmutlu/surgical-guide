@@ -2580,7 +2580,7 @@
     renderElements(); syncLesion(); renderAppr(); renderJSON(); emit('changed');
   }
   function renderAppr() {
-    if (!S.anchor) { $('appr').innerHTML = '<li class="sum"><span class="hint">Rezeksiyon bölgesi seçilince onaylanacak öğeler burada listelenir.</span></li>'; $('expZip').disabled = true; syncOne(); return; }
+    if (!S.anchor) { $('appr').innerHTML = '<li class="sum"><span class="hint">Rezeksiyon bölgesi seçilince onaylanacak öğeler burada listelenir.</span></li>'; $('expZip').disabled = true; syncOne(); lockNow({ ready: false, pend: 0 }); return; }
     const qcCrit = S.qc.some(q => q[0] === 'crit');
     const row = (ref, name, o, sub) => `<li><button class="go" data-go="${ref}"><span class="nm">${name}</span><small>${sub || ''}</small></button><span class="act">${badge(o)} <button data-ap="${ref}">${o.ok ? 'Kaldır' : '<svg class="i"><use href="#i-check"/></svg>Onayla'}</button></span></li>`;
     const L = S.lesion, R = S.result;
@@ -2598,7 +2598,7 @@
     $('appr').querySelectorAll('[data-ap]').forEach(b => b.addEventListener('click', () => approveItem(b.dataset.ap)));
     const missing = pending(), name = $('surgeon').value.trim();
     const ready = !missing.length && !S.crit && !qcCrit && name && S.result;
-    $('expZip').disabled = !ready; syncOne();
+    $('expZip').disabled = !ready; syncOne(); lockNow({ ready: !!ready, pend: missing.length });
     if (S.prod && S.prod.key !== prodKey()) $('prodMsg').textContent = 'Plan değişti; üretim STL\'ini yeniden alın.';
     const why = [];
     if (!name) why.push(xl('onaylayan cerrahın adı girilmedi'));
@@ -2649,6 +2649,10 @@
       pv.copy(q).project(camera);
       const vis = pv.z < 1 && Math.abs(pv.x) <= 1 && Math.abs(pv.y) <= 1;
       el.hidden = !vis;
+  // the package lock as renderAppr last set it: the top bar status (ui.js) reads this instead of counting on its own, so it
+  // never shows "Onay bekliyor (1)" over an open package or "Onaylı plan" over a locked one; every lock change is announced
+  let lock = { ready: false, pend: 0 };
+  function lockNow(l) { const was = lock; lock = l; if (was.ready !== l.ready || was.pend !== l.pend) emit('lock', l); }
       el.style.left = (rect.left - host.left + (pv.x + 1) / 2 * w) + 'px'; el.style.top = (rect.top - host.top + (1 - pv.y) / 2 * rect.height - 8) + 'px';
     });
     if (window.Measure) Measure.place();
@@ -3602,7 +3606,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   function serverUrl() { return ($('aiUrl').value || '').trim().replace(/\/+$/, ''); }
   function select(sel) { if (sel) S.guideSel = false; S.sel = sel; emit('select', sel); renderElements(); rebuildElementParts(S.result ? S.result.pls : planesWorld(), S.result ? S.result.screwInfo : []); applyExplode(); render(); }
   window.Studio = { mandibleView, endModes, onEndModes, startLoad, loadStopped, loadBusy: () => committing, LOAD_CANCELLED, renderComps, setGuideRot, setGuideRoll, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, resEnds, splitGap, cutMisses, evalScrew, resectedAt, resectedNear, resPiece, boneTrack, cutAlongBone, bestScrew,
-    boneSections, sizeBody, autoBody, buildGuideSet, cutsAngle, cutFrame, pieceFrames, pieceBody, screwBodyOn, pieceWrapTop, frameAt, stumpGap, mergeStl, mergeMeshes, AUTO_DEFAULT, G_DEFAULT, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume, boneField, simplifyMesh, BAR, barPlan, barSdf, buildBarMesh, placeLug, longCase, axisOffBone, ramusAxis, stopSides, LONG_MM, CUT_OFF_MAX, prodKey, bonelessCut, reframe, exclusive, settled, makeGuide, prodReply, prodWhy, gateChecks, swInfo, swLine, sfetch, reportHTML };
+    boneSections, sizeBody, autoBody, buildGuideSet, cutsAngle, cutFrame, pieceFrames, pieceBody, screwBodyOn, pieceWrapTop, frameAt, stumpGap, mergeStl, mergeMeshes, AUTO_DEFAULT, G_DEFAULT, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume, boneField, simplifyMesh, BAR, barPlan, barSdf, buildBarMesh, placeLug, longCase, axisOffBone, ramusAxis, stopSides, LONG_MM, CUT_OFF_MAX, prodKey, lockState: () => lock, bonelessCut, reframe, exclusive, settled, makeGuide, prodReply, prodWhy, gateChecks, swInfo, swLine, sfetch, reportHTML };
   bus.addEventListener('planeDragged', () => { renderElements(); schedule(true, true); });
   // messages assembled at run time are written in the language that was active: write them again when it changes
   if (window.addEventListener) window.addEventListener('langchange', () => { try { renderChecks(); renderAppr(); syncLesion(); } catch (e) { /* no case open yet */ } });
