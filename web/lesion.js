@@ -148,7 +148,8 @@ window.Lesion = (function () {
       // with a guide already on, it follows the new cuts and is checked again for fit
       if (S.guideOn) {
         St.busy(true, 'Guide\'ın takılabilirliği kontrol ediliyor…');
-        const f = await St.fitWrap();
+        // one rebuild job at a time (W25): fitWrap tries wrap / split / screw values on S.g, so it waits for a running rebuild
+        const f = await St.exclusive(() => St.fitWrap());
         wrapNote = !f ? '' : !f.ok ? xl(' Guide bu yerleşimde takılamıyor; kontrolleri inceleyin.') : (f.split ? xl(' Kavisli kemik nedeniyle iki ayrı guide seçildi.') : '') + (f.wrap < (S.kind === 'leg' ? 6 : 5) ? xl(` Guide takılabilsin diye sarma derinliği ${fmt(f.wrap, 1)} mm'ye indirildi.`) : '');
       } else wrapNote = '';
     } finally { St.busy(false); }
