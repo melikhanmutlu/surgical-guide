@@ -136,3 +136,4 @@ test('D1: the PDF report has a searchable text layer with Turkish letters', asyn
 });
 
 await run('d4_last');
+await new Promise(r => process.stdout.write("", r)); process.exit(process.exitCode || 0);   // (the studio's timers keep the loop alive)
