@@ -36,7 +36,9 @@ if [ "$MODE" = slow ] || [ "$MODE" = all ]; then
   suite server/slow_clients python3 tests/server/test_slow.py
   suite server/guide_quality python3 tests/server/test_guide_quality.py
   suite server_preview      python3 tests/test_server_preview.py
-  suite unit/all            sh tests/web/unit/run_all.sh
+  # ~25 browser unit suites, each under its own limit inside: one SUITE_TIMEOUT for all of them ran out on a loaded
+  # 4-core machine (Denetim 4 verification), so the wrapper gets three
+  TO0=$TO; TO=$(( TO * 3 )); suite unit/all sh tests/web/unit/run_all.sh; TO=$TO0
 fi
 echo "=== summary ($MODE)$summary"
 exit $fail
