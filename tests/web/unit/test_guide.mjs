@@ -250,6 +250,13 @@ test('applyPlan (D-7): an approval stamped in the app comes back; one written in
   const edited = St.clone(saved); edited.planes[0].off = -12; edited.planes[1] = Object.assign({}, edited.planes[1], { ok: true, by: 'Dr Y', at: saved.planes[0].at, sig: saved.planes[0].sig });
   await St.applyPlan(edited);
   assert.equal(S.planes[0].ok, false); assert.equal(S.planes[1].ok, false); assert.equal(S.lesion.ok, true);
+  // the guide frame turned in the file (normal, bone axis or guide rotation): every cut moves in the world, so it is dropped
+  for (const turn of [f => { f.anchor.n = [0, 0.6, 0.8]; }, f => { f.anchor.axis = [0, 1, 0]; }, f => { f.g = Object.assign({}, f.g, { rot: 15 }); }]) {
+    const t = St.clone(saved); turn(t);
+    await St.applyPlan(t);
+    assert.equal(S.planes[0].ok, false, 'frame change keeps the cut approval');
+  }
+  await St.applyPlan(St.clone(saved)); assert.equal(S.planes[0].ok, true);
 });
 
 await run('app.js guide kernel (Studio)');

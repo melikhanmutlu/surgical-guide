@@ -185,15 +185,18 @@
   };
   const bus = new EventTarget(), emit = (t, d) => bus.dispatchEvent(new CustomEvent(t, { detail: d }));
   const SCREW_DEFAULT = { mandible: { d: 2.0, D: 5, sleeveH: 5, len: 10 }, leg: { d: 2.5, D: 5.5, sleeveH: 6, len: 20 }, dicom: { d: 2.0, D: 5, sleeveH: 5, len: 12 } };
-  // an item's approval stamp is bound to what was approved (D-7): its own values and the guide centre they are measured from
-  // (the stored centre comes back exactly; the normals are renormalised on reading, so they are left out).
+  // an item's approval stamp is bound to what was approved (D-7): its own values and the whole guide frame they are measured
+  // from (centre, seating normal, bone axis, guide rotation): the cuts and drill lines are placed in that frame, so a frame
+  // changed after approval moves them. The normals are renormalised on reading, so they are compared rounded to 1e-4.
   // A stored plan whose approved item was edited afterwards (or whose stamp was copied onto another item) opens with that
   // approval removed. Tamper-evident for a hand-edited file, not a signature: the audit chain (audit.js) is the record.
   const SIG_KEYS = { l: ['from', 'to', 'margin', 'condyle'], p: ['off', 'yaw', 'pitch', 'w', 'pv', 'pn'], s: ['u', 'v', 'tiltU', 'tiltV', 'd', 'D', 'sleeveH', 'len', 'part', 'plate'] };
   const kindOf = o => (o === S.lesion ? 'l' : S.planes.includes(o) ? 'p' : S.screws.includes(o) ? 's' : null);
   function itemSig(o, k) {
     const r3 = q => [q.x, q.y, q.z].map(x => Math.round(x * 1000) / 1000);
-    const t = JSON.stringify([k, SIG_KEYS[k].map(x => (o[x] === undefined ? null : o[x])), S.anchor ? r3(S.anchor.p) : null]);
+    const r4 = q => [q.x, q.y, q.z].map(x => Math.round(x * 1e4) / 1e4 + 0);
+    const t = JSON.stringify([k, SIG_KEYS[k].map(x => (o[x] === undefined ? null : o[x])),
+      S.anchor ? [r3(S.anchor.p), r4(S.anchor.n), r4(S.anchor.axis), S.g.rot || 0] : null]);
     let a = 0x811c9dc5, b = 0x5bd1e995;
     for (let i = 0; i < t.length; i++) { const c = t.charCodeAt(i); a = Math.imul(a ^ c, 16777619); b = Math.imul(b ^ c, 0x5bd1e995) ^ (b >>> 15); }
     return (a >>> 0).toString(16).padStart(8, '0') + (b >>> 0).toString(16).padStart(8, '0');
