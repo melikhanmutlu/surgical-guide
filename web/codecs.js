@@ -48,20 +48,28 @@
   const fail = (uid, msg) => new Error(`DICOM ${name(uid)} (${clean(uid)}): ${msg}`);
 
   // ---------------- lazy third-party codec loading ----------------
+  // Subresource integrity (G4): the WASM codecs' scripts and .wasm files are checked against these hashes (the .wasm is
+  // fetched here with `integrity` and handed over as wasmBinary, so the codec never fetches it unchecked). The JPEG
+  // Lossless decoder is an ES module loaded with import(), which takes no integrity: it rests on the pinned version and
+  // the server's Content-Security-Policy (script-src limited to this CDN).
   const CODECS = {
     jpegLossless: { pkg: 'jpeg-lossless-decoder-js@2.1.2', file: 'release/lossless-min.js', esm: true },
-    charls: { pkg: '@cornerstonejs/codec-charls@1.2.7', file: 'dist/charlswasm_decode.js', wasm: 'dist/charlswasm_decode.wasm', global: 'CharLSWASM' },
-    openjpeg: { pkg: '@cornerstonejs/codec-openjpeg@1.3.6', file: 'dist/openjpegwasm_decode.js', wasm: 'dist/openjpegwasm_decode.wasm', global: 'OpenJPEGWASM' },
-    jpeg8: { pkg: '@cornerstonejs/codec-libjpeg-turbo-8bit@1.2.8', file: 'dist/libjpegturbowasm_decode.js', wasm: 'dist/libjpegturbowasm_decode.wasm', global: 'libjpegturbowasm_decode' },
-    jpeg12: { pkg: '@cornerstonejs/codec-libjpeg-turbo-12bit@0.4.7', file: 'dist/libjpegturbo12wasm.js', wasm: 'dist/libjpegturbo12wasm.wasm', global: 'libjpegturbo12wasm' },
+    charls: { pkg: '@cornerstonejs/codec-charls@1.2.7', file: 'dist/charlswasm_decode.js', wasm: 'dist/charlswasm_decode.wasm', global: 'CharLSWASM',
+      sri: 'sha384-YYX1efVVRTVsTlvbWH/QqBbbs7VN27/qLNSGXCImT+DYwFRzqFvsRJMCyvEiiUpX', wasmSri: 'sha384-nUrDETTAHheIJwIcHuEGlHYEX1Hl+Nb/VuVbj6xFI2yQahKVeNqWBPtRcZH7xi+/' },
+    openjpeg: { pkg: '@cornerstonejs/codec-openjpeg@1.3.6', file: 'dist/openjpegwasm_decode.js', wasm: 'dist/openjpegwasm_decode.wasm', global: 'OpenJPEGWASM',
+      sri: 'sha384-2d0uFnefmrsUyM92krljsCy3fnu5wefwCwX0au75MDClK9PQa3FuUWhmvDNPrg68', wasmSri: 'sha384-vnERhjKq0JjqCuNAa/LFmVQcF6vG6mYNF49WJQCnRMAV/t9yMtqThwjxHTJ6uE4D' },
+    jpeg8: { pkg: '@cornerstonejs/codec-libjpeg-turbo-8bit@1.2.8', file: 'dist/libjpegturbowasm_decode.js', wasm: 'dist/libjpegturbowasm_decode.wasm', global: 'libjpegturbowasm_decode',
+      sri: 'sha384-ca/Gy5vYnJUDn0XdPC0d1s4/tC/UgtabcWjOt4GNDe2ygKPIQd8zgVPDnFchhlkc', wasmSri: 'sha384-UJPIawMl9tERYDzMnY4HsZSyrzxG26JO7hyzRs088H82VGnOXmnuXdwawqxLbcnw' },
+    jpeg12: { pkg: '@cornerstonejs/codec-libjpeg-turbo-12bit@0.4.7', file: 'dist/libjpegturbo12wasm.js', wasm: 'dist/libjpegturbo12wasm.wasm', global: 'libjpegturbo12wasm',
+      sri: 'sha384-9sCOVvJsb00qFryyndd6NJHwYZ8ZGagIcGshGHfVnqEAQ1fEgKQf2jRNTnmejf5o', wasmSri: 'sha384-V2G/jTs79vX1qtZkc/rkiEXPs4s/zeDVj/sXFXOG6MNc6HGNWFlRZ0P8Mi+cxv2J' },
   };
   const pending = {};
   const loadedNames = [];
   const url = (c, f) => api.cdn.replace(/\/?$/, '/') + c.pkg + '/' + f;
-  function loadScript(src) {
+  function loadScript(src, integrity) {
     return new Promise((res, rej) => {
       const s = document.createElement('script');
-      s.src = src; s.async = true; s.crossOrigin = 'anonymous';
+      s.src = src; s.async = true; s.crossOrigin = 'anonymous'; if (integrity) s.integrity = integrity;
       s.onload = () => res(); s.onerror = () => rej(new Error('could not load ' + src));
       document.head.appendChild(s);
     });
@@ -73,9 +81,12 @@
         let mod;
         if (c.esm) mod = await import(url(c, c.file));
         else {
-          if (typeof window[c.global] !== 'function') await loadScript(url(c, c.file));
+          if (typeof window[c.global] !== 'function') await loadScript(url(c, c.file), c.sri);
           const wasmUrl = url(c, c.wasm);
-          mod = await window[c.global]({ print: () => {}, locateFile: f => (f.endsWith('.wasm') ? wasmUrl : url(c, 'dist/' + f)) });
+          const r = await fetch(wasmUrl, c.wasmSri ? { integrity: c.wasmSri, mode: 'cors' } : {});
+          if (!r.ok) throw new Error('could not load ' + wasmUrl);
+          const wasmBinary = new Uint8Array(await r.arrayBuffer());
+          mod = await window[c.global]({ print: () => {}, wasmBinary, locateFile: f => (f.endsWith('.wasm') ? wasmUrl : url(c, 'dist/' + f)) });
         }
         loadedNames.push(c.pkg);
         return mod;
