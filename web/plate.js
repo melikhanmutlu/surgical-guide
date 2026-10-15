@@ -19,7 +19,9 @@ window.Plate = (function () {
   const DEF = { on: false, sys: 'recon24', h: 0, ext: 25, w: 7, t: 2.5, pitch: 8, d: 2.4, shift: 0 };
   let P = Object.assign({}, DEF), last = null, timer = null;
 
-  // ---------- surface walk ----------
+  // ---------- plate line ----------
+  // bone, and the graft meshes when there are grafts (else the resected piece, the intact contour); F: the intact contour
+  // behind the grafts, used in the defect where the line at its height does not meet a graft
   function targets() {
     const out = [], pt = St.parts;
     if (pt.bone) out.push([pt.bone.obj, 'bone']);
@@ -27,46 +29,65 @@ window.Plate = (function () {
     else if (pt.resected) out.push([pt.resected.obj, 'defect']);
     return out;
   }
+  const fallback = () => (St.parts.grafts && St.parts.grafts.obj.children.length && St.parts.resected ? [[St.parts.resected.obj, 'defect']] : []);
   const rc = new THREE.Raycaster();
-  function snap(q, n, T) {
-    for (const lift of [10, 22]) {
-      rc.set(q.clone().addScaledVector(n, lift), n.clone().negate()); rc.far = lift + 14;
-      // graft meshes hold the whole fibula piece and are cut to length by clipping planes: skip the clipped-away part
-      const h = rc.intersectObjects(T.map(t => t[0]), false).find(x => !clipped(x));
-      if (!h) continue;
-      const nn = h.face.normal.clone().transformDirection(h.object.matrixWorld);
-      if (nn.dot(n) < 0) nn.negate();
-      return { p: h.point.clone(), n: nn, kind: T.find(t => t[0] === h.object)[1] };
-    }
+  const clipped = h => { const cp = h.object.material && h.object.material.clippingPlanes; return !!cp && cp.some(pl => pl.distanceToPoint(h.point) < -0.05); };
+  // The line is found by projection, not by walking over the surface. A free surface walk turns with the surface normal:
+  // on the real mandible CT it rolled over the lower border onto the lingual face, or round the end of the bone back
+  // to the start (Denetim 4 E1: 235 mm / 652 deg; after a first fix that stopped such walks, the line found was 151 mm /
+  // 509 deg under the bone, critical, so no plate could be planned). Here stations march along the arch and at each the
+  // bone is met by a ray coming in from the buccal side b: square to the travel direction t and, away from a condyle,
+  // level (square to the guide frame's vertical v, at the chosen height). b is carried along the line (it turns with t
+  // about v, never about t), so it cannot roll over the crest or the border, and a ray from outside the arch meets the
+  // lateral cortex first. t follows the arch (the chord over the last few mm, at most TURN deg per step). Where the bone
+  // runs out at the chosen height the station moves up or down (DZ mm; a sloping border) and drifts back to the height;
+  // a hit more than JUMP mm deeper or shallower than the last point is not the same face (the end of the bone, a notch);
+  // where nothing is met the line ends (ok false: the plate is short there).
+  const STEP = 1.5, LIFT = 20, DEEP = 12, JUMP = 4, DZ = 6, TURN = 12, CHORD = 4, NSMOOTH = 4, PSMOOTH = 4;
+  function probe(c, b, objs) {
+    if (!objs.length) return null;
+    rc.set(c.clone().addScaledVector(b, LIFT), b.clone().negate()); rc.far = LIFT + DEEP;
+    // graft meshes hold the whole fibula piece and are cut to length by clipping planes: skip the clipped-away part
+    const h = rc.intersectObjects(objs.map(t => t[0]), false).find(x => !clipped(x));
+    if (!h) return null;
+    const nn = h.face.normal.clone().transformDirection(h.object.matrixWorld); if (nn.dot(b) < 0) nn.negate();
+    return { p: h.point.clone(), n: nn, kind: objs.find(t => t[0] === h.object)[1] };
+  }
+  // the bone at station c: the chosen height on the bone / graft, then the intact contour there, then up and down
+  function station(c, b, v, T, F, ref, jump) {
+    const ok = q => q && Math.abs(q.p.clone().sub(ref).dot(b)) <= jump;
+    let q = probe(c, b, T); if (ok(q)) return q;
+    q = probe(c, b, F); if (ok(q)) return q;
+    for (let dz = 1; dz <= DZ; dz++) for (const s of [dz, -dz]) for (const set of [T, F]) { q = probe(c.clone().addScaledVector(v, s), b, set); if (ok(q)) return q; }
     return null;
   }
-  const clipped = h => { const cp = h.object.material && h.object.material.clippingPlanes; return !!cp && cp.some(pl => pl.distanceToPoint(h.point) < -0.05); };
-  // walk from s along dir until stop(point, length) is true. prog(point) is the walk's progress away from the defect
-  // (distance past the cut it heads for): a surface walk that runs off the end of the bone, or over the crest or lower
-  // border, wraps round and comes back along the other face (Denetim 4 E1: a 235 mm plate looping back to the start).
-  // The walk therefore must keep moving away from the defect: when its progress falls 1.5 mm below the best reached, or
-  // it goes 20 mm without new progress, it stops at the farthest point (ok false, back true; the plate is short there).
-  // A walk can also make progress while rolling over the crest or the lower border onto the other face: the surface
-  // normal then turns about the walking direction. The net (signed, so surface noise cancels) roll is followed; past
-  // ROLL_MAX the walk stops where the roll was still under half of it.
-  const BACK_TOL = 1.5, STALL_MM = 20, ROLL_MAX = 90;
-  function walk(s, dir, T, stop, prog) {
-    const out = []; let cur = s, d = dir.clone(), len = 0, best = prog(s.p), bi = -1, bLen = 0, roll = 0, ri = -1;
-    for (let i = 0; i < 160; i++) {
-      d.sub(cur.n.clone().multiplyScalar(d.dot(cur.n))).normalize();
-      // a short step first; across the saw gap between bone and graft, longer steps bridge it
-      let nx = null; for (const st of [1.5, 3, 5]) { nx = snap(cur.p.clone().addScaledVector(d, st), cur.n, T); if (nx) break; }
+  // march from s (on the bone, station guide point g0 at the chosen level) along t0 until stop(point, length) (the
+  // length is along the line, so on a curved arch an extension past a cut is measured along the bone); aim: a point the
+  // line heads for instead of staying level (the condyle)
+  function walk(s, g0, t0, b0, v, T, F, stop, aim) {
+    const out = [], pts = [s]; let cur = s, t = t0.clone(), b = b0.clone(), len = 0;
+    for (let i = 0; i < 240; i++) {
+      let nx = null, c = null;
+      for (const st of [STEP, 3, 5]) {
+        c = cur.p.clone().addScaledVector(t, st);
+        // drift back towards the chosen level, at most 0.5 mm a step
+        if (!aim) c.addScaledVector(v, Math.max(-0.5, Math.min(0.5, -c.clone().sub(g0).dot(v))));
+        nx = station(c, b, v, T, F, cur.p, Math.max(JUMP, st)); if (nx) break;
+      }
       if (!nx) return { pts: out, ok: false };
       const step = nx.p.distanceTo(cur.p); if (step < 0.2) return { pts: out, ok: false };
-      d = nx.p.clone().sub(cur.p).normalize(); nx.n.lerp(cur.n, 0.5).normalize();
-      roll += THREE.MathUtils.radToDeg(Math.atan2(V().crossVectors(cur.n, nx.n).dot(d), cur.n.dot(nx.n)));
-      len += step; cur = nx; out.push(cur);
-      if (Math.abs(roll) <= ROLL_MAX / 2) ri = out.length - 1;
-      else if (Math.abs(roll) > ROLL_MAX) return { pts: out.slice(0, ri + 1), ok: false, back: true };
+      len += step; cur = nx; out.push(cur); pts.push(cur);
       if (stop(cur.p, len)) return { pts: out, ok: true };
-      const g = prog(cur.p);
-      if (g > best) { best = g; bi = out.length - 1; bLen = len; }
-      else if (g < best - BACK_TOL || len - bLen > STALL_MM) return { pts: out.slice(0, bi + 1), ok: false, back: true };
+      // new travel direction: the chord over the last CHORD points, level (or towards the aim), turned at most TURN deg
+      let d = cur.p.clone().sub(pts[Math.max(0, pts.length - 1 - CHORD)].p);
+      if (aim) d.normalize().add(aim.clone().sub(cur.p).normalize()); else d.addScaledVector(v, -d.dot(v));
+      if (d.lengthSq() < 1e-6 || d.dot(t) <= 0) continue;
+      d.normalize();
+      const ang = t.angleTo(d), lim = THREE.MathUtils.degToRad(TURN);
+      if (ang > lim) { const ax = V().crossVectors(t, d).normalize(); d = t.clone().applyAxisAngle(ax, lim); }
+      // b carried along: the part of the old b square to the new t (no roll about t)
+      b.addScaledVector(d, -b.dot(d)).normalize(); t = d;
+      if (!aim) { t.addScaledVector(v, -t.dot(v)).normalize(); b.addScaledVector(v, -b.dot(v)).normalize(); }
     }
     return { pts: out, ok: false };
   }
@@ -79,18 +100,22 @@ window.Plate = (function () {
     // rebuild (before the next render updates them) would miss the grafts
     T.forEach(t => t[0].updateMatrixWorld(true));
     const { A, B } = E;
-    // start inside the defect: the anchor, or the middle of the two ends when the cuts have moved off it
+    // start inside the defect: the anchor, or the middle of the two ends when the cuts have moved off it; the buccal
+    // direction there is the guide's seating normal, level
     const ea = A.p.clone().sub(S.anchor.p).dot(u), eb = B.p.clone().sub(S.anchor.p).dot(u), shift = 0 > Math.min(ea, eb) + 2 && 0 < Math.max(ea, eb) - 2 ? 0 : (ea + eb) / 2;
-    const s0 = snap(S.anchor.p.clone().addScaledVector(u, shift).addScaledVector(v, P.h), n, T); if (!s0) return null;
-    const out = q => q.clone().sub(A.p).dot(A.N) < -(A.w / 2 + P.ext);
+    const F = fallback(), g0 = S.anchor.p.clone().addScaledVector(u, shift).addScaledVector(v, P.h), b0 = n.clone().addScaledVector(v, -n.dot(v)).normalize();
+    const s0 = station(g0, b0, v, T, F, g0, DEEP); if (!s0) return null;
+    // past a cut: the extension is measured along the line from where it leaves the slot
+    const past = (beyond, ext) => { let x = null; return (q, len) => { if (x === null && beyond(q)) x = len; return x !== null && len - x >= ext; }; };
     const toA = A.p.clone().sub(s0.p).dot(u) < 0 ? u.clone().negate() : u.clone();
-    const wa = walk(s0, toA, T, q => out(q), q => -q.clone().sub(A.p).dot(A.N));
-    const wb = E.condyle ? walk(s0, toA.clone().negate(), T, q => q.distanceTo(B.p) < 10, q => -q.distanceTo(B.p))
-      : walk(s0, toA.clone().negate(), T, q => q.clone().sub(B.p).dot(B.N) > B.w / 2 + P.ext, q => q.clone().sub(B.p).dot(B.N));
+    const ta = toA.clone().addScaledVector(v, -toA.dot(v)).normalize();
+    const wa = walk(s0, g0, ta, b0, v, T, F, past(q => q.clone().sub(A.p).dot(A.N) < -A.w / 2, P.ext));
+    const wb = E.condyle ? walk(s0, g0, ta.clone().negate(), b0, v, T, F, q => q.distanceTo(B.p) < 10, B.p)
+      : walk(s0, g0, ta.clone().negate(), b0, v, T, F, past(q => q.clone().sub(B.p).dot(B.N) > B.w / 2, P.ext));
     let raw = wa.pts.reverse().concat([s0], wb.pts);
     if (raw.length < 4) return null;
-    // smooth, then resample every 1 mm
-    raw = raw.map((q, i) => { const a = raw.slice(Math.max(0, i - 2), i + 3); const p = V(), nn = V(); a.forEach(x => { p.add(x.p); nn.add(x.n); }); return { p: p.multiplyScalar(1 / a.length), n: nn.normalize(), kind: q.kind }; });
+    // smooth (a window of +-PSMOOTH stations, symmetric so the ends stay where they are), then resample every 1 mm
+    raw = raw.map((q, i) => { const k = Math.min(PSMOOTH, i, raw.length - 1 - i), a = raw.slice(i - k, i + k + 1); const p = V(), nn = V(); a.forEach(x => { p.add(x.p); nn.add(x.n); }); return { p: p.multiplyScalar(1 / a.length), n: nn.normalize(), kind: q.kind }; });
     const cum = [0]; for (let i = 1; i < raw.length; i++) cum.push(cum[i - 1] + raw[i].p.distanceTo(raw[i - 1].p));
     const L = cum[cum.length - 1], path = [];
     for (let s = 0, j = 0; s <= L; s += 1) {
@@ -98,7 +123,10 @@ window.Plate = (function () {
       const f = (s - cum[j]) / ((cum[j + 1] - cum[j]) || 1), a = raw[j], b = raw[j + 1];
       path.push({ s, p: a.p.clone().lerp(b.p, f), n: a.n.clone().lerp(b.n, f).normalize(), kind: f < 0.5 ? a.kind : b.kind });
     }
-    path.forEach((q, i) => { const a = path[Math.max(0, i - 1)].p, b = path[Math.min(path.length - 1, i + 1)].p; q.t = b.clone().sub(a).normalize(); q.n.sub(q.t.clone().multiplyScalar(q.n.dot(q.t))).normalize(); });
+    // the plate face follows the bone over its own width, not each facet of the surface mesh: normals averaged over
+    // +-NSMOOTH mm (facet noise otherwise adds up to a hundred degrees or more of "bending" over a 80 mm line)
+    const ns = path.map((q, i) => { const m = V(); for (let k = Math.max(0, i - NSMOOTH); k <= Math.min(path.length - 1, i + NSMOOTH); k++) m.add(path[k].n); return m.normalize(); });
+    path.forEach((q, i) => { const a = path[Math.max(0, i - 1)].p, b = path[Math.min(path.length - 1, i + 1)].p; q.t = b.clone().sub(a).normalize(); q.n.copy(ns[i]).sub(q.t.clone().multiplyScalar(ns[i].dot(q.t))).normalize(); });
     // holes at the plate's spacing, centred on the defect; a hole within 3 mm of a slot edge or of a joint between
     // two fibula segments is not usable
     const pls = St.planesWorld(), mid = L / 2 + P.shift, holes = [], fl = graftPlan(), lower = fl ? fl.segs.filter(g => !g.barrel) : [];
@@ -112,6 +140,9 @@ window.Plate = (function () {
       const h = { s, p: q.p.clone(), n: q.n.clone(), t: q.t.clone(), region, kind: q.kind, dCut, dJoint, usable: dCut >= 3 && dJoint >= JOINT_GAP, why: dCut < 3 ? 'cut' : dJoint < JOINT_GAP ? 'joint' : null };
       h.seg = region === 'defect' && lower.length ? segOf(lower, h.p) : null;
       Object.assign(h, screwFor(h, fl));
+      // over the defect a plate screw holds only in graft bone: its axis must run at least the minimum screw bone length
+      // in a graft (a graze of the graft's edge is not a hold); otherwise the hole is left empty (why 'graft')
+      if (fl && region === 'defect') { h.graft = graftRun(h, fl); if (h.usable && h.graft < minBone()) { h.usable = false; h.why = 'graft'; } }
       holes.push(h);
     }
     // bending: how much the plate turns, in the plate plane and out of it
@@ -122,9 +153,23 @@ window.Plate = (function () {
       const nb = b.n.clone().addScaledVector(a.t, -b.n.dot(a.t)); if (nb.lengthSq() > 1e-6) twist += Math.abs(Math.atan2(nb.dot(tb), nb.dot(a.n)));
     }
     const r2d = THREE.MathUtils.radToDeg;
-    last = { path, holes, L, ok: wa.ok && wb.ok, back: !!(wa.back || wb.back), E, bend: { inPlane: r2d(inPlane), outPlane: r2d(outPlane), twist: r2d(twist) } };
+    last = { path, holes, L, ok: wa.ok && wb.ok, E, bend: { inPlane: r2d(inPlane), outPlane: r2d(outPlane), twist: r2d(twist) }, graftGap: F.length ? graftGap(path, E, T, g0, b0, v) : null };
     last.crit = assess(last);
     return last;
+  }
+
+  // the grafts are placed at their own height (fibula plan): where the line at the chosen height crosses the defect off
+  // the grafts (on the intact contour, kind 'defect') the plate does not hold them there. Returned: mm of such line and
+  // the grafts' height range at the line's start in the defect (guide-frame height, as P.h) and the height nearest to the
+  // chosen one that crosses them 3 mm inside their edge, for the warning
+  function graftGap(path, E, T, g0, b0, v) {
+    const { A, B } = E, inDef = q => q.clone().sub(A.p).dot(A.N) >= -A.w / 2 && (E.condyle || q.clone().sub(B.p).dot(B.N) <= B.w / 2);
+    const miss = path.filter(q => q.kind === 'defect' && inDef(q.p)).length; if (miss < 3) return null;   // 1 mm path samples; a slot edge is not a gap
+    const G = T.filter(t => t[1] === 'graft'), hs = [];
+    for (let H = -30; H <= 30; H++) if (probe(g0.clone().addScaledVector(v, H - P.h), b0, G)) hs.push(H);
+    if (!hs.length) return { mm: miss, lo: null, hi: null, sug: null };
+    const lo = hs[0], hi = hs[hs.length - 1], sug = hi - lo < 6 ? (lo + hi) / 2 : Math.min(Math.max(P.h, lo + 3), hi - 3);
+    return { mm: miss, lo, hi, sug: Math.max(-15, Math.min(15, Math.round(sug * 2) / 2)) };
   }
 
   // ---------- plausibility ----------
@@ -178,6 +223,15 @@ window.Plate = (function () {
   // plate's top face, i.e. the head seated flush in the plate, so the plate thickness and the modelled plate-bone gap
   // are added to the bone path (Denetim 4 W10: from the bone surface alone the proposal was ~2 mm short and could stop
   // inside the far cortex).
+  // minimum bone along a screw: the clinical profile's screwMinDepth (fibula guide screws; app.js SCREW_MIN_DEPTH, 4 mm,
+  // for the mandible guide screws)
+  const minBone = () => (window.Fibula && Fibula.rules && Fibula.rules().screwMinDepth) || 4;
+  // mm of graft bone along the hole axis (the first 30 mm)
+  function graftRun(h, fl) {
+    const dir = h.n.clone().negate(), q = V(); let run = 0;
+    for (let t = 0; t <= 30; t += 0.25) { q.copy(h.p).addScaledVector(dir, t); if (fl.segs.some((g, i) => Fibula.graftBone(i, q))) run += 0.25; }
+    return run;
+  }
   function screwFor(h, fl) {
     const dir = h.n.clone().negate(), q = V(); let entry = null, lastIn = null, out = 0, t = -1;
     for (; t <= 30; t += 0.25) {
@@ -291,12 +345,12 @@ window.Plate = (function () {
     markMatched();   // the guide screws may have moved since the line was computed (Denetim 4 D6: "0 matched" next to 2 placed)
     const cnt = r => last.holes.filter(h => h.region === r && h.usable).length;
     return { sistem: SYSTEMS[P.sys].name, genislik_mm: P.w, kalinlik_mm: P.t, delik_araligi_mm: P.pitch, uzunluk_mm: Math.round(last.L), holes: last.holes.length,
-      kullanilabilir: { A: cnt('A'), defekt: cnt('defect'), B: cnt('B') }, kesiye_yakin: last.holes.filter(h => !h.usable).length,
+      kullanilabilir: { A: cnt('A'), defekt: cnt('defect'), B: cnt('B') }, kesiye_yakin: last.holes.filter(h => h.why === 'cut' || h.why === 'joint').length,
       bukme_deg: { kalinlik_yonunde: Math.round(last.bend.outPlane), kenar_yonunde: Math.round(last.bend.inPlane), burulma: Math.round(last.bend.twist) },
       kritik: critical().map(c => c.text),
-      guide_ile_eslesen: last.holes.filter(h => h.matched).length, greft_eklemine_yakin: last.holes.filter(h => h.why === 'joint').length,
+      guide_ile_eslesen: last.holes.filter(h => h.matched).length, greft_eklemine_yakin: last.holes.filter(h => h.why === 'joint').length, grefte_tutunmuyor: last.holes.filter(h => h.why === 'graft').length,
       vida_listesi: screwList(),
-      delikler: last.holes.map((h, i) => ({ no: i + 1, bolge: h.region, segment: h.seg == null ? null : h.seg + 1, kullanilabilir: h.usable, neden: h.why === 'cut' ? 'kesiye yakın' : h.why === 'joint' ? 'greft eklemine yakın' : null,
+      delikler: last.holes.map((h, i) => ({ no: i + 1, bolge: h.region, segment: h.seg == null ? null : h.seg + 1, kullanilabilir: h.usable, neden: h.why === 'cut' ? 'kesiye yakın' : h.why === 'joint' ? 'greft eklemine yakın' : h.why === 'graft' ? `greftte ${minBone()} mm kemik yok` : null, greftte_kemik_mm: h.graft == null ? null : h.graft,
         kesiye_mm: +h.dCut.toFixed(1), eklem_mm: Number.isFinite(h.dJoint) ? +h.dJoint.toFixed(1) : null, vida_boyu_mm: h.usable ? h.len : null, kemik_kalinligi_mm: +h.thick.toFixed(1), bikortikal: h.usable && h.len ? h.bi : null,
         konum: h.p.toArray().map(x => +x.toFixed(2)), eksen: h.n.clone().negate().toArray().map(x => +x.toFixed(4)) })) };
   }
@@ -315,8 +369,10 @@ window.Plate = (function () {
     const out = [], need = last.E.condyle ? ['A'] : ['A', 'B'];
     need.forEach(r => { const c = last.holes.filter(h => h.region === r && h.usable).length; if (c < 3) out.push(['warn', 'Uyarı', xl(`Plak ${r === 'A' ? 'birinci' : 'ikinci'} kalan segmentte ${c} vidaya yer bırakıyor; en az 3 önerilir (plak uzantısını artırın).`), 'guide']); });
     critical().forEach(c => out.push(['crit', 'Kritik', xl(c.text), 'guide']));
-    if (last.back) out.push(['warn', 'Uyarı', 'Plak hattı kemiğin ucunda ya da kenarında geri dönüyordu; hat orada kesildi, plak istenenden kısa.', 'guide']);
-    else if (!last.ok) out.push(['warn', 'Uyarı', 'Plak hattı istenen uzunluğa ulaşmadan kemik yüzeyinden çıktı.', 'guide']);
+    if (!last.ok) out.push(['warn', 'Uyarı', 'Plak hattı istenen uzunluğa ulaşmadan kemik yüzeyinden çıktı.', 'guide']);
+    const gg = last.graftGap;
+    if (gg) out.push(['warn', 'Uyarı', gg.lo === null ? xl(`Plak hattı defektte ${gg.mm} mm boyunca grefte değmiyor; bu yükseklikte greft yok. Plak yüksekliğini ya da fibula segmentinin yerini değiştirin.`)
+      : xl(`Plak hattı defektte ${gg.mm} mm boyunca grefte değmiyor; greft bu noktada ${fmt(gg.lo, 0)} ile ${fmt(gg.hi, 0)} mm yükseklik arasında. Plak yüksekliğini yaklaşık ${fmt(gg.sug, Number.isInteger(gg.sug) ? 0 : 1)} mm yapın ya da fibula segmentinin yerini değiştirin.`), 'guide']);
     const fl = graftPlan();
     if (fl) fl.segs.filter(g => !g.barrel).forEach(g => { const c = last.holes.filter(h => h.seg === g.i && h.usable).length; if (c < 2) out.push(['warn', 'Uyarı', `Plak greft segmenti ${g.i + 1} üzerinde ${c} vidaya yer bırakıyor; her segmente en az 2 vida önerilir (delik dizisini kaydırın ya da segment boyunu değiştirin).`, 'guide']); });
     const mono = last.holes.filter(h => h.usable && h.len && !h.bi).length, none = last.holes.filter(h => h.usable && !h.len).length;
@@ -329,7 +385,7 @@ window.Plate = (function () {
   (window.ReportSections = window.ReportSections || []).push(d => {
     const s = summary(); if (!s) return;
     if (d.keep) d.keep(380); d.h2('Plak');
-    d.table(['Özellik', 'Değer'], [['Sistem', `${s.sistem} · ${fmt(s.genislik_mm)} × ${fmt(s.kalinlik_mm)} mm · ${xl(`${fmt(s.delik_araligi_mm)} mm aralık`)}`], ['Uzunluk / delik', `${s.uzunluk_mm} mm · ${s.holes} delik`], ['Kullanılabilir delik', `kalan 1: ${s.kullanilabilir.A} · defekt: ${s.kullanilabilir.defekt} · kalan 2: ${s.kullanilabilir.B}`], ['Kesiye yakın (boş bırakılacak)', `${s.kesiye_yakin}`], ['Toplam bükme', `kalınlık yönünde ${s.bukme_deg.kalinlik_yonunde}° · kenar yönünde ${s.bukme_deg.kenar_yonunde}°`], ['Guide vidalarıyla eşleşen delik', `${s.guide_ile_eslesen}`], ['Greft eklemine yakın (boş bırakılacak)', `${s.greft_eklemine_yakin}`], ['Vida boyları (bikortikal)', screwText(s)], ['Not', 'Vida boyları kemik modelinden ölçülür; sinir kanalı ve diş kökleri ayrıca kontrol edilmelidir.']], [0.34, 0.66]);
+    d.table(['Özellik', 'Değer'], [['Sistem', `${s.sistem} · ${fmt(s.genislik_mm)} × ${fmt(s.kalinlik_mm)} mm · ${xl(`${fmt(s.delik_araligi_mm)} mm aralık`)}`], ['Uzunluk / delik', `${s.uzunluk_mm} mm · ${s.holes} delik`], ['Kullanılabilir delik', `kalan 1: ${s.kullanilabilir.A} · defekt: ${s.kullanilabilir.defekt} · kalan 2: ${s.kullanilabilir.B}`], ['Kesiye yakın (boş bırakılacak)', `${s.kesiye_yakin}`], ['Toplam bükme', `kalınlık yönünde ${s.bukme_deg.kalinlik_yonunde}° · kenar yönünde ${s.bukme_deg.kenar_yonunde}°`], ['Guide vidalarıyla eşleşen delik', `${s.guide_ile_eslesen}`], ['Greft eklemine yakın (boş bırakılacak)', `${s.greft_eklemine_yakin}`], ['Grefte tutunmuyor (boş bırakılacak)', `${s.grefte_tutunmuyor}`], ['Vida boyları (bikortikal)', screwText(s)], ['Not', 'Vida boyları kemik modelinden ölçülür; sinir kanalı ve diş kökleri ayrıca kontrol edilmelidir.']], [0.34, 0.66]);
   });
 
   // ---------- slices: plate cross-section where it meets the slice ----------
@@ -354,7 +410,7 @@ window.Plate = (function () {
       <p class="hint more">Kırmızı delikler kesiye ya da greft eklemine 3 mm'den yakındır, boş bırakılır. Yeşil delikler guide vidalarıyla eşleşir. Vida boyu her delikte plak üst yüzeyinden karşı korteksin 1 mm ötesine kadar ölçülür (plak kalınlığı dahil); sinir kanalı ayrıca kontrol edilmelidir.</p><p class="hint" id="plMsg"></p>` : '<p class="hint more">Plak hattı kalan kemik ve greftlerin dış yüzeyini izler; guide vidaları plak deliklerine yerleştirilebilir.</p>'}`;
     wire();
   }
-  const sumHTML = s => s ? `<dl class="kv"><dt>Uzunluk</dt><dd>${s.uzunluk_mm} mm · ${s.holes} delik</dd><dt>Kullanılabilir</dt><dd>${s.kullanilabilir.A} · ${s.kullanilabilir.defekt} · ${s.kullanilabilir.B}</dd><dt>Kesiye yakın</dt><dd>${s.kesiye_yakin} delik boş kalır</dd><dt>Bükme</dt><dd>${s.bukme_deg.kalinlik_yonunde}° yüzeye · ${s.bukme_deg.kenar_yonunde}° kenara</dd><dt>Guide ile eşleşen</dt><dd>${s.guide_ile_eslesen}</dd>${s.greft_eklemine_yakin ? `<dt>Greft eklemine yakın</dt><dd>${s.greft_eklemine_yakin} delik boş kalır</dd>` : ''}<dt>Vidalar</dt><dd>${screwText(s)}</dd></dl>${s.kritik.length ? `<p class="hint" style="color:var(--crit)"><b>Kritik</b> · ${s.kritik.map(t => St.esc(xl(t))).join('<br>')}</p>` : ''}` : `<p class="hint">${S.anchor ? 'Plak hattı bulunamadı; yüksekliği değiştirin.' : 'Önce rezeksiyon bölgesini ve kesileri belirleyin.'}</p>`;
+  const sumHTML = s => s ? `<dl class="kv"><dt>Uzunluk</dt><dd>${s.uzunluk_mm} mm · ${s.holes} delik</dd><dt>Kullanılabilir</dt><dd>${s.kullanilabilir.A} · ${s.kullanilabilir.defekt} · ${s.kullanilabilir.B}</dd><dt>Kesiye yakın</dt><dd>${s.kesiye_yakin} delik boş kalır</dd><dt>Bükme</dt><dd>${s.bukme_deg.kalinlik_yonunde}° yüzeye · ${s.bukme_deg.kenar_yonunde}° kenara</dd><dt>Guide ile eşleşen</dt><dd>${s.guide_ile_eslesen}</dd>${s.greft_eklemine_yakin ? `<dt>Greft eklemine yakın</dt><dd>${s.greft_eklemine_yakin} delik boş kalır</dd>` : ''}${s.grefte_tutunmuyor ? `<dt>Grefte tutunmuyor</dt><dd>${s.grefte_tutunmuyor} delik boş kalır</dd>` : ''}<dt>Vidalar</dt><dd>${screwText(s)}</dd></dl>${s.kritik.length ? `<p class="hint" style="color:var(--crit)"><b>Kritik</b> · ${s.kritik.map(t => St.esc(xl(t))).join('<br>')}</p>` : ''}` : `<p class="hint">${S.anchor ? 'Plak hattı bulunamadı; yüksekliği değiştirin.' : 'Önce rezeksiyon bölgesini ve kesileri belirleyin.'}</p>`;
   function renderSum() {
     if (!$('plSum')) return;
     const s = summary(); $('plSum').innerHTML = sumHTML(s);
