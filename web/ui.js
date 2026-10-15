@@ -48,7 +48,7 @@ window.UI = (function () {
       st4: fibOk,
       st5: !!R && !!S.anchor && !!St.parts.guide && R.pieces === want && !gCrit,
       st6: S.screws.length > 0 && scOk === S.screws.length && !critOf(/^s\d/),
-      st7: !$('expZip').disabled,
+      st7: !$('expZip').disabled && (!St.lockState || St.lockState().ready),
       st8: exported,
     };
     tag($('tag1'), !S.vol ? '' : qcCrit ? 'crit' : qcWarn ? 'warn' : 'ok', !S.vol ? '' : qcCrit ? 'Kritik' : qcWarn ? 'Uyarı' : 'Uygun');
@@ -57,7 +57,9 @@ window.UI = (function () {
     tag($('tag3'), !S.anchor ? '' : critOf(/^p\d|lesion/) ? 'crit' : resOk === resN ? 'ok' : 'warn', !S.anchor ? '' : `${resOk}/${resN} onaylı`);
     tag($('tag5g'), !R ? '' : gCrit ? 'crit' : 'ok', !R ? '' : gCrit ? 'Kritik' : R.pieces === 1 ? 'Tek parça' : want === 2 && R.pieces === 2 ? 'İki guide' : `${R.pieces} parça`);
     tag($('tag5'), !S.screws.length ? '' : critOf(/^s\d/) ? 'crit' : scOk === S.screws.length ? 'ok' : 'warn', S.screws.length ? `${scOk}/${S.screws.length} onaylı` : '');
-    const pend = S.anchor ? St.pendingList().length : 0;
+    // the status follows the package lock; a lock left open while something is pending is re-run first (fail-safe)
+    if (S.anchor && !$('expZip').disabled && St.pendingList().length) St.renderAppr();
+    const lock = St.lockState ? St.lockState() : { ready: !$('expZip').disabled, pend: St.pendingList().length }, pend = S.anchor ? lock.pend : 0;
     tag($('tag7'), !S.anchor ? '' : S.crit ? 'crit' : done.st7 ? 'ok' : 'warn', !S.anchor ? '' : S.crit ? `${S.crit} kritik` : done.st7 ? 'Onaylı' : `${pend} bekliyor`);
     tag($('tag8'), done.st8 ? 'ok' : '', done.st8 ? 'Alındı' : '');
     const counted = steps.filter(d => !d.hidden && (d.id !== 'st4' || fibOn));
@@ -85,7 +87,7 @@ window.UI = (function () {
   }
   let pend = false;
   const later = () => { if (!pend) { pend = true; requestAnimationFrame(() => { pend = false; sync(); }); } };
-  ['changed', 'parts', 'volume', 'planApplied', 'select'].forEach(t => bus.addEventListener(t, later));
+  ['changed', 'parts', 'volume', 'planApplied', 'select', 'lock'].forEach(t => bus.addEventListener(t, later));
   const mo = new MutationObserver(later);
   ['qc', 'comps', 'checks', 'appr', 'caseInfo', 'expMsg', 'fibStatus'].forEach(id => mo.observe($(id), { childList: true, subtree: true, characterData: true }));
   $('caseName').addEventListener('input', later);

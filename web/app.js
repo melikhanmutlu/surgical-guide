@@ -884,6 +884,75 @@
       return { sc, dir, entry };
     }
   }
+  // ---------- the production server's bone, for the preview guide ----------
+  // yolmed_server.build_guide builds on the full-resolution mask guideRequest sends (HU >= threshold within the planning
+  // bone, or the work field > 0.5 when there is no threshold), closed cavities filled, smoothed with a Gaussian of half a
+  // voxel and read trilinearly. The 0.8 mm work field (S.maskF) rounds the crest, teeth and thin plates of a real CT off
+  // by 1-2 mm, so a preview on it differed from the printed guide by p99 1.5-2 mm there (D4 verification, B2.7). The
+  // preview guide reads this field instead: built for a box of the volume around the guide (buildGuide asks for its
+  // grid's box first), kept while the box, the bone and the threshold stay; a point outside the box (or a box too large
+  // to hold) reads the work field as before.
+  const FINE_MAX = 30e6;
+  function fineField(vol, red, F, thr) {
+    if (!vol || !vol.hu || !red || !F) return q => fieldAt(red, F, [q.x, q.y, q.z]);
+    let C = null;   // { lo: [i, j, k], n: [nx, ny, nz], f: Float32Array }
+    const coarse = q => fieldAt(red, F, [q.x, q.y, q.z]);
+    function build(lo, hi) {
+      const [nx, ny, nz] = [0, 1, 2].map(a => hi[a] - lo[a] + 1), N = nx * ny * nz, nxy = nx * ny;
+      if (N > FINE_MAX || nx < 2 || ny < 2 || nz < 2) return null;
+      const m = new Uint8Array(N), cut = thr == null ? 0.5 : 0.05;
+      for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) {
+        const r = nx * (j + ny * k), src = lo[0] + vol.nx * (lo[1] + j + vol.ny * (lo[2] + k));
+        for (let i = 0; i < nx; i++) {
+          if (thr != null && vol.hu[src + i] < thr) continue;
+          if (fieldAt(red, F, G.worldOf(vol, lo[0] + i, lo[1] + j, lo[2] + k)) > cut) m[r + i] = 1;
+        }
+      }
+      const ext = G.exterior(m, nx, ny, nz);       // (binary_fill_holes: what the outside cannot reach is bone)
+      let a = new Float32Array(N), b = new Float32Array(N);
+      for (let i = 0; i < N; i++) a[i] = ext[i] ? 0 : 1;
+      // scipy gaussian_filter(sigma 0.5 voxel): radius 2, weights e^-8, e^-2, 1, e^-2, e^-8, mirrored edges ('reflect')
+      const w2 = Math.exp(-8), w1 = Math.exp(-2), sum = 1 + 2 * w1 + 2 * w2, W = [w2 / sum, w1 / sum, 1 / sum, w1 / sum, w2 / sum];
+      const refl = (x, n) => (x < 0 ? -x - 1 : x >= n ? 2 * n - x - 1 : x);
+      const pass = (n, stride, outer) => {
+        for (const base of outer) for (let x = 0; x < n; x++) {
+          let acc = 0; for (let t = -2; t <= 2; t++) acc += W[t + 2] * a[base + stride * refl(x + t, n)];
+          b[base + stride * x] = acc;
+        }
+        [a, b] = [b, a];
+      };
+      const rows = function* (A, B, sa, sb) { for (let q = 0; q < B; q++) for (let p = 0; p < A; p++) yield p * sa + q * sb; };
+      pass(nx, 1, rows(ny, nz, nx, nxy)); pass(ny, nx, rows(nx, nz, 1, nxy)); pass(nz, nxy, rows(nx, ny, 1, nx));
+      return { lo, n: [nx, ny, nz], f: a };
+    }
+    const fn = q => {
+      if (!C) return coarse(q);
+      const ix = G.indexOf(vol, [q.x, q.y, q.z]), [nx, ny, nz] = C.n;
+      const x = ix[0] - C.lo[0], y = ix[1] - C.lo[1], z = ix[2] - C.lo[2];
+      if (!(x >= 0 && y >= 0 && z >= 0 && x <= nx - 1 && y <= ny - 1 && z <= nz - 1)) return coarse(q);
+      const i = Math.min(nx - 2, Math.floor(x)), j = Math.min(ny - 2, Math.floor(y)), k = Math.min(nz - 2, Math.floor(z)), fx = x - i, fy = y - j, fz = z - k, nxy = nx * ny, b = i + nx * j + nxy * k, f = C.f;
+      const c00 = f[b] * (1 - fx) + f[b + 1] * fx, c10 = f[b + nx] * (1 - fx) + f[b + nx + 1] * fx;
+      const c01 = f[b + nxy] * (1 - fx) + f[b + nxy + 1] * fx, c11 = f[b + nxy + nx] * (1 - fx) + f[b + nxy + nx + 1] * fx;
+      return (c00 * (1 - fy) + c10 * fy) * (1 - fz) + (c01 * (1 - fy) + c11 * fy) * fz;
+    };
+    // make sure the world points `pts` (a guide grid's corners) lie inside the held box, with a margin
+    fn.prepare = pts => {
+      const ix = pts.map(p => G.indexOf(vol, p)), dims = [vol.nx, vol.ny, vol.nz];
+      const want = [0, 1, 2].map(a => [Math.max(0, Math.floor(Math.min(...ix.map(c => c[a]))) - 3), Math.min(dims[a] - 1, Math.ceil(Math.max(...ix.map(c => c[a]))) + 3)]);
+      if (C && want.every(([l, h], a) => l >= C.lo[a] && h <= C.lo[a] + C.n[a] - 1)) return;
+      const pad = [0, 1, 2].map(a => Math.ceil(6 / vol.sp[a]));
+      C = build(want.map(([l], a) => Math.max(0, l - pad[a])), want.map(([, h], a) => Math.min(dims[a] - 1, h + pad[a]))) || C;
+    };
+    return fn;
+  }
+  // one per bone and threshold: the mandible's guide field (boneField for the guide); the fibula module asks for its own
+  const fineCache = new Map();
+  function guideField(vol = S.vol, red = S.red, F = S.maskF, thr = segThr()) {
+    const hit = fineCache.get(F);
+    if (hit && hit.vol === vol && hit.red === red && hit.thr === thr) return hit.fn;
+    if (fineCache.size > 3) fineCache.clear();
+    const fn = fineField(vol, red, F, thr); fineCache.set(F, { vol, red, thr, fn }); return fn;
+  }
   function boneAt(q) { return boneAtIn(S.red, S.maskF, q); }
   function boneField(q) { return fieldAt(S.red, S.maskF, [q.x, q.y, q.z]); }
   function boneAtIn(r, F, q) { return fieldAt(r, F, [q.x, q.y, q.z]) > 0.5; }
@@ -1411,7 +1480,7 @@
       return bad + (held ? 0 : 1);
     };
     const test = async (h = 0.8) => {
-      const o = await buildGuideSet(Object.assign({ g: S.g, P: S.anchor.p, pls: planesWorld(), scs: screwsWorld(), bone: boneAt, field: boneField, h, noBarMesh: true }, frameAxes())); const R = o.result, want = S.g.split && S.planes.length >= 2 ? 2 : 1; disposeObj(o.mesh);
+      const o = await buildGuideSet(Object.assign({ g: S.g, P: S.anchor.p, pls: planesWorld(), scs: screwsWorld(), bone: boneAt, field: guideField(), h, noBarMesh: true }, frameAxes())); const R = o.result, want = S.g.split && S.planes.length >= 2 ? 2 : 1; disposeObj(o.mesh);
       const bad = screwsBad(R), scOk = !bad, piecesOk = R.pieces === want, seatFree = !R.seat || !R.seat.ok || R.seat.free > 0;
       if (!scOk) log.push({ step: 'screws', split: S.g.split, wrap: S.g.wrap, flange: S.g.flange, ok: false, screws: bad });
       const score = (piecesOk ? 1000 : 0) + (seatFree ? 100 : 0) - bad - (h > 0.5 ? 0.5 : 0);
@@ -1566,6 +1635,7 @@
     const lo = [uc - g.L / 2 - 4, vc - g.W / 2 - 4 - stopX, -Math.max(g.wrap + 10, 30) - Math.max(0, g.L / 2 - 15) * 0.6], hi = [uc + g.L / 2 + 4, vc + g.W / 2 + 4 + stopX, g.clear + g.wall + Math.max(maxSleeve, g.bridge) + 6];
     const nx = Math.ceil((hi[0] - lo[0]) / h) + 1, ny = Math.ceil((hi[1] - lo[1]) / h) + 1, nz = Math.ceil((hi[2] - lo[2]) / h) + 1, N = nx * ny * nz, nxy = nx * ny;
     const toWorld = (a, b, c) => { const x = lo[0] + a * h, y = lo[1] + b * h, z = lo[2] + c * h; return [P.x + u.x * x + v.x * y + n.x * z, P.y + u.y * x + v.y * y + n.y * z, P.z + u.z * x + v.z * y + n.z * z]; };
+    if (ctx.field && ctx.field.prepare) { const cs = []; for (const a of [0, nx - 1]) for (const b of [0, ny - 1]) for (const c of [0, nz - 1]) cs.push(toWorld(a, b, c)); ctx.field.prepare(cs); }
     // bone in the local grid
     // (ctx.field, when given, is the bone density behind ctx.bone (bone = field > 0.5): it places the surface between grid nodes)
     const B = new Uint8Array(N), qv = new THREE.Vector3(), soft = ctx.field ? new Float32Array(N) : null;
@@ -2260,7 +2330,7 @@
     const ver = live.ver;
     busy(true, pipeGuide ? 'Guide üretiliyor… 4/4' : 'Guide üretiliyor…'); await sleep();
     const pls = planesWorld(), scs = screwsWorld();
-    const out = await buildGuideSet(Object.assign({ g: S.g, P: S.anchor.p, pls, scs, bone: boneAt, field: boneField }, frameAxes()));
+    const out = await buildGuideSet(Object.assign({ g: S.g, P: S.anchor.p, pls, scs, bone: boneAt, field: guideField() }, frameAxes()));
     if (ver < live.shown) { disposeObj(out.mesh); if (out.barMesh) disposeObj(out.barMesh); return; }
     live.shown = ver; S.liveScrews = null;
     setPart('guide', 'Guide', out.mesh, COLORS.guide);
@@ -2579,8 +2649,12 @@
     o.ok ? unapprove(o) : stamp(o);
     renderElements(); syncLesion(); renderAppr(); renderJSON(); emit('changed');
   }
+  // the package lock as renderAppr last set it: the top bar status (ui.js) reads this instead of counting on its own, so it
+  // never shows "Onay bekliyor (1)" over an open package or "Onaylı plan" over a locked one; every lock change is announced
+  let lock = { ready: false, pend: 0 };
+  function lockNow(l) { const was = lock; lock = l; if (was.ready !== l.ready || was.pend !== l.pend) emit('lock', l); }
   function renderAppr() {
-    if (!S.anchor) { $('appr').innerHTML = '<li class="sum"><span class="hint">Rezeksiyon bölgesi seçilince onaylanacak öğeler burada listelenir.</span></li>'; $('expZip').disabled = true; syncOne(); return; }
+    if (!S.anchor) { $('appr').innerHTML = '<li class="sum"><span class="hint">Rezeksiyon bölgesi seçilince onaylanacak öğeler burada listelenir.</span></li>'; $('expZip').disabled = true; syncOne(); lockNow({ ready: false, pend: 0 }); return; }
     const qcCrit = S.qc.some(q => q[0] === 'crit');
     const row = (ref, name, o, sub) => `<li><button class="go" data-go="${ref}"><span class="nm">${name}</span><small>${sub || ''}</small></button><span class="act">${badge(o)} <button data-ap="${ref}">${o.ok ? 'Kaldır' : '<svg class="i"><use href="#i-check"/></svg>Onayla'}</button></span></li>`;
     const L = S.lesion, R = S.result;
@@ -2598,7 +2672,7 @@
     $('appr').querySelectorAll('[data-ap]').forEach(b => b.addEventListener('click', () => approveItem(b.dataset.ap)));
     const missing = pending(), name = $('surgeon').value.trim();
     const ready = !missing.length && !S.crit && !qcCrit && name && S.result;
-    $('expZip').disabled = !ready; syncOne();
+    $('expZip').disabled = !ready; syncOne(); lockNow({ ready: !!ready, pend: missing.length });
     if (S.prod && S.prod.key !== prodKey()) $('prodMsg').textContent = 'Plan değişti; üretim STL\'ini yeniden alın.';
     const why = [];
     if (!name) why.push(xl('onaylayan cerrahın adı girilmedi'));
@@ -3602,7 +3676,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   function serverUrl() { return ($('aiUrl').value || '').trim().replace(/\/+$/, ''); }
   function select(sel) { if (sel) S.guideSel = false; S.sel = sel; emit('select', sel); renderElements(); rebuildElementParts(S.result ? S.result.pls : planesWorld(), S.result ? S.result.screwInfo : []); applyExplode(); render(); }
   window.Studio = { mandibleView, endModes, onEndModes, startLoad, loadStopped, loadBusy: () => committing, LOAD_CANCELLED, renderComps, setGuideRot, setGuideRoll, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, resEnds, splitGap, cutMisses, evalScrew, resectedAt, resectedNear, resPiece, boneTrack, cutAlongBone, bestScrew,
-    boneSections, sizeBody, autoBody, buildGuideSet, cutsAngle, cutFrame, pieceFrames, pieceBody, screwBodyOn, pieceWrapTop, frameAt, stumpGap, mergeStl, mergeMeshes, AUTO_DEFAULT, G_DEFAULT, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume, boneField, simplifyMesh, BAR, barPlan, barSdf, buildBarMesh, placeLug, longCase, axisOffBone, ramusAxis, stopSides, LONG_MM, CUT_OFF_MAX, prodKey, bonelessCut, reframe, exclusive, settled, makeGuide, prodReply, prodWhy, gateChecks, swInfo, swLine, sfetch, reportHTML };
+    boneSections, sizeBody, autoBody, buildGuideSet, cutsAngle, cutFrame, pieceFrames, pieceBody, screwBodyOn, pieceWrapTop, frameAt, stumpGap, mergeStl, mergeMeshes, AUTO_DEFAULT, G_DEFAULT, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume, boneField, simplifyMesh, BAR, barPlan, barSdf, buildBarMesh, placeLug, longCase, axisOffBone, ramusAxis, stopSides, LONG_MM, CUT_OFF_MAX, prodKey, serverBar, guideField, lockState: () => lock, bonelessCut, reframe, exclusive, settled, makeGuide, prodReply, prodWhy, gateChecks, swInfo, swLine, sfetch, reportHTML };
   bus.addEventListener('planeDragged', () => { renderElements(); schedule(true, true); });
   // messages assembled at run time are written in the language that was active: write them again when it changes
   if (window.addEventListener) window.addEventListener('langchange', () => { try { renderChecks(); renderAppr(); syncLesion(); } catch (e) { /* no case open yet */ } });

@@ -536,7 +536,7 @@ window.Fibula = (function () {
     // placed by autoScrews (two on a segment of STUMP_MIN mm or more, at least three on the guide, clear of every slot)
     const fsc = guideScrews(c);
     const scs = fsc.map(f => { const st = screwAt(c, f); return { sc: { d: f.d, D: f.D, sleeveH: f.sleeveH, len: f.len }, dir: st.dir, entry: st.entry }; });
-    return { g, P: Pg, u: u.clone(), v, n, pls, scs, fsc, bone: fibBone, field: q => St.fieldAt(F.red, F.c.Fm, [q.x, q.y, q.z]) };
+    return { g, P: Pg, u: u.clone(), v, n, pls, scs, fsc, bone: fibBone, field: St.guideField ? St.guideField(F.vol, F.red, F.c.Fm, THR) : q => St.fieldAt(F.red, F.c.Fm, [q.x, q.y, q.z]) };   // (the production server's bone: Studio.guideField)
   }
   // effective slot width: the plan's slot (never narrower than the blade), else the blade itself (the old single value)
   const slotOf = P0 => Math.max(P0.kerf, P0.slotW == null ? P0.kerf : P0.slotW);

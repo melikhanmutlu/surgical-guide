@@ -54,14 +54,14 @@ const VERI = process.env.VERI || '/mnt/project-files/surgical-guide-prototype/au
 
   // ---------- C7: fibula view vs mandible interactions ----------
   await h.run('C7', '3 · Rezeksiyon (fibula yüklü)', 'Örnek fibulayı yükle; 3. adımda "Bölgeyi modelde seç" + 3B görünüme tıkla', 'Görünüm mandibulaya döner ya da seçim yapılır', async () => {
-    await page.click('#fibSample'); await h.idle(); await h.settle();
+    await page.click('#fibSample'); await h.fibReady();
     const view = await h.ev(() => Fibula.view());
     await h.openStep(3); await page.click('#pickAnchor'); await h.sleep(300);
     const badge = await page.$eval('#modeBadge', e => e.hidden ? '' : e.textContent);
     const view2 = await h.ev(() => Fibula.view());
     const pts = await h.hits('bone', 24);                          // a bone point of the (now shown) mandible
     if (pts.length) { const p = pts[Math.floor(pts.length / 2)]; await h.click3d(p.x, p.y); }
-    await h.sleep(1000); await h.idle();
+    await h.settle();
     const s = await st(), step = await h.ev(() => [...document.querySelectorAll('details.step')].find(d => d.open).id);
     const ev = await h.shot('C7_fibula_gorunumu');
     await page.keyboard.press('Escape');
@@ -83,35 +83,37 @@ const VERI = process.env.VERI || '/mnt/project-files/surgical-guide-prototype/au
     return { pass: view === 'm' && pts.length > 0 && after !== before && step === 'st2', actual: `sahne=${view}; maske voksel ${before} → ${after}; açık adım ${step}`, evidence: await h.shot('C7b_firca') };
   });
   await page.click('#scM'); await h.sleep(500);
-  await h.openStep(1); await page.click('#sampleM'); await h.idle();   // drop the fibula again
+  await h.openStep(1); await page.click('#sampleM'); await h.settle();   // drop the fibula again
 
   // ---------- C2: reopen an old plan with a different threshold ----------
   await h.run('C2', 'Yeniden açma', 'Planı eşik 250 ile kaydet (sürüm), eşiği 400 yap, sürümü yükle', 'Eşik 250\'ye döner, guide ve rezeke hacim aynı', async () => {
-    await h.openStep(3); await page.click('#autoPrep'); await h.idle(); await h.sleep(2500); await h.settle();
+    await h.openStep(3); await page.click('#autoPrep'); await h.settle();
     const a = await h.ev(() => ({ thr: document.getElementById('thr').value, vol: Math.round(Studio.S.resectedVolume || 0), pieces: Studio.S.result && Studio.S.result.pieces, bone: Studio.parts.bone.obj.geometry.attributes.position.count }));
-    await page.click('#tab-pVer'); await page.fill('#verNote', 'esik250'); await page.click('#verSave'); await h.sleep(1500);
+    await page.click('#tab-pVer'); await page.fill('#verNote', 'esik250'); await page.click('#verSave');
+    await page.waitForFunction(() => /esik250/.test(document.getElementById('verList').textContent), null, { timeout: 60000 });
     await h.openStep(2); await h.setRange('#thr', 400); await h.sleep(500); await h.idle(); await h.settle();
     const b = await h.ev(() => ({ thr: document.getElementById('thr').value, vol: Math.round(Studio.S.resectedVolume || 0), pieces: Studio.S.result && Studio.S.result.pieces, crit: Studio.S.crit }));
     await page.click('#tab-pVer'); await h.sleep(300);
-    await page.locator('#verList li', { hasText: 'esik250' }).locator('button').first().click(); await h.sleep(1500); await h.idle(); await h.sleep(800); await h.idle(); await h.settle();
+    await page.locator('#verList li', { hasText: 'esik250' }).locator('button').first().click();
+    await page.waitForFunction(() => document.getElementById('thr').value === '250', null, { timeout: 120000 }).catch(() => {}); await h.settle();
     const c = await h.ev(() => ({ thr: document.getElementById('thr').value, vol: Math.round(Studio.S.resectedVolume || 0), pieces: Studio.S.result && Studio.S.result.pieces, bone: Studio.parts.bone.obj.geometry.attributes.position.count }));
     return { pass: c.thr === '250' && Math.abs(c.vol - a.vol) <= a.vol * 0.01 && c.pieces === a.pieces, actual: `kayıt ${JSON.stringify(a)}; eşik 400: ${JSON.stringify(b)}; sürüm yüklenince ${JSON.stringify(c)}` };
   });
 
   // ---------- C3: resection near the ramus > 35 mm ----------
   await h.run('C3', '3 · Rezeksiyon', 'Ramusa yakın bölge seç (sol gövde, açıya yakın), sınır −20…20 mm + pay 3 (46 mm) → "Kesileri sınıra göre koy"', 'Kritik kontrol yoksa guide tek parça ve yuvalar/kovanlar guide üzerinde; değilse açık uyarı', async () => {
-    await h.openStep(3); await page.click('#planReset'); await h.idle();
-    await page.click('.presets button[data-view="ant"]'); await h.sleep(800);
+    await h.openStep(3); await page.click('#planReset'); await h.settle();
+    await page.click('.presets button[data-view="ant"]'); await h.sleep(800);   // (camera tween: the next step reads screen positions)
     const pts = await h.hits('bone', 10);
     const r = await page.$eval('#stage', e => e.getBoundingClientRect().toJSON());
     const band = pts.filter(p => p.y > r.top + r.height * 0.5 && p.y < r.top + r.height * 0.8).sort((a, b) => a.x - b.x);
     const p = band[Math.floor(band.length * 0.1)];
-    await page.click('#pickAnchor'); await h.click3d(p.x, p.y); await h.sleep(800); await h.idle();
+    await page.click('#pickAnchor'); await h.click3d(p.x, p.y); await h.settle();
     await page.evaluate(() => { const d = document.getElementById('secBounds'); if (!d.open) d.querySelector('summary').click(); });
     await h.setRange('#l_from', -20); await h.setRange('#l_to', 20); await h.setRange('#l_margin', 3);
-    await page.click('#suggest'); await h.sleep(500); await h.idle();
-    if (await page.isEnabled('#guideMake')) { await page.click('#guideMake'); await h.idle(); }
-    await page.click('#resRemove').catch(() => {}); await h.idle();
+    await page.click('#suggest'); await h.settle();
+    if (await page.isEnabled('#guideMake')) { await page.click('#guideMake'); await h.settle(); }
+    await page.click('#resRemove').catch(() => {}); await h.settle();
     const s = await st(), stat = await page.textContent('#guideStat');
     const scr = await h.ev(() => Studio.S.screws.map(x => x ? [x.u, x.v] : null));
     const warn = await h.ev(() => [...document.querySelectorAll('#checks li')].map(l => l.className.replace('checks', '').trim().slice(0, 5) + ': ' + l.textContent.trim().slice(0, 100)));
@@ -123,21 +125,21 @@ const VERI = process.env.VERI || '/mnt/project-files/surgical-guide-prototype/au
     return { pass: ok && !s.nullScrews, actual: `anchor ${JSON.stringify(p.p.map(x => +x.toFixed(1)))}; kesiler ${JSON.stringify(s.planes.map(x => x.off))}, L=${s.L}, parça ${s.pieces}, vidalar ${JSON.stringify(scr)}, kritik ${s.crit}; "${stat}"; kontroller: ${warn.join(' | ')}`, evidence: ev };
   });
   await h.run('C3b', '3 · Rezeksiyon', 'Aynı geniş rezeksiyonda (46 mm) iki parça guide', 'İki parça; kalan kritik varsa açıkça listelenir', async () => {
-    await h.openStep(5); await seg('g_split', '1'); await h.sleep(500); await h.idle();
+    await h.openStep(5); await seg('g_split', '1'); await h.settle();
     const s = await st();
     const ev = await h.shot('C3b_ramus_iki_guide');
-    await seg('g_split', '0'); await h.idle();
+    await seg('g_split', '0'); await h.settle();
     return { pass: s.pieces === 2 && (!s.crit || s.critList.length > 0), actual: `parça ${s.pieces}, kritik ${s.crit} ${s.critList.join(' | ')}`, evidence: ev };
   });
 
   // ---------- C4: condyle-included resection ----------
   await h.run('C4', '3 · Rezeksiyon', 'Örnek vakada Otomatik planla → Rezeksiyon tipi "Kondil dahil, sağ" → fibula örneği', 'Rezeke hacim büyür; fibula greft boyu artar; kontroller tutarlı', async () => {
-    await h.openStep(3); await page.click('#planReset'); await h.idle();
-    await page.click('#autoPrep'); await h.idle();
+    await h.openStep(3); await page.click('#planReset'); await h.settle();
+    await page.click('#autoPrep'); await h.settle();
     const v0 = await h.ev(() => Math.round(Studio.S.resectedVolume || 0));
-    await page.selectOption('#resType', 'R'); await h.sleep(600); await h.idle();
+    await page.selectOption('#resType', 'R'); await h.settle();
     const v1 = await h.ev(() => Math.round(Studio.S.resectedVolume || 0)), hint = await page.$eval('#resTypeHint', e => !e.hidden);
-    await h.openStep(1); await page.click('#fibSample'); await h.idle(); await page.click('#scM').catch(() => {});
+    await h.openStep(1); await page.click('#fibSample'); await h.fibReady(); await page.click('#scM').catch(() => {}); await h.settle();
     const segs = await h.ev(() => Fibula.state().last ? Fibula.state().last.segs.map(s => Math.round(s.L)) : null);
     const s = await st();
     const ev = await h.shot('C4_kondil_dahil');
@@ -145,8 +147,9 @@ const VERI = process.env.VERI || '/mnt/project-files/surgical-guide-prototype/au
     return { pass: v1 > v0 * 2 && segs && segs.reduce((a, b) => a + b, 0) > 40, actual: `rezeke hacim ${v0} → ${v1} mm³, ipucu görünür=${hint}; fibula segmentleri ${JSON.stringify(segs)} mm; kritik ${s.crit} ${s.critList.join(' | ')}`, evidence: ev };
   });
   await h.run('C4b', 'Yeniden açma', 'Kondil dahil plan (fibula ile) kaydedilir, sayfa yenilenir', 'Rezeksiyon, fibula segmentleri ve hacim aynen geri gelir', async () => {
-    await h.sleep(3000);
-    await page.reload({ waitUntil: 'domcontentloaded' }); await h.waitReady(); await h.sleep(3000); await h.idle(); await h.sleep(1500); await h.idle();
+    await h.saved();                                   // the condylar plan with its fibula is in the case store
+    await page.reload({ waitUntil: 'domcontentloaded' }); await h.waitReady(); await h.fibReady();
+    await page.waitForFunction(() => Studio.S.lesion && Studio.S.lesion.condyle, null, { timeout: 120000 }).catch(() => {}); await h.settle();
     const v = await h.ev(() => Math.round(Studio.S.resectedVolume || 0));
     const segs = await h.ev(() => Fibula.state().last ? Fibula.state().last.segs.map(s => Math.round(s.L)) : null);
     const s = await st();
@@ -155,13 +158,13 @@ const VERI = process.env.VERI || '/mnt/project-files/surgical-guide-prototype/au
 
   // ---------- C5: very short segment ----------
   await h.run('C5', '4 · Fibula', 'Dar rezeksiyon (−2…2, pay 3 → 10 mm) ve 3 segment', 'Kısa segmentler kritik olarak işaretlenir, onay engellenir', async () => {
-    await h.openStep(1); await page.click('#sampleM'); await h.idle();
-    await page.click('#fibSample'); await h.idle(); await page.click('#scM').catch(() => {});
-    await h.openStep(3); await page.click('#autoPrep'); await h.idle();
+    await h.openStep(1); await page.click('#sampleM'); await h.settle();
+    await page.click('#fibSample'); await h.fibReady(); await page.click('#scM').catch(() => {});
+    await h.openStep(3); await page.click('#autoPrep'); await h.settle();
     await page.evaluate(() => { const d = document.getElementById('secBounds'); if (!d.open) d.querySelector('summary').click(); });
     await h.setRange('#l_from', -2); await h.setRange('#l_to', 2); await h.setRange('#l_margin', 3);
-    await page.click('#suggest'); await h.sleep(500); await h.idle();
-    await h.openStep(4); await page.click('#fibN button[data-n="3"]'); await h.idle();
+    await page.click('#suggest'); await h.settle();
+    await h.openStep(4); await page.click('#fibN button[data-n="3"]'); await h.fibReady();
     const segs = await h.ev(() => (Fibula.state().last ? Fibula.state().last.segs : []).map(s => +s.L.toFixed(1)));
     const fc = await h.ev(() => [...document.querySelectorAll('#fibChecks li')].map(l => l.textContent.trim()));
     const appr = await page.$eval('#fibApprove', b => b.disabled).catch(() => null);
@@ -171,14 +174,14 @@ const VERI = process.env.VERI || '/mnt/project-files/surgical-guide-prototype/au
 
   // ---------- C9: re-check of earlier audit findings ----------
   await h.run('C9.1', 'Yeniden kontrol (D2 C1/C2)', 'Geniş sınır −30…30 + pay 10 → "Kesileri sınıra göre koy" (1 ve 2 vida/taraf)', 'null vida yok; yuva/kovan guide dışındaysa kritik kontrol', async () => {
-    await h.openStep(1); await page.click('#sampleM'); await h.idle();
-    await h.openStep(3); await page.click('#autoPrep'); await h.idle();
+    await h.openStep(1); await page.click('#sampleM'); await h.settle();
+    await h.openStep(3); await page.click('#autoPrep'); await h.settle();
     const out = [];
     for (const per of ['1', '2']) {
-      await seg('perSide', per); await h.idle();
+      await seg('perSide', per); await h.settle();
       await page.evaluate(() => { const d = document.getElementById('secBounds'); if (!d.open) d.querySelector('summary').click(); });
       await h.setRange('#l_from', -30); await h.setRange('#l_to', 30); await h.setRange('#l_margin', 10);
-      await page.click('#suggest'); await h.sleep(500); await h.idle();
+      await page.click('#suggest'); await h.settle();
       const s = await st(), scr = await h.ev(() => Studio.S.screws.map(x => x ? x.u : null));
       out.push({ per, planes: s.planes.map(p => p.off), L: s.L, screws: scr, pieces: s.pieces, crit: s.crit, list: s.critList });
     }
@@ -187,14 +190,14 @@ const VERI = process.env.VERI || '/mnt/project-files/surgical-guide-prototype/au
     return { pass: ok, actual: JSON.stringify(out), evidence: ev };
   });
   await h.run('C9.2', 'Yeniden kontrol (D2 M1)', '"Bölgeyi modelde seç" sonra lezyon Fırçası; 3B kemiğe tıkla', 'Guide merkezi taşınmaz (seçim modu fırçayla kapanır)', async () => {
-    await h.openStep(3); await page.click('#planReset'); await h.idle(); await page.click('#autoPrep'); await h.idle();
+    await h.openStep(3); await page.click('#planReset'); await h.settle(); await page.click('#autoPrep'); await h.settle();
     const a0 = await h.ev(() => Studio.S.anchor.p.toArray().map(x => +x.toFixed(2)));
     await page.click('#pickAnchor');
     await page.evaluate(() => { const d = document.getElementById('secLes'); if (!d.open) d.querySelector('summary').click(); });
     await page.click('#lesPaint button[data-t="paint"]'); await h.sleep(300);
     const mode = await h.ev(() => Studio.S.mode);
     const pts = await h.hits('bone', 20); const p = pts[Math.floor(pts.length * 0.3)];
-    await h.click3d(p.x, p.y); await h.sleep(800); await h.idle();
+    await h.click3d(p.x, p.y); await h.settle();
     const a1 = await h.ev(() => Studio.S.anchor.p.toArray().map(x => +x.toFixed(2)));
     await page.keyboard.press('Escape'); await page.keyboard.press('Escape');
     return { pass: JSON.stringify(a0) === JSON.stringify(a1), actual: `fırça açıkken S.mode=${mode}; anchor ${JSON.stringify(a0)} → ${JSON.stringify(a1)}` };
@@ -217,7 +220,9 @@ const VERI = process.env.VERI || '/mnt/project-files/surgical-guide-prototype/au
     await page.click('#expSrv'); await h.sleep(500); const ok = await h.idle(200000);
     const m = await page.textContent('#prodMsg'), save = await page.textContent('#saveState');
     // a plan edit while offline: does the save indicator say so?
-    await h.openStep(5); await h.setRange('#g_W', 24); await h.sleep(4000); await h.idle();
+    await h.openStep(5); await h.setRange('#g_W', 24); await h.settle();
+    // the save of that edit has run (and failed): the indicator leaves "Kaydediliyor…" (store.js debounce 1 s, then the request)
+    await page.waitForFunction(() => { const t = document.getElementById('saveState').textContent; return t && !/Kaydediliyor/.test(t); }, null, { timeout: 60000 }).catch(() => {});
     const save2 = await page.textContent('#saveState');
     const ev = await h.shot('C6_sunucu_kapali');
     // restart the server for later runs
