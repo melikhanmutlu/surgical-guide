@@ -50,11 +50,11 @@ const VERI = process.env.VERI || '/mnt/project-files/surgical-guide-prototype/au
     return { pass: s.kind === 'mandible' || s.kind === 'dicom', actual: `yenileme sonrası kaynak "${s.src}" (${s.kind})`, evidence: await h.shot('C1.3_yenile') };
   });
   // restart from the sample for the remaining scenarios
-  await h.openStep(1); await page.click('#sampleM'); await h.idle();
+  await h.openStep(1); await page.click('#sampleM'); await h.idle(); await h.settle();
 
   // ---------- C7: fibula view vs mandible interactions ----------
   await h.run('C7', '3 · Rezeksiyon (fibula yüklü)', 'Örnek fibulayı yükle; 3. adımda "Bölgeyi modelde seç" + 3B görünüme tıkla', 'Görünüm mandibulaya döner ya da seçim yapılır', async () => {
-    await page.click('#fibSample'); await h.idle();
+    await page.click('#fibSample'); await h.idle(); await h.settle();
     const view = await h.ev(() => Fibula.view());
     await h.openStep(3); await page.click('#pickAnchor'); await h.sleep(300);
     const badge = await page.$eval('#modeBadge', e => e.hidden ? '' : e.textContent);
@@ -87,13 +87,13 @@ const VERI = process.env.VERI || '/mnt/project-files/surgical-guide-prototype/au
 
   // ---------- C2: reopen an old plan with a different threshold ----------
   await h.run('C2', 'Yeniden açma', 'Planı eşik 250 ile kaydet (sürüm), eşiği 400 yap, sürümü yükle', 'Eşik 250\'ye döner, guide ve rezeke hacim aynı', async () => {
-    await h.openStep(3); await page.click('#autoPrep'); await h.idle(); await h.sleep(2500);
+    await h.openStep(3); await page.click('#autoPrep'); await h.idle(); await h.sleep(2500); await h.settle();
     const a = await h.ev(() => ({ thr: document.getElementById('thr').value, vol: Math.round(Studio.S.resectedVolume || 0), pieces: Studio.S.result && Studio.S.result.pieces, bone: Studio.parts.bone.obj.geometry.attributes.position.count }));
     await page.click('#tab-pVer'); await page.fill('#verNote', 'esik250'); await page.click('#verSave'); await h.sleep(1500);
-    await h.openStep(2); await h.setRange('#thr', 400); await h.sleep(500); await h.idle();
+    await h.openStep(2); await h.setRange('#thr', 400); await h.sleep(500); await h.idle(); await h.settle();
     const b = await h.ev(() => ({ thr: document.getElementById('thr').value, vol: Math.round(Studio.S.resectedVolume || 0), pieces: Studio.S.result && Studio.S.result.pieces, crit: Studio.S.crit }));
     await page.click('#tab-pVer'); await h.sleep(300);
-    await page.locator('#verList li', { hasText: 'esik250' }).locator('button').first().click(); await h.sleep(1500); await h.idle(); await h.sleep(800); await h.idle();
+    await page.locator('#verList li', { hasText: 'esik250' }).locator('button').first().click(); await h.sleep(1500); await h.idle(); await h.sleep(800); await h.idle(); await h.settle();
     const c = await h.ev(() => ({ thr: document.getElementById('thr').value, vol: Math.round(Studio.S.resectedVolume || 0), pieces: Studio.S.result && Studio.S.result.pieces, bone: Studio.parts.bone.obj.geometry.attributes.position.count }));
     return { pass: c.thr === '250' && Math.abs(c.vol - a.vol) <= a.vol * 0.01 && c.pieces === a.pieces, actual: `kayıt ${JSON.stringify(a)}; eşik 400: ${JSON.stringify(b)}; sürüm yüklenince ${JSON.stringify(c)}` };
   });

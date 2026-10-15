@@ -1453,6 +1453,7 @@ window.I18N_EN = {
 "Yükleme iptal ediliyor…": "Cancelling the load…",
 "Yükleme iptal edildi.": "Load canceled.",
 "Önceki yükleme sürüyor; bitince yeniden deneyin.": "The previous load is still running; try again when it is done.",
+"Vaka yükleniyor; yükleme bitince yeniden deneyin.": "The case is loading; try again when it is done.",
 "Örnek vaka yüklenince mevcut plan (kesiler, vidalar, guide) silinir. Devam edilsin mi?": "Loading the sample replaces the current plan (cuts, screws, guide). Continue?",
 "Seçim mandibulada yapılır: 3B görünüm mandibulaya alındı.": "Picks are made on the mandible: the 3D view was switched to the mandible.",
 // adaptive guide sizing, fit ladder, kerf side, segment choice

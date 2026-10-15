@@ -54,6 +54,19 @@ test('AR-5: resection extent and safety margin wording (approval row, pending li
   const app = src('app.js'); assert.ok(!/Kesileri sınıra göre koy|'Rezeksiyon sınırı'/.test(app), 'old names left in app.js');
 });
 
+test('an edit after full approval locks the package at once, before the rebuild (e2e A1.8f showed "Onaylı plan")', async () => {
+  await plan(); await St.settled();
+  const hooks = W.PendingHooks; W.PendingHooks = [];      // the audit sign-offs are not under test here
+  try {
+    $('surgeon').value = 'Dr X'; [S.lesion, ...S.planes, ...S.screws].forEach(o => St.stamp(o)); S.crit = 0; S.qc = [];
+    St.renderAppr(); assert.equal($('expZip').disabled, false, 'approved plan: package open ' + JSON.stringify(St.pendingList()));
+    S.planes[0].off += 0.5; St.unapprove(S.planes[0]); St.schedule(true, true);
+    assert.equal($('expZip').disabled, true, 'locked in the same tick as the edit');
+    assert.ok(St.pendingList().includes('Kesi 1'));
+    await St.settled(); assert.equal($('expZip').disabled, true, 'still locked after the rebuild');
+  } finally { W.PendingHooks = hooks; }
+});
+
 test('dates: approval stamps follow the interface language (English spells the month)', async () => {
   const at = new Date(2026, 9, 14, 9, 5).toISOString(), D = W.DateFmt;
   assert.ok(D, 'DateFmt published by dates.js');
