@@ -10,6 +10,8 @@ def mask_to_mesh(mask, spacing_xyz, to_world, smooth_iter=10, sigma=0.6):
 
     to_world: function mapping (N, 3) local (x, y, z) mm to world mm.
     """
+    if not np.any(mask):
+        raise ValueError("empty mask: nothing to mesh")
     pad = np.pad(mask.astype(np.float32), 2)
     if sigma:
         pad = ndi.gaussian_filter(pad, sigma)

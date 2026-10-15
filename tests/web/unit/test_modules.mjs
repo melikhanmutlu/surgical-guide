@@ -260,7 +260,7 @@ test('O-5: stored fibula plan with kerf <= 0 or out-of-range values is clamped t
 test('O-5: stored implant plan is clamped (position, diameter, length, tilt, segment) and non-finite values fall back', () => {
   W.PlanExt.impl.set([{ seg: 99, t: 1e9, d: -5, len: NaN, tb: 400, tm: 'x' }, null, 5]);
   const l = W.PlanExt.impl.get(); assert.equal(l.length, 1);
-  const o = l[0]; assert.equal(o.seg, 2); assert.equal(o.t, 60); assert.equal(o.d, 3); assert.equal(o.len, 10); assert.equal(o.tb, 89); assert.equal(o.tm, 0);
+  const o = l[0]; assert.equal(o.seg, W.Fibula.MAX_N); assert.equal(o.t, 400); assert.equal(o.d, 3); assert.equal(o.len, 10); assert.equal(o.tb, 89); assert.equal(o.tm, 0);   // W4: segment up to the largest fibula plan, not 0..2 / 60 mm
   W.PlanExt.impl.set(null);
 });
 

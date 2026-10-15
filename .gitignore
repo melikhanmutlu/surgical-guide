@@ -4,3 +4,6 @@ __pycache__/
 .env
 outputs/
 tests/web/kanit/
+yolmed_test_*/
+*.sqlite-wal
+*.sqlite-shm

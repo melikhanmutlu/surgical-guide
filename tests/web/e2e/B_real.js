@@ -115,7 +115,9 @@ if (require.main === module) (async () => {
   const REAL = path.join(H.KANIT, 'real'); fs.mkdirSync(REAL, { recursive: true });
   const st = () => h.state();
   const seg = async (selId, v) => page.click(`#${selId} + .seg button[data-v="${v}"]`);
-  await h.run('B2.0', '2 · Anatomi (gerçek)', 'Bileşen listesi, referans (orta düzlem, kondiller) gerçek veride', 'Mandibula ayrı bileşen ya da kondiller bulunur', async () => {
+  // the reference (midplane, condyles) is computed by "Simetri ve kondilleri bul" / Otomatik planla, not on load (Denetim 4
+  // e2e H1): on load the mandible must be split off as its own component
+  await h.run('B2.0', '2 · Anatomi (gerçek)', 'Bileşen listesi gerçek veride (yüklemede otomatik ayırma)', 'Mandibula ayrı bileşen ("Mandibula (otomatik ayrıldı)") ve seçili', async () => {
     await page.click('#scM').catch(() => {}); await h.sleep(500);
     await h.openStep(2); await h.idle();
     const comps = await page.$$eval('#comps label, #comps .row, #comps li', l => l.map(x => x.textContent.trim().replace(/\s+/g, ' ')).slice(0, 12)).catch(() => []);
@@ -123,7 +125,8 @@ if (require.main === module) (async () => {
     const refTxt = (await page.textContent('#refBox')).replace(/\s+/g, ' ').slice(0, 300);
     const sel = await h.ev(() => [...Studio.S.selected]);
     const ev = await h.shot('B2.0_anatomi_gercek');
-    return { pass: !!ref, actual: `bileşenler: ${comps.join(' | ')}; seçili ${JSON.stringify(sel)}; Ref ${JSON.stringify(ref)}; refBox "${refTxt}"`, evidence: ev };
+    const mand = comps.some(c => /^Mandibula \(otomatik ayrıldı\)/.test(c));
+    return { pass: mand && sel.length >= 1, actual: `bileşenler: ${comps.join(' | ')}; seçili ${JSON.stringify(sel)}; Ref ${JSON.stringify(ref)}; refBox "${refTxt}"`, evidence: ev };
   });
   const PX_A = [[760, 618], [735, 612], [790, 626], [812, 632], [705, 600], [698, 570], [688, 540]];   // mandible: body, angle, ramus, chin (right view, 1440x900)
   const PX_B = [[700, 350], [800, 420], [760, 470], [830, 520], [640, 610], [650, 680], [790, 545]];   // cranium, maxilla, cervical spine
@@ -198,12 +201,17 @@ if (require.main === module) (async () => {
     await page.click('#scS').catch(() => {}); await h.sleep(1000); await h.shot('B2.3_yan_yana'); await page.click('#scM').catch(() => {});
     return { pass: out.length === 3 && !out.some(o => /null/.test(o.split('[')[0])), actual: out.join(' ; ') + ` ; son kritik ${s.crit}` };
   });
-  await h.run('B2.4', '5 · Plak (gerçek)', 'Plak planla', 'Plak özeti', async () => {
+  await h.run('B2.4', '5 · Plak (gerçek)', 'Plak planla', 'Plak özeti; plak kritik değil, uzunluk rezeksiyon + 2 × uzantı + 40 mm içinde', async () => {
     await h.openStep(5); await page.evaluate(() => { const d = document.getElementById('secPlate'); if (!d.open) d.querySelector('summary').click(); });
     await page.check('#plOn'); await h.sleep(800); await h.idle(300000);
     const sum = (await page.textContent('#plSum').catch(() => '')).replace(/\s+/g, ' ');
     const msg = await page.textContent('#plMsg').catch(() => '');
-    return { pass: /delik/.test(sum), actual: `"${sum.slice(0, 200)}" ${msg}`, evidence: await h.shot('B2.4_plak_gercek') };
+    // Denetim 4 E1: on this CT the line used to wind round the bone (235 mm, 29 holes, 652° bend) and still went into the
+    // package. The plate must now be plausible: not critical, and no longer than the resection plus both extensions allow
+    const pl = await h.ev(() => { const p = Plate.get(), P = Plate.params(); return p ? { L: Math.round(p.L), holes: p.holes.length, crit: Plate.critical().map(c => c.text), ext: P.ext, ok: p.ok } : null; });
+    const res = await h.ev(() => { const pw = Studio.planesWorld(); return pw.length === 2 ? Math.abs(pw[1].off - pw[0].off) : null; });
+    const maxL = res != null && pl && pl.ext != null ? res + 2 * pl.ext + 40 : 150;
+    return { pass: /delik/.test(sum) && !!pl && !pl.crit.length && pl.L <= maxL, actual: `"${sum.slice(0, 200)}" ${msg}; plak ${JSON.stringify(pl)}, rezeksiyon ${res} mm, üst sınır ${maxL} mm`, evidence: await h.shot('B2.4_plak_gercek') };
   });
   await h.run('B2.5', '7 · Onay (gerçek)', 'Cerrah adı, öğe onayları, fibula, mühendis + cerrah onayı', 'Paket etkin', async () => {
     await h.openStep(7); await page.fill('#surgeon', 'Dr. E2E Cerrah'); await page.press('#surgeon', 'Tab');

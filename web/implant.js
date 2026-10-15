@@ -186,7 +186,7 @@ window.Implants = (function () {
     renderTable();
     $('imAdd').addEventListener('click', () => add(freeSpot()));
     $('imAuto').addEventListener('click', () => {
-      if (list.length && !confirm('Mevcut implantlar silinip otomatik yerleşimle değiştirilsin mi?')) return;
+      if (list.length && !confirm(`İmplantlar yeniden yerleştirilsin mi? Mevcut ${list.length} implant silinir.`)) return;
       St.busy(true, 'İmplantlar yerleştiriliyor…');
       setTimeout(() => { try { const r = autoPlace(); msgText = r.placed ? xl(`${r.placed} implant yerleştirildi${r.tried > r.placed ? ` · ${r.tried - r.placed} konum uygun değil` : ''}.`) : 'Greft üzerinde kontrolleri geçen implant konumu bulunamadı.'; render(); } finally { St.busy(false); } }, 30);
     });
@@ -207,11 +207,16 @@ window.Implants = (function () {
   function changed() { update(); render(); St.emit('changed'); }
   const later = () => { clearTimeout(timer); timer = setTimeout(() => { update(); render(); }, 250); };
 
-  // a stored plan is untrusted input: numbers only, each inside the range its control allows
+  // a stored plan is untrusted input: numbers only, each inside the range its control allows. The segment index runs to
+  // the fibula's largest plan (MAX_N lower segments, the double-barrel strut after them) and the position along a segment
+  // to the longest graft a leg gives; the current segment's own length bounds both when the implant is computed
+  // (Denetim 4 W4: 0..2 and 0..60 mm moved implants on segment 4, on the strut or past 60 mm at every undo / reopen)
+  const SEG_MAX = (window.Fibula && Fibula.MAX_N) || 4, T_MAX = 400;
   const clean = y => {
     const o = Object.assign({}, DEF, y), num = (v, d) => { const n = Number(v); return Number.isFinite(n) ? n : d; };
-    F.forEach(([k, , mn, mx]) => { o[k] = Math.max(mn, Math.min(mx, num(o[k], DEF[k] === undefined ? mn : DEF[k]))); });
-    o.seg = Math.max(0, Math.min(2, Math.round(num(o.seg, 0))));
+    F.forEach(([k, , mn, mx]) => { if (k !== 't') o[k] = Math.max(mn, Math.min(mx, num(o[k], DEF[k] === undefined ? mn : DEF[k]))); });
+    o.t = Math.max(0, Math.min(T_MAX, num(o.t, DEF.t === undefined ? 0 : DEF.t)));
+    o.seg = Math.max(0, Math.min(SEG_MAX, Math.round(num(o.seg, 0))));
     return o;
   };
   (window.PlanExt = window.PlanExt || {}).impl = {

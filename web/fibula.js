@@ -32,6 +32,7 @@ window.Fibula = (function () {
   const mat = (color, extra = {}) => new THREE.MeshStandardMaterial(Object.assign({ color, roughness: 0.6, metalness: 0, side: THREE.DoubleSide }, extra));
   const keepAtLeast = (N, p, h = 0) => new THREE.Plane(N.clone(), -N.dot(p) - h);         // keeps (x-p)·N >= h
   const keepAtMost = (N, p, h = 0) => new THREE.Plane(N.clone().negate(), N.dot(p) - h);   // keeps (x-p)·N <= -h
+  let candSeq = 0;         // setCandidate counter (F.c.uid)
   let F = null;            // loaded fibula: { source, label, vol, red, labels, cands, c (current candidate) }
   let pending = null;      // stored plan waiting for its DICOM series
   let view = 'm', last = null, grafts = null, guideTimer = null, guideKey = '', building = false;
@@ -94,15 +95,26 @@ window.Fibula = (function () {
   }
 
   // ---------- loading and fibula detection ----------
+  let loadCtl = null;
+  function startLoad() { if (loadCtl) loadCtl.cancelled = true; return (loadCtl = { cancelled: false, byUser: false }); }
+  function loadStopped(ctl) {
+    if (!ctl || !ctl.cancelled) return false;
+    if (loadCtl === ctl) { loadCtl = null; St.busy(false); }
+    if (ctl.byUser) St.alertMsg('Yükleme iptal edildi.');
+    return true;
+  }
   async function load(kind, files) {
     St.busy(true, 'Fibula BT\'si okunuyor…'); await St.sleep();
     let vol, source, label;
-    const ctl = kind === 'sample' ? null : St.startLoad();       // a DICOM / zip read can be cancelled; a newer load replaces it
+    // a DICOM / zip read can be cancelled; a newer fibula load replaces it. The fibula has its own controller: the
+    // mandible's (St.startLoad) would cancel a mandible load running at the same time, and be cancelled by one (W5)
+    const ctl = kind === 'sample' ? null : startLoad();
     try {
       if (kind === 'sample') { vol = await St.readSample('leg'); source = { type: 'sample', name: 'leg', fp: 'sample:leg' }; label = 'Örnek: alt bacak (sentetik BT)'; }
-      else { const r = await St.readDicom(files, ctl); if (St.loadStopped(ctl)) return false; if (r.error) { St.busy(false); msg(r.error); return false; } ({ vol, source, label } = r); }
+      else { const r = await St.readDicom(files, ctl); if (loadStopped(ctl)) return false; if (loadCtl === ctl) loadCtl = null; if (r.error) { St.busy(false); msg(r.error); return false; } ({ vol, source, label } = r); }
     } catch (e) {
-      if (e === St.LOAD_CANCELLED) { St.loadStopped(ctl); return false; }
+      if (e === St.LOAD_CANCELLED) { loadStopped(ctl); return false; }
+      if (loadCtl === ctl) loadCtl = null;
       St.busy(false); msg('Fibula BT\'si açılamadı: ' + e.message); return false;
     }
     St.busy(true, 'Fibula ayrıştırılıyor…'); await St.sleep();
@@ -187,7 +199,10 @@ window.Fibula = (function () {
   // donor leg (`side`, else guessed from the scanner x, which the checks then ask the user to confirm). LPS +x = patient left.
   function setCandidate(i, side) {
     const c = F.cands[i], red = F.red, { nx, ny, nz } = red, n = red.hu.length;
-    const mask = new Uint8Array(n); for (let v = 0; v < n; v++) if (F.labels[v] === c.label) mask[v] = 1;
+    if (!c) return false;
+    const mask = new Uint8Array(n); let cnt = 0; for (let v = 0; v < n; v++) if (F.labels[v] === c.label) { mask[v] = 1; cnt++; }
+    // a candidate whose bone is gone (relabelled by a split) has nothing to plan on
+    if (cnt < 100) { msg('Bu adayın kemiği artık yok (ayrılmış olabilir); başka bir aday seçin.'); return false; }
     const a = c.ax.clone();
     let e2 = c.tibia ? c.C.clone().sub(c.tibia.C) : V((side || (c.C.x > 0 ? 'L' : 'R')) === 'L' ? 1 : -1, 0, 0);
     e2.sub(a.clone().multiplyScalar(e2.dot(a))); if (e2.lengthSq() < 1e-6) e2 = V(0, 1, 0).sub(a.clone().multiplyScalar(a.y)); e2.normalize();
@@ -210,7 +225,9 @@ window.Fibula = (function () {
     const geo = St.meshFromNets(G.surfaceNets(Fm, nx, ny, nz), toW, mat(BONE)).geometry;
     let tgeo = null;
     if (c.tibia) { const tm = new Uint8Array(n); for (let v = 0; v < n; v++) if (F.labels[v] === c.tibia.label) tm[v] = 1; tgeo = St.meshFromNets(G.surfaceNets(G.blur(tm, nx, ny, nz), nx, ny, nz), toW, mat(BONE)).geometry; }
-    F.c = { i, FC: c.C.clone(), FA: [a, e2, e3], smin, smax, FR, off, mask, Fm, geo, tgeo, centroid: [c.C.x, c.C.y, c.C.z] };
+    // uid: caches keyed on the candidate (screw sites, cross-sections) are tied to this exact frame and bone; an index
+    // is not enough (a split renumbers the list, a donor-side change turns e2 of the same candidate)
+    F.c = { i, uid: ++candSeq, FC: c.C.clone(), FA: [a, e2, e3], smin, smax, FR, off, mask, Fm, geo, tgeo, centroid: [c.C.x, c.C.y, c.C.z] };
     buildScenes();
   }
   const offAt = s => { const o = F.c.off; return o[Math.min(o.length - 1, Math.max(0, Math.round(s - F.c.smin)))]; };
@@ -446,6 +463,10 @@ window.Fibula = (function () {
     // condylar resection: the graft's condylar end lies `neo` mm short of the fossa (web/condyle.js), so the defect and the
     // segments follow that distance; appended only then, so the signature of every other plan is unchanged
     if (S.lesion.condyle && window.Condyle && Condyle.neoOffset) a.push(['neo', r3(Condyle.neoOffset())]);
+    // the cuts are stored in the guide frame, which the guide angle (g.rot) turns: a cut the guide turn leaves in its frame
+    // (app.js keepCuts, a cut almost along the new axis) moves in the jaw with the same numbers (Denetim 3 D-6). Appended
+    // only when the guide is turned, so other plans keep their signature.
+    if (S.g && S.g.rot) a.push(['rot', r3(S.g.rot)]);
     return JSON.stringify(a); };
 
   // ---------- scenes ----------
@@ -515,7 +536,7 @@ window.Fibula = (function () {
     // placed by autoScrews (two on a segment of STUMP_MIN mm or more, at least three on the guide, clear of every slot)
     const fsc = guideScrews(c);
     const scs = fsc.map(f => { const st = screwAt(c, f); return { sc: { d: f.d, D: f.D, sleeveH: f.sleeveH, len: f.len }, dir: st.dir, entry: st.entry }; });
-    return { g, P: Pg, u: u.clone(), v, n, pls, scs, fsc, bone: fibBone, field: q => St.fieldAt(F.red, F.c.Fm, [q.x, q.y, q.z]) };
+    return { g, P: Pg, u: u.clone(), v, n, pls, scs, fsc, bone: fibBone, field: St.guideField ? St.guideField(F.vol, F.red, F.c.Fm, THR) : q => St.fieldAt(F.red, F.c.Fm, [q.x, q.y, q.z]) };   // (the production server's bone: Studio.guideField)
   }
   // effective slot width: the plan's slot (never narrower than the blade), else the blade itself (the old single value)
   const slotOf = P0 => Math.max(P0.kerf, P0.slotW == null ? P0.kerf : P0.slotW);
@@ -576,7 +597,7 @@ window.Fibula = (function () {
   let autoKey = '', autoVal = null;
   function autoScrews(c) {
     const body = guideBody(c), pls = slotPlanes(c);
-    const key = JSON.stringify([F.c.i, rules(), body.W, body.wrap, body.wall, body.clear, pls.map(p => [p.pSlot.toArray(), p.N.toArray(), p.w].flat().map(x => Math.round(x * 100)))]);
+    const key = JSON.stringify([F.c.uid, rules(), body.W, body.wrap, body.wall, body.clear, pls.map(p => [p.pSlot.toArray(), p.N.toArray(), p.w].flat().map(x => Math.round(x * 100)))]);
     if (key === autoKey && autoVal) return autoVal.map(f => Object.assign({}, f));
     const lower = c.segs, STUMP_MIN = rules().stumpMin, want = lower.map(g => (g.L >= STUMP_MIN ? 2 : 1));
     for (let tot = want.reduce((a, b) => a + b, 0); tot < 3; tot++) { const i = lower.map((g, k) => [g.L / (want[k] + 1), k]).sort((a, b) => b[0] - a[0])[0][1]; want[i]++; }
@@ -636,7 +657,7 @@ window.Fibula = (function () {
   // bone down to its widest level (the deepest wrap that stays undercut-free), worst case over the span.
   let secKey = '', secVal = null;
   function localSection(sA, sB) {
-    const key = F.c.i + '|' + sA.toFixed(1) + '|' + sB.toFixed(1) + '|' + F.c.FR.toFixed(2);
+    const key = F.c.uid + '|' + sA.toFixed(1) + '|' + sB.toFixed(1) + '|' + F.c.FR.toFixed(2);
     if (key === secKey) return secVal;
     const R0 = F.c.FR + 4, st = 0.5, q = V(), [a, e2, e3] = F.c.FA, base = F.c.FC, step = Math.max(2, (sB - sA) / 12);
     let half = 0, depth = Infinity;
@@ -881,10 +902,23 @@ window.Fibula = (function () {
     if (!active()) { if (grafts) draw(null); return; }
     const D = defect();
     // an automatic segment count follows the defect: a new resection length (cuts moved, condyle, first defect) is planned again
-    if (D && plan().nAuto && !(S.fib.choice && Math.abs(S.fib.choice.L - D.L) < 0.5)) chooseSegments(D);
+    if (D && plan().nAuto && !(S.fib.choice && Math.abs(S.fib.choice.L - D.L) < 0.5)) rechoose(D);
     last = D ? compute(D) : null;
     draw(last); renderStep(); St.updatePanels();
     if (last) scheduleGuide();
+  }
+  // the count is chosen again for a new defect length. The same count keeps the surgeon's knots (fractions of the defect),
+  // osteotomy angles and rolls (Denetim 4 W8: a 1 mm cut move silently reset them); a different count cannot keep them,
+  // and says so.
+  function rechoose(D) {
+    const P0 = plan(), had = S.fib.choice, keep = { n: P0.n, knots: P0.knots.slice(), yaw: P0.yaw.slice(), pitch: P0.pitch.slice(), roll: P0.roll.slice() };
+    const pick = chooseSegments(D);
+    if (!had) return;
+    if (pick.n === keep.n) Object.assign(P0, keep);
+    else {
+      const set = keep.knots.some((k, i) => Math.abs(k - (i + 1) / keep.n) > 1e-3) || [keep.yaw, keep.pitch, keep.roll].some(a => a.some(x => x));
+      msg(xl(`Defekt boyu değişti; segment sayısı ${keep.n} → ${pick.n} oldu.`) + (set ? ' ' + xl('Segment sınırları, kesi açıları ve rotasyonlar sıfırlandı; kontrol edin.') : ''));
+    }
   }
   let liveTimer = null;
   function edited(live, commit) {
@@ -934,15 +968,16 @@ window.Fibula = (function () {
     if (!(num(q.kerf, 0) > 0)) warn.push(xl(`Testere payı (kerf) sıfır ya da geçersiz; ${D0.kerf} mm kullanıldı. Testere yuvaları için değeri kontrol edin.`));
     q.kerf = num(q.kerf, 0) > 0 ? cl(q.kerf, 0.5, 2, D0.kerf) : D0.kerf;
     // slot width: null (plans saved before it existed) = the kerf; never narrower than the blade
-    q.slotW = q.slotW == null || !Number.isFinite(Number(q.slotW)) ? null : Math.max(q.kerf, cl(q.slotW, 0.5, 2.5, q.kerf));
+    if ('slotW' in q) q.slotW = q.slotW == null || !Number.isFinite(Number(q.slotW)) ? null : Math.max(q.kerf, cl(q.slotW, 0.5, 2.5, q.kerf));
     q.distal = cl(q.distal, 40, 140, D0.distal); q.vOff = cl(q.vOff, -12, 12, 0);
     q.dblH = q.dblH == null ? null : cl(q.dblH, 8, 30, 8); q.dbl = q.dbl ? 1 : 0;
-    q.n = Math.round(cl(q.n, 1, MAX_N, 2)); q.nAuto = q.nAuto ? 1 : 0;      // a stored count is a decision unless it says it was automatic
+    q.n = Math.round(cl(q.n, 1, MAX_N, 2)); if ('nAuto' in q) q.nAuto = q.nAuto ? 1 : 0;      // a stored count is a decision unless it says it was automatic
     const n = q.n, ang = (a, len) => Array.from({ length: len }, (_, i) => cl(Array.isArray(a) ? a[i] : 0, -180, 180, 0));
     q.yaw = ang(q.yaw, n + 1); q.pitch = ang(q.pitch, n + 1); q.roll = ang(q.roll, n);
     const kn = Array.isArray(q.knots) && q.knots.length === n - 1 ? q.knots.map(x => cl(x, 0.05, 0.95, 0.5)) : null;
     q.knots = kn && kn.every((x, i) => i === 0 || x > kn[i - 1]) ? kn : Array.from({ length: n - 1 }, (_, i) => (i + 1) / n);
     // fields added later are normalised only when present: a plan saved without them keeps its approval signature
+    // (slotW and nAuto above too: Denetim 4 W20)
     // (no side = from the tibia; no rollAuto = the stored rolls, as before)
     if ('side' in q) q.side = q.side === 'L' || q.side === 'R' ? q.side : null;
     if ('rollAuto' in q) q.rollAuto = q.rollAuto ? 1 : 0;
@@ -1015,6 +1050,7 @@ window.Fibula = (function () {
     const r = await St.serverGuide({ vol: F.vol, red: F.red, F: F.c.Fm, thr: THR, g: x.g, P: x.P, u: x.u, v: x.v, n: x.n, pls: x.pls, scs: x.scs, wrapProfile: S.fib.guide.result.wrapProfile, seatDir: S.fib.guide.result.seatDir }, signal);
     S.fib.prod = Object.assign(r, { key: S.fib.guide.key });
     $('prodMsg').textContent += ' ' + xl(`Fibula guide'ı: ${r.watertight ? 'su geçirmez' : 'SU GEÇİRMEZ DEĞİL'}, ${r.bodies} parça${r.bodies > 1 ? ' (BİRDEN FAZLA PARÇA)' : ''}.`);
+    const why = St.prodWhy ? St.prodWhy(r) : ''; if (why) $('prodMsg').textContent += ' ' + why;   // (the server's reasons not to print it, P5/P6/E3)
   }
 
 
@@ -1122,11 +1158,20 @@ window.Fibula = (function () {
       }
     });
     const { lab } = G.splitSeeds(r, dom, seeds, THR);
-    let mx = 0; for (let v = 0; v < n; v++) if (F.labels[v] > mx) mx = F.labels[v];
-    let nf = 0, nt = 0;
-    for (let v = 0; v < n; v++) { if (lab[v] === 1) { F.labels[v] = mx + 1; nf++; } else if (lab[v] === 2) { F.labels[v] = mx + 2; nt++; } }
+    // sizes first: a failed split must leave the labels as they were (the joined candidate keeps its voxels)
+    let nf = 0, nt = 0; for (let v = 0; v < n; v++) { if (lab[v] === 1) nf++; else if (lab[v] === 2) nt++; }
     if (nf < 100 || nt < 100) return null;
+    let mx = 0; for (let v = 0; v < n; v++) if (F.labels[v] > mx) mx = F.labels[v];
+    for (let v = 0; v < n; v++) { if (lab[v] === 1) F.labels[v] = mx + 1; else if (lab[v] === 2) F.labels[v] = mx + 2; }
     const [cf, ct] = boneStats(r, F.labels, [{ label: mx + 1 }, { label: mx + 2 }]);
+    // the joined piece's voxels now carry the two new labels (any left over, not reached by either seed, stay): a candidate
+    // that still points at the old label would be an empty or partial bone (Denetim 4 W9: RangeError on choosing it)
+    let rest = 0; for (let v = 0; v < n; v++) if (F.labels[v] === l) rest++;
+    if (rest < 100) {
+      const cur = F.c ? F.cands[F.c.i] : null;
+      F.cands = F.cands.filter(c => c.label !== l); F.cands.forEach(c => { if (c.tibia && c.tibia.label === l) c.tibia = null; });
+      if (F.c) { const i = F.cands.indexOf(cur); if (i < 0) F.c = null; else F.c.i = i; }
+    }
     cf.tibia = ct; cf.picked = true; F.split = true; return cf;
   }
   // all bones of the leg scan, faint, while a bone is being picked
@@ -1170,7 +1215,7 @@ window.Fibula = (function () {
   $('fibSample').addEventListener('click', () => start('sample'));
   $('fibDicom').addEventListener('change', e => { if (e.target.files.length) start('dicom', [...e.target.files]); e.target.value = ''; });
   $('fibFiles').addEventListener('change', e => { if (e.target.files.length) start('dicom', [...e.target.files]); e.target.value = ''; });
-  $('fibCand').addEventListener('change', e => { setCandidate(+e.target.value, planSide()); plan().cand = F.c.centroid.map(x => Math.round(x * 10) / 10); guideKey = ''; edited(false, true); setView(view); });
+  $('fibCand').addEventListener('change', e => { if (setCandidate(+e.target.value, planSide()) === false) { if (F.c) e.target.value = F.c.i; return; } plan().cand = F.c.centroid.map(x => Math.round(x * 10) / 10); guideKey = ''; edited(false, true); setView(view); });
   document.querySelectorAll('#fibN button').forEach(b => b.addEventListener('click', () => { if (!active()) return; plan().nAuto = 0; setN(+b.dataset.n); update(); optimizeKnots(); edited(false, true); }));
   $('fibOpt').addEventListener('click', () => { if (!active()) return; optimizeKnots(); edited(false, true); });
   $('fibPick').addEventListener('click', () => startMode('pick'));
@@ -1185,7 +1230,7 @@ window.Fibula = (function () {
   // donor side: without a tibia the guide's face (e2) follows it, so the candidate frame is rebuilt
   $('fibSide').addEventListener('change', e => {
     if (!active()) return; const P0 = plan(), v = e.target.value; P0.side = v === 'L' || v === 'R' ? v : null;
-    if (!F.cands[F.c.i].tibia) setCandidate(F.c.i, P0.side);
+    if (F.c && F.cands[F.c.i] && !F.cands[F.c.i].tibia) setCandidate(F.c.i, P0.side);
     guideKey = ''; edited(false, true); setView(view);
   });
   [['fibKerf', 'kerf', v => fmt(v) + ' mm'], ['fibDistal', 'distal', v => fmt(v, 0) + ' mm'], ['fibVOff', 'vOff', v => fmt(v) + ' mm'], ['fibDblH', 'dblH', v => fmt(v) + ' mm']].forEach(([id, key, f]) => {

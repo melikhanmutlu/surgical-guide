@@ -1,12 +1,7 @@
-numpy
-scipy
-scikit-image
-SimpleITK
-pydicom
-trimesh
-manifold3d  # yolmed_server.py: üretim STL boolean
-fast-simplification
-shapely
-matplotlib
-# optional, AI segmentation backend (GPU recommended):
+# local planning pipeline (run_pipeline.py) + tests; the server set is requirements-server.txt.
+-r requirements-server.txt
+fast-simplification==0.2.0
+shapely==2.2.0
+matplotlib==3.11.2
+# optional, AI segmentation backend (GPU recommended), not pinned / not part of the hosted service:
 # TotalSegmentator

@@ -51,4 +51,19 @@ test('units: contact area is in mm² (contacts × h²); halving h at the same ge
   near(b.area, a.area, 0.25 * a.area, 'contact area mm²');
 });
 
+test('units (Denetim 4 W15): the block is the projected overhang area in mm², the same for a thin or thick shelf and at half the grid step; under FREE_MM2 is free', () => {
+  // shelf over the guide at i 5..13, j 4..15 (9 x 12 cells of 0.5 mm = 27 mm² seen along n), 1 or 3 voxels thick
+  const shelf = T => (i, j, k) => k < 8 || (i < 3 && k < 19 + T) || (k >= 16 && k < 16 + T && i < 14);
+  const guide = (i, j, k) => k >= 9 && k < 13 && i > 4 && i < 26 && j > 3 && j < 16;
+  const thin = Seat.analyze(grid(NX, NY, NZ, shelf(1), guide)), thick = Seat.analyze(grid(NX, NY, NZ, shelf(3), guide));
+  near(thin.dirs[0].block, 27, 1e-9, 'thin shelf'); near(thick.dirs[0].block, 27, 1e-9, 'thick shelf (a voxel count would be 3x)');
+  // (the base is one fine voxel thicker so the guide still touches it within the contact distance)
+  const fine = Seat.analyze(grid(2 * NX, 2 * NY, 2 * NZ, (i, j, k) => k < 17 || shelf(1)(i >> 1, j >> 1, k >> 1), (i, j, k) => guide(i >> 1, j >> 1, k >> 1), 0.25));
+  near(fine.dirs[0].block, 27, 1.5, 'half the grid step');
+  assert.equal(Seat.FREE_MM2, 2);
+  // a single overhanging voxel column (0.25 mm²) is noise: the straight direction stays free
+  const speck = Seat.analyze(grid(NX, NY, NZ, (i, j, k) => k < 8 || (i < 3 && k < 19) || (k === 16 && i < 3) || (k === 16 && i === 10 && j === 10), guide));
+  assert.ok(speck.dirs[0].block > 0 && speck.dirs[0].block < Seat.FREE_MM2 && speck.best.tilt === 0, JSON.stringify(speck.dirs[0]));
+});
+
 await run('seat.js');

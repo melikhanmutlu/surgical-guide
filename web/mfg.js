@@ -6,7 +6,7 @@
 var xl = s => (window.I18N ? I18N.t(s) : s);
 window.Mfg = (function () {
   const St = window.Studio; if (!St) return null;
-  const { S, fmt, bus } = St, $ = id => document.getElementById(id);
+  const { S, fmt, bus, esc } = St, $ = id => document.getElementById(id);
   const PRESETS = {
     sla: { name: 'SLA reçine (biyouyumlu)', clear: 0.2, slotTol: 0.2, minWall: 2.0, fit: 0.1, note: 'Sterilizasyon sonrası boyut kontrolü önerilir.' },
     sls: { name: 'SLS PA12', clear: 0.3, slotTol: 0.3, minWall: 2.5, fit: 0.2, note: 'Toz yüzey pürüzü nedeniyle boşluklar geniş tutulur.' },
@@ -16,6 +16,14 @@ window.Mfg = (function () {
   const DEF = { prof: null, blade: 0.6, clear: 0.3, slotTol: 0.2, minWall: 2.0, fit: 0.1 };
   const F = [['blade', 'Testere ağzı kalınlığı', 0.3, 1.5, 0.05, 'mm'], ['clear', 'Kemik aralığı', 0, 1, 0.05, 'mm'], ['slotTol', 'Yuva toleransı (testereye ek)', 0, 0.8, 0.05, 'mm'], ['minWall', 'En ince duvar', 0.8, 4, 0.1, 'mm'], ['fit', 'Kovan geçme payı (matkaba ek)', 0, 0.5, 0.05, 'mm']];
   let M = Object.assign({}, DEF);
+  // a stored plan is untrusted input (G1: its values were written into the form unescaped): the profile key must be a
+  // known preset, every number finite and inside its control's range, anything else falls back to the default
+  function clean(x) {
+    const o = Object.assign({}, DEF); if (!x || typeof x !== 'object') return o;
+    o.prof = typeof x.prof === 'string' && Object.prototype.hasOwnProperty.call(PRESETS, x.prof) ? x.prof : null;
+    F.forEach(([k, , mn, mx]) => { const v = Number(x[k]); if (x[k] !== null && x[k] !== '' && Number.isFinite(v)) o[k] = Math.max(mn, Math.min(mx, v)); });
+    return o;
+  }
   const slot = () => Math.round((M.blade + M.slotTol) * 100) / 100;
 
   // write the profile into the design; changed items lose their approval
@@ -69,8 +77,8 @@ window.Mfg = (function () {
     const box = $('mfgBox'); if (!box) return;
     if (box.contains(document.activeElement) && document.activeElement.type === 'range') return;
     box.innerHTML = `<h3 class="sub">Üretim profili</h3>
-      <div class="ctl"><label for="mfProf" class="lbl2">Malzeme ve süreç</label><select id="mfProf"><option value="">Seçilmedi</option>${Object.entries(PRESETS).map(([k, x]) => `<option value="${k}" ${M.prof === k ? 'selected' : ''}>${x.name}</option>`).join('')}</select></div>
-      ${M.prof ? F.map(([k, t, mn, mx, st, un]) => `<div class="ctl"><div class="ctl-row"><label for="mf_${k}">${t}</label><output id="mfo_${k}">${fmt(M[k], 2)} ${un}</output></div><input type="range" id="mf_${k}" min="${mn}" max="${mx}" step="${st}" value="${M[k]}" ${M.prof !== 'custom' && k !== 'blade' ? 'disabled' : ''}></div>`).join('') +
+      <div class="ctl"><label for="mfProf" class="lbl2">Malzeme ve süreç</label><select id="mfProf"><option value="">Seçilmedi</option>${Object.entries(PRESETS).map(([k, x]) => `<option value="${esc(k)}" ${M.prof === k ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></div>
+      ${M.prof ? F.map(([k, t, mn, mx, st, un]) => `<div class="ctl"><div class="ctl-row"><label for="mf_${k}">${t}</label><output id="mfo_${k}">${fmt(M[k], 2)} ${un}</output></div><input type="range" id="mf_${k}" min="${mn}" max="${mx}" step="${st}" value="${esc(String(M[k]))}" ${M.prof !== 'custom' && k !== 'blade' ? 'disabled' : ''}></div>`).join('') +
         `<p class="hint">${xl(`Kesi yuvası ${fmt(slot(), 2)} mm olur.`)}</p><p class="hint more">${xl('Profil uygulanınca boşluk, geçme payı, yuvalar ve en ince duvar tasarıma yazılır; değişen kesilerin onayı kalkar.')} ${xl(PRESETS[M.prof].note)}</p>` : '<p class="hint more">Profil seçilince guide toleransları üretim yöntemine göre ayarlanır.</p>'}`;
     $('mfProf').addEventListener('change', e => { const k = e.target.value || null; M = Object.assign({}, M, k ? PRESETS[k] : {}, { prof: k }); delete M.name; delete M.note; apply(); render(); St.emit('changed'); });
     F.forEach(([k, , , , , un]) => { const el = $('mf_' + k); if (!el) return;
@@ -80,7 +88,7 @@ window.Mfg = (function () {
   (window.PlanExt = window.PlanExt || {}).mfg = {
     label: 'Üretim profili',
     get: () => (M.prof ? Object.assign({}, M) : null),
-    set(x) { M = Object.assign({}, DEF, x || {}); render(); },
+    set(x) { M = clean(x); render(); },
   };
   bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring)) { M = Object.assign({}, DEF); render(); } });
   render();

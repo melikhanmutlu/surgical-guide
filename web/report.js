@@ -1,5 +1,8 @@
-/* Surgical PDF report, drawn page by page on a canvas (so Turkish text needs no embedded PDF font) and packed into a
-   PDF of JPEG pages by a small writer below. Contents: case and version, 3D views, cut table, screws, fibula segments,
+/* Surgical PDF report, drawn page by page on a canvas and packed into a PDF of JPEG pages by a small writer below.
+   Every line of text drawn on a page is also written into the PDF as invisible text (render mode 3) at the same place,
+   so the report can be searched, copied and read aloud (D1); the picture stays what the canvas drew. That text uses
+   the standard Helvetica font (no font file) in Windows-1254 order, which holds the Turkish letters; a /ToUnicode map
+   gives extractors the exact characters. Contents: case and version, 3D views, cut table, screws, fibula segments,
    assembly order, automatic checks, and signature fields for the surgeon and the engineer. */
 'use strict';
 var xl = s => (window.I18N ? I18N.t(s) : s);
@@ -16,7 +19,7 @@ window.Report = (function () {
     const r = St.renderer, cam = St.camera, ctl = St.controls, keep = { pos: cam.position.clone(), tgt: ctl.target.clone(), aspect: cam.aspect, layers: cam.layers.mask };
     const size = r.getSize(new THREE.Vector2()), pr = r.getPixelRatio(), split = S.split;
     S.split = false; r.setPixelRatio(1); r.setSize(w, h, false); cam.aspect = w / h; cam.layers.set(layer);
-    const objs = layer === 0 ? Object.values(St.parts).filter(p => p.visible && (focus || /^(bone|guide|resected|screw|plate)$/).test(p.id)).map(p => p.obj) : [];
+    const objs = layer === 0 ? Object.values(St.parts).filter(p => p.visible && (focus || /^(bone|guide|resected|screw\d*|plate)$/).test(p.id)).map(p => p.obj) : [];
     // tissue layers and other context surfaces would cover the plan: hidden for the picture
     const hid = Object.values(St.parts).filter(p => p.obj.visible && (/^(layer_|ctx_|mirror)/.test(p.id) || (hide && hide.test(p.id)))); hid.forEach(p => { p.obj.visible = false; });
     const box = new THREE.Box3(); objs.forEach(o => box.expandByObject(o));
@@ -41,6 +44,7 @@ window.Report = (function () {
     const pages = []; let g, y;
     function page() {
       const cv = document.createElement('canvas'); cv.width = W; cv.height = H; g = cv.getContext('2d'); pages.push(cv);
+      textLayer(cv, g);
       g.fillStyle = '#fff'; g.fillRect(0, 0, W, H); y = M;
       g.fillStyle = C.muted; g.font = `22px ${FONT}`; g.textBaseline = 'alphabetic';
       g.fillText(`Yolmed · ${xt(meta.title)}`, M, 50); g.textAlign = 'right'; g.fillText(meta.version, W - M, 50); g.textAlign = 'left';
@@ -85,29 +89,84 @@ window.Report = (function () {
     } };
   }
 
-  // ---------- minimal PDF: one JPEG image per A4 page ----------
+  // ---------- text layer: what fillText draws is kept with its place, size and drawn width ----------
+  function textLayer(cv, g) {
+    const fill = g.fillText, list = cv.textLayer = [];
+    g.fillText = function (t, x, y, ...r) {
+      t = String(t); fill.call(this, t, x, y, ...r);
+      if (!t.trim() || !isFinite(x) || !isFinite(y)) return;   // (nothing was drawn either)
+      const px = +(/(\d+(?:\.\d+)?)px/.exec(this.font) || [0, 20])[1], w = this.measureText(t).width;
+      const x0 = this.textAlign === 'right' || this.textAlign === 'end' ? x - w : this.textAlign === 'center' ? x - w / 2 : x;
+      list.push({ t, x: x0, y, px, w });
+    };
+  }
+  // Windows-1254 (WinAnsi with Ğ İ Ş ğ ı ş in place of Ð Ý Þ ð ý þ) and the glyph names the font gets for those six
+  const TR = { 0xD0: ['Ğ', 'Gbreve'], 0xDD: ['İ', 'Idotaccent'], 0xDE: ['Ş', 'Scedilla'], 0xF0: ['ğ', 'gbreve'], 0xFD: ['ı', 'dotlessi'], 0xFE: ['ş', 'scedilla'] };
+  const CP = (() => {
+    const hi = '€\0‚ƒ„…†‡ˆ‰Š‹Œ\0\0\0\0‘’“”•–—˜™š›œ\0\0Ÿ', m = new Map();
+    for (let c = 32; c < 127; c++) m.set(String.fromCharCode(c), c);
+    [...hi].forEach((ch, i) => { if (ch !== '\0') m.set(ch, 0x80 + i); });
+    for (let c = 0xA0; c < 0x100; c++) m.set(TR[c] ? TR[c][0] : String.fromCharCode(c), c);
+    return m;
+  })();
+  const UNI = new Map([...CP].map(([ch, c]) => [c, ch]));
+  const NEAR = { '≤': '<=', '≥': '>=', '−': '-', '→': '->', '←': '<-', '≈': '~', '✓': 'v', '×': 'x', ' ': ' ' };
+  function cp1254(t) {
+    const out = [];
+    for (const ch of String(t)) {
+      if (CP.has(ch)) { out.push(CP.get(ch)); continue; }
+      const alt = NEAR[ch] || ch.normalize('NFD').replace(/[̀-ͯ]/g, '');
+      for (const a of (alt && [...alt].every(x => CP.has(x)) ? alt : '?')) out.push(CP.get(a));
+    }
+    return out;
+  }
+  // Helvetica advance widths (1/1000 em), ASCII 32–126; other letters by their nearest Latin shape
+  const HW = [278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278, 278, 556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 278, 278, 584, 584, 584, 556, 1015, 667, 667, 722, 722, 667, 611, 778, 722, 278, 500, 667, 556, 833, 722, 778, 667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 278, 278, 278, 469, 556, 333, 556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, 556, 556, 556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500, 334, 260, 334, 584];
+  const hw = c => c >= 32 && c < 127 ? HW[c - 32] : c === 0xFD || c === 0xDD ? 278 : c === 0x85 || c === 0x97 ? 1000 : c === 0xB0 ? 400 : c === 0xB7 ? 278 : c >= 0xC0 && c < 0xE0 ? 722 : 556;
+  const pdfStr = bytes => '(' + bytes.map(c => c === 40 || c === 41 || c === 92 ? '\\' + String.fromCharCode(c) : c >= 32 && c < 127 ? String.fromCharCode(c) : '\\' + c.toString(8).padStart(3, '0')).join('') + ')';
+  const n2 = x => (Math.round(x * 100) / 100).toString();
+  function textOps(list, sx, sy, ph) {
+    let out = 'BT 3 Tr\n';
+    list.forEach(o => {
+      const b = cp1254(o.t), pt = o.px * sy, adv = b.reduce((a, c) => a + hw(c), 0) / 1000 * pt;
+      const tz = adv > 0 ? Math.max(30, Math.min(300, 100 * o.w * sx / adv)) : 100;   // stretch to the drawn width: selection covers the picture's words
+      out += `/F1 ${n2(pt)} Tf ${n2(tz)} Tz 1 0 0 1 ${n2(o.x * sx)} ${n2(ph - o.y * sy)} Tm ${pdfStr(b)} Tj\n`;
+    });
+    return out + 'ET';
+  }
+  function toUnicode() {
+    const rows = [...UNI].filter(([c]) => c >= 32).map(([c, ch]) => `<${c.toString(16).toUpperCase().padStart(2, '0')}> <${ch.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}>`);
+    let body = '/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def /CMapName /Yolmed-cp1254 def /CMapType 2 def\n1 begincodespacerange <00> <FF> endcodespacerange\n';
+    for (let i = 0; i < rows.length; i += 100) { const r = rows.slice(i, i + 100); body += `${r.length} beginbfchar\n${r.join('\n')}\nendbfchar\n`; }
+    return body + 'endcmap CMapName currentdict /CMap defineresource pop end end';
+  }
+
+  // ---------- minimal PDF: one JPEG image per A4 page, with its invisible text ----------
   function pdfOf(jpegs) {
     const enc = new TextEncoder(), parts = [], offs = []; let len = 0;
     const put = x => { const b = typeof x === 'string' ? enc.encode(x) : x; parts.push(b); len += b.length; };
     const obj = (n, body) => { offs[n] = len; put(`${n} 0 obj\n`); body(); put('\nendobj\n'); };
     put('%PDF-1.4\n%\xe2\xe3\xcf\xd3\n');
-    const n = jpegs.length, pageIds = jpegs.map((_, i) => 3 + i * 3);
-    obj(1, () => put('<< /Type /Catalog /Pages 2 0 R >>'));
+    const n = jpegs.length, pageIds = jpegs.map((_, i) => 3 + i * 3), fid = 3 + n * 3, tuid = fid + 1;
+    obj(1, () => put('<< /Type /Catalog /Pages 2 0 R /Lang (tr-TR) >>'));
     obj(2, () => put(`<< /Type /Pages /Count ${n} /Kids [${pageIds.map(id => id + ' 0 R').join(' ')}] >>`));
     jpegs.forEach((j, i) => {
       const pid = 3 + i * 3, cid = pid + 1, iid = pid + 2, pw = 595.28, ph = 841.89;
-      obj(pid, () => put(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pw} ${ph}] /Resources << /XObject << /Im${i} ${iid} 0 R >> >> /Contents ${cid} 0 R >>`));
-      const cs = `q ${pw} 0 0 ${ph} 0 0 cm /Im${i} Do Q`;
+      obj(pid, () => put(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pw} ${ph}] /Resources << /XObject << /Im${i} ${iid} 0 R >> /Font << /F1 ${fid} 0 R >> >> /Contents ${cid} 0 R >>`));
+      const cs = `q ${pw} 0 0 ${ph} 0 0 cm /Im${i} Do Q` + (j.text && j.text.length ? '\n' + textOps(j.text, pw / j.w, ph / j.h, ph) : '');   // (ASCII only: /Length counts bytes)
       obj(cid, () => put(`<< /Length ${cs.length} >>\nstream\n${cs}\nendstream`));
       obj(iid, () => { put(`<< /Type /XObject /Subtype /Image /Width ${j.w} /Height ${j.h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${j.bytes.length} >>\nstream\n`); put(j.bytes); put('\nendstream'); });
     });
-    const xref = len, total = 3 + n * 3;
+    obj(fid, () => put(`<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding << /Type /Encoding /BaseEncoding /WinAnsiEncoding /Differences [${Object.entries(TR).map(([c, [, g]]) => `${c} /${g}`).join(' ')}] >> /ToUnicode ${tuid} 0 R >>`));
+    const cm = toUnicode();
+    obj(tuid, () => put(`<< /Length ${cm.length} >>\nstream\n${cm}\nendstream`));
+    const xref = len, total = tuid + 1;
     put(`xref\n0 ${total}\n0000000000 65535 f \n`);
     for (let k = 1; k < total; k++) put(String(offs[k]).padStart(10, '0') + ' 00000 n \n');
     put(`trailer\n<< /Size ${total} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`);
     return new Blob(parts, { type: 'application/pdf' });
   }
-  const jpegOf = cv => { const b = atob(cv.toDataURL('image/jpeg', 0.88).split(',')[1]), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return { bytes: u, w: cv.width, h: cv.height }; };
+  const jpegOf = cv => { const b = atob(cv.toDataURL('image/jpeg', 0.88).split(',')[1]), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return { bytes: u, w: cv.width, h: cv.height, text: cv.textLayer || [] }; };
 
   // ---------- assembly order from the plan ----------
   function assembly() {
@@ -129,7 +188,7 @@ window.Report = (function () {
 
   async function build() {
     const name = (window.CaseStore && CaseStore.caseName()) || ($('caseInfo').querySelector('dd') || {}).textContent || 'Vaka';
-    const version = window.CaseStore ? CaseStore.versionLabel() : 'Taslak', when = new Date().toLocaleString('tr-TR');
+    const version = window.CaseStore ? CaseStore.versionLabel() : 'Taslak', when = window.DateFmt ? DateFmt.dateTime(Date.now()) : new Date().toLocaleString('tr-TR');   // dates.js: EN spells the month
     const miss = St.pendingList(), draft = miss.length || S.crit, surgeon = $('surgeon').value.trim();
     St.busy(true, 'Rapor görüntüleri hazırlanıyor…'); await St.sleep();
     const shots = [];
@@ -140,7 +199,7 @@ window.Report = (function () {
       shots.push({ img: await loadImg(snapshot([0, -0.05, 1])), cap: 'Üstten' });
       const has = id => St.parts[id] && St.parts[id].visible, n = S.anchor.n;
       // close views of what the surgeon builds: the guide on the bone, the plate, the implants on the grafts
-      if (has('guide')) shots.push({ img: await loadImg(snapshot([n.x, n.y, n.z], 1000, 640, 0, /^(guide|screw)$/, 1.5)), cap: 'Guide yakın görünüm (kemiğe bakış)' });
+      if (has('guide')) shots.push({ img: await loadImg(snapshot([n.x, n.y, n.z], 1000, 640, 0, /^(guide|screw\d*)$/, 1.5)), cap: 'Guide yakın görünüm (kemiğe bakış)' });
       if (has('plate')) shots.push({ img: await loadImg(snapshot([n.x, n.y, n.z], 1000, 640, 0, /^plate$/, 1.15)), cap: 'Plak ve vida delikleri' });
       if (has('implants') && window.Fibula && Fibula.active() && Fibula.state().last) { const up = Fibula.state().last.D.vup; shots.push({ img: await loadImg(snapshot([up.x, up.y, up.z], 1000, 640, 0, /^implants$/, 2.2, /^(guide|screw|plate|lesion|resected)/)), cap: 'İmplantlar (oklüzal bakış)' }); }
       if (window.Fibula && Fibula.active()) { St.scene.traverse(o => { if (o.isLight) o.layers.enableAll(); }); shots.push({ img: await loadImg(snapshot([0, -1, 0.3], 1000, 640, 1)), cap: 'Fibula ve fibula guide\'ı' }); }
@@ -160,7 +219,8 @@ window.Report = (function () {
     d.status(draft ? 'TASLAK' : 'ONAYLI PLAN', draft ? 'warn' : 'ok');
     d.text(`${xl('Sürüm:')} ${version}${surgeon ? ' · ' + xl('Onaylayan:') + ' ' + surgeon : ''}`, { size: 22 });
     if (draft) d.text(`${xl('Onay bekleyen:')} ${miss.map(xl).join(', ') || '–'}${S.crit ? ` · ${xl(`${S.crit} kritik kontrol`)}` : ''}`, { size: 22, color: C.warn });
-    d.text(`${xl('Görüntü:')} ${St.caseLine()} · ${xl('Segmentasyon:')} ${S.segMethod || '–'}`, { size: 20, color: C.muted, after: 10 });
+    d.text(`${xl('Görüntü:')} ${St.caseLine()} · ${xl('Segmentasyon:')} ${S.segMethod || '–'}`, { size: 20, color: C.muted, after: St.swLine ? 4 : 10 });
+    if (St.swLine) d.text(St.swLine(), { size: 18, color: C.muted, after: 10 });
     if (shots.length) { d.h2('Görünümler'); d.images(shots); }
     if (slices.length) { d.h2('BT kesitleri'); d.images(slices); }
     d.h2('Kesim tablosu');

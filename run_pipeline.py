@@ -12,6 +12,7 @@ Examples
 import argparse
 import json
 import os
+import sys
 import time
 import numpy as np
 import trimesh
@@ -19,6 +20,7 @@ import trimesh
 from surgiguide.volume import Volume, write_dicom_series
 from surgiguide import phantom, segment, plan as planning, guides, render
 from surgiguide.meshing import volume_mask_mesh
+from surgiguide.version import info as version_info
 
 
 def log(msg, t0=[time.time()]):
@@ -34,13 +36,18 @@ def warn(msg):
     print("WARNING: " + msg, flush=True)
 
 
-def seg(vol, structure, args, dicom_dir, component):
+def seg(vol, structure, args, component):
     if args.segmenter == "totalseg":
-        return segment.totalseg_bone(vol, structure, dicom_dir=dicom_dir, fast=args.fast)
+        # the volume read above (the chosen series), never the whole DICOM folder: with several series in it
+        # TotalSegmentator would segment whichever it picks
+        return segment.totalseg_bone(vol, structure, dicom_dir=None, fast=args.fast)
     if structure == "mandible":          # skull / upper jaw / spine joined to the mandible are cut off (surgiguide/bones.py)
         mask, info = segment.mandible_bone(vol, hu=args.hu)
     elif component is None:              # leg CT: the slender bone beside the tibia on the donor side, not the table or the whole leg
         mask, info = segment.fibula_bone(vol, hu=args.hu, side=args.side)
+        if args.side == "auto":
+            args.side = info["side"]
+        log(f"fibula: {info['side']} leg ({'lateral to its tibia' if info.get('side_from') == 'tibia' else 'by the scanner x: not checked against a tibia'})")
     else:                                # explicit --fibula-component N: the old size-rank choice
         return segment.threshold_bone(vol, hu=args.hu, component=component)
     extra = "".join(f", {k} {info[k]:.0f} mm" for k in ("length_mm", "radius_mm") if k in info)
@@ -67,7 +74,9 @@ def main():
     ap.add_argument("--resect-from", type=float, default=-15.0, help="arch position mm (+ = patient left)")
     ap.add_argument("--resect-to", type=float, default=40.0)
     ap.add_argument("--segments", type=int, default=None, help="number of fibula segments (default: auto)")
-    ap.add_argument("--side", choices=["right", "left"], default="right", help="donor leg")
+    ap.add_argument("--side", choices=["right", "left", "auto"], default="right",
+                    help="donor leg (auto: the leg of a one-leg scan, told by the tibia). The fibula of the other leg is never used: "
+                         "the run stops when the asked leg has none")
     ap.add_argument("--kerf", type=float, default=1.0, help="saw blade thickness (bone one cut takes), mm")
     ap.add_argument("--slot-width", type=float, default=None,
                     help="guide saw slot width, mm (default: the kerf, as before; never narrower than the blade; blade + 0.1-0.3 mm is advised)")
@@ -78,6 +87,21 @@ def main():
     ap.add_argument("--out", default="outputs/run")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
+    summary = {"software": version_info()}
+    try:
+        run(a, summary)
+    except (RuntimeError, ValueError, FileNotFoundError) as e:
+        # a stop with a reason (wrong leg, no bone, a plan outside the bone ...): said plainly, and plan.json records it
+        print(f"ERROR: {e}", file=sys.stderr, flush=True)
+        summary.update(error=str(e), warnings=list(WARNINGS))
+        with open(os.path.join(a.out, "plan.json"), "w") as f:
+            json.dump(summary, f, indent=2)
+        return 2
+    return 0
+
+
+def run(a, summary):
+    log(f"surgiguide {summary['software']['version']}")
 
     if a.demo:
         log("generating synthetic CT phantoms and writing them as DICOM series")
@@ -88,8 +112,10 @@ def main():
     log("reading DICOM")
     vm, vf = Volume.from_dicom_dir(a.mandible_dicom, a.mandible_series), Volume.from_dicom_dir(a.fibula_dicom, a.fibula_series)
     log(f"segmenting ({a.segmenter})")
-    mm = seg(vm, "mandible", a, a.mandible_dicom, 1)
-    fm = seg(vf, "fibula", a, a.fibula_dicom, a.fibula_component)
+    mm = seg(vm, "mandible", a, 1)
+    fm = seg(vf, "fibula", a, a.fibula_component)
+    if a.side == "auto":
+        raise RuntimeError("--side auto needs the automatic fibula picker (threshold segmenter, no --fibula-component); give --side right / left")
     mand_mesh, fib_mesh = volume_mask_mesh(vm, mm), volume_mask_mesh(vf, fm)
     mand_mesh.export(os.path.join(a.out, "mandible.stl")); fib_mesh.export(os.path.join(a.out, "fibula.stl"))
     log(f"meshes: mandible {len(mand_mesh.faces)} faces, fibula {len(fib_mesh.faces)} faces")
@@ -98,11 +124,11 @@ def main():
     arch = planning.Arch(vm, mm)
     fib = planning.Fibula(vf, fm, side=a.side)
     p = planning.make_plan(arch, fib, a.resect_from, a.resect_to, n_segments=a.segments, kerf=a.kerf, kerf_side=a.kerf_side, slot_w=a.slot_width)
-    summary = planning.plan_summary(p, fib)
+    summary.update(planning.plan_summary(p, fib), donor_side=a.side)
     print(json.dumps(summary, indent=2))
     for w in p.get("warnings", []):
         warn("plan: " + w)
-    log(f"graft-to-stump gap: {p['stump_gap_mm'][0]:.2f} mm at each end (slot {p['slot_w']:.2f} mm, blade {p['kerf']:.2f} mm, on the {p['kerf_side']} side of the cut plane)")
+    log(f"graft-to-stump gap: {p['stump_gap_mm'][0]:.2f} mm at each end (planned slot {p['slot_w']:.2f} mm, blade {p['kerf']:.2f} mm, on the {p['kerf_side']} side of the cut plane)")
     if p.get("segment_decision"):
         d = p["segment_decision"]
         why = {"short": "defect shorter than one segment", "dev": "fewest segments within the deviation tolerance",
@@ -117,11 +143,17 @@ def main():
     for i, (m, _, _) in enumerate(mg):
         m.export(os.path.join(a.out, f"guide_mandible_{'ab'[i]}.stl"))
     summary["guides"] = [frep] + [r for _, _, r in mg]
+    # the slot the STL really has (whole voxels of the guide grid, never narrower than the blade), not only the planned one
+    log("guide slots: " + ", ".join(f"{r['name']} {r['slot_mm']:.2f} mm" for r in summary["guides"] if "slot_mm" in r)
+        + f" (planned {p['slot_w']:.2f} mm, rounded up to whole voxels of the guide grid)")
     for r in summary["guides"]:
-        if r.get("seat"):
-            st = r["seat"]
+        if r.get("wall"):
+            log(f"{r['name']}: wall 1st percentile {r['wall']['wall_p1_mm']:.1f} mm, {r['wall']['thin_mm2']:.0f} mm2 thinner than the minimum "
+                f"(rim / staircase), {r['wall']['held_parts']} part(s) held by thin wall only")
+        st = r.get("seat")
+        if st and st.get("ok"):
             log(f"{r['name']}: seat check {st['free_directions']}/{st['directions']} directions free, best tilt {st['best_tilt_deg']:.0f} deg, "
-                f"{st['blocked_mm2_along_normal']:.0f} mm2 of bone over the guide along the buccal normal")
+                f"{st['blocked_mm2_along_normal']:.0f} mm2 of bone over the guide along its seating normal")
         if r.get("slot_note"):
             warn(r["slot_note"])
         if r.get("note"):
@@ -184,4 +216,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

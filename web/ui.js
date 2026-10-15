@@ -48,7 +48,7 @@ window.UI = (function () {
       st4: fibOk,
       st5: !!R && !!S.anchor && !!St.parts.guide && R.pieces === want && !gCrit,
       st6: S.screws.length > 0 && scOk === S.screws.length && !critOf(/^s\d/),
-      st7: !$('expZip').disabled,
+      st7: !$('expZip').disabled && (!St.lockState || St.lockState().ready),
       st8: exported,
     };
     tag($('tag1'), !S.vol ? '' : qcCrit ? 'crit' : qcWarn ? 'warn' : 'ok', !S.vol ? '' : qcCrit ? 'Kritik' : qcWarn ? 'Uyarı' : 'Uygun');
@@ -57,7 +57,9 @@ window.UI = (function () {
     tag($('tag3'), !S.anchor ? '' : critOf(/^p\d|lesion/) ? 'crit' : resOk === resN ? 'ok' : 'warn', !S.anchor ? '' : `${resOk}/${resN} onaylı`);
     tag($('tag5g'), !R ? '' : gCrit ? 'crit' : 'ok', !R ? '' : gCrit ? 'Kritik' : R.pieces === 1 ? 'Tek parça' : want === 2 && R.pieces === 2 ? 'İki guide' : `${R.pieces} parça`);
     tag($('tag5'), !S.screws.length ? '' : critOf(/^s\d/) ? 'crit' : scOk === S.screws.length ? 'ok' : 'warn', S.screws.length ? `${scOk}/${S.screws.length} onaylı` : '');
-    const pend = S.anchor ? St.pendingList().length : 0;
+    // the status follows the package lock; a lock left open while something is pending is re-run first (fail-safe)
+    if (S.anchor && !$('expZip').disabled && St.pendingList().length) St.renderAppr();
+    const lock = St.lockState ? St.lockState() : { ready: !$('expZip').disabled, pend: St.pendingList().length }, pend = S.anchor ? lock.pend : 0;
     tag($('tag7'), !S.anchor ? '' : S.crit ? 'crit' : done.st7 ? 'ok' : 'warn', !S.anchor ? '' : S.crit ? `${S.crit} kritik` : done.st7 ? 'Onaylı' : `${pend} bekliyor`);
     tag($('tag8'), done.st8 ? 'ok' : '', done.st8 ? 'Alındı' : '');
     const counted = steps.filter(d => !d.hidden && (d.id !== 'st4' || fibOn));
@@ -69,22 +71,53 @@ window.UI = (function () {
     const crit = S.crit + (qcCrit ? 1 : 0);
     $('critCnt').hidden = !crit; $('critCnt').textContent = crit;
     const pill = $('readyPill');
-    if (!S.anchor) { pill.className = 'pill'; pill.textContent = 'Hazırlanıyor'; }
+    if (!S.anchor) { pill.className = 'pill'; pill.textContent = 'Plan eksik'; }
     else if (crit) { pill.className = 'pill crit'; pill.textContent = 'Kritik uyarı'; }
     else if (done.st7) { pill.className = 'pill ok'; pill.textContent = 'Onaylı plan'; }
-    else { pill.className = 'pill'; pill.textContent = 'Onay bekliyor'; }
+    else { pill.className = 'pill'; pill.textContent = pend ? `Onay bekliyor (${pend})` : 'Onay bekliyor'; }
     pill.title = crit && S.anchor ? 'Kontrolleri aç' : '';
+    // the package lock reason (#expMsg) sits under the download button; while it is locked a link leads to step 7
+    $('goReview').hidden = !S.anchor || done.st7;
+    // the 3D view's text alternative: what the plan holds now (WCAG 1.1.1); keys are listed in the label
+    if (cv3d()) cv3d().setAttribute('aria-label', !S.vol ? '3B görünüm: model yüklenmedi.' : `3B görünüm: ${S.planes.length} kesi, ${S.screws.length} vida, ${crit} kritik kontrol. Ok tuşları döndürür, + ve − yakınlaştırır, 1–5 hazır yönler, 0 ortalar.`);
     if ($('fibIntro')) $('fibIntro').hidden = !!(window.Fibula && Fibula.state().F);
     const dd = $('caseInfo').querySelector('dd');
-    $('caseTitle').textContent = $('caseName').value.trim() || (dd ? dd.textContent : '');
+    $('caseTitle').textContent = $('caseTitle').title = $('caseName').value.trim() || (dd ? dd.textContent : '');
     document.title = ($('caseName').value.trim() ? $('caseName').value.trim() + ' · ' : '') + 'Yolmed Guide Stüdyosu';
   }
   let pend = false;
   const later = () => { if (!pend) { pend = true; requestAnimationFrame(() => { pend = false; sync(); }); } };
-  ['changed', 'parts', 'volume', 'planApplied', 'select'].forEach(t => bus.addEventListener(t, later));
+  ['changed', 'parts', 'volume', 'planApplied', 'select', 'lock'].forEach(t => bus.addEventListener(t, later));
   const mo = new MutationObserver(later);
   ['qc', 'comps', 'checks', 'appr', 'caseInfo', 'expMsg', 'fibStatus'].forEach(id => mo.observe($(id), { childList: true, subtree: true, characterData: true }));
   $('caseName').addEventListener('input', later);
+  $('goReview').addEventListener('click', () => { openStep('st7', true); const f = $('surgeon'); if (f && !f.value.trim()) setTimeout(() => f.focus(), 300); });
+
+  // ---------- 3D canvas: name, focus and keyboard turning ----------
+  // the WebGL canvas is created by the studio; it gets a role and a name, joins the Tab order and turns with the
+  // arrow keys (15° steps around the view target), zooms with + / −, 0 fits the model. Picking regions and screws on
+  // the model stays a pointer task; their numeric fields are in the steps.
+  const cv3d = () => $('stage') && $('stage').querySelector('canvas');
+  function canvasA11y() {
+    const c = cv3d(); if (!c || c.dataset.a11y) return;
+    c.dataset.a11y = '1'; c.tabIndex = 0; c.setAttribute('role', 'img');
+    c.addEventListener('keydown', e => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const cam = St.camera, ctl = St.controls; if (!cam || !ctl) return;
+      const off = cam.position.clone().sub(ctl.target), step = Math.PI / 12;
+      let done = true;
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') off.applyAxisAngle(cam.up.clone().normalize(), e.key === 'ArrowLeft' ? -step : step);
+      else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { const side = V().crossVectors(cam.up, off).normalize(); off.applyAxisAngle(side, e.key === 'ArrowUp' ? step : -step); }
+      else if (e.key === '+' || e.key === '=') off.multiplyScalar(0.85);
+      else if (e.key === '-' || e.key === '−') off.multiplyScalar(1 / 0.85);
+      else if (e.key === '0') { $('fit').click(); return e.preventDefault(); }
+      else done = false;
+      if (!done) return;
+      e.preventDefault();
+      cam.position.copy(ctl.target).add(off); ctl.update(); St.render();
+    });
+  }
+  canvasA11y(); new MutationObserver(canvasA11y).observe($('stage'), { childList: true });
 
   // ---------- numeric entry beside each slider (type an exact value; arrow keys step it) ----------
   function enhance(range) {
@@ -94,11 +127,15 @@ window.UI = (function () {
     range.dataset.num = '1';
     const unit = (out.textContent.match(/[^\d\s,.\-−]+$/) || [''])[0].trim();
     const wrap = document.createElement('span'); wrap.className = 'num';
-    const inp = document.createElement('input'); inp.type = 'number'; inp.min = range.min; inp.max = range.max; inp.step = range.step;
+    // a text box (not type=number): the browser would show "0.5" in a Turkish interface whatever the page language;
+    // here the value is written with the interface's separator (TR "0,5", EN "0.5") and the arrow keys step it
+    const inp = document.createElement('input'); inp.type = 'text'; inp.inputMode = 'decimal'; inp.autocomplete = 'off';
+    inp.setAttribute('role', 'spinbutton'); inp.setAttribute('aria-valuemin', range.min); inp.setAttribute('aria-valuemax', range.max);
     inp.setAttribute('aria-label', (row.querySelector('label') || {}).textContent || 'Değer');
     wrap.append(inp, Object.assign(document.createElement('span'), { textContent: unit, className: 'u' }));
     out.classList.add('hasnum'); out.after(wrap);
-    const show = () => { if (document.activeElement !== inp) inp.value = range.value; const u = (out.textContent.match(/[^\d\s,.\-−]+$/) || [''])[0].trim(); if (u) wrap.querySelector('.u').textContent = u; };
+    const loc = v => (window.I18N && I18N.lang === 'en' ? String(v) : String(v).replace('.', ','));
+    const show = () => { inp.setAttribute('aria-valuenow', range.value); if (document.activeElement !== inp) inp.value = loc(range.value); const u = (out.textContent.match(/[^\d\s,.\-−]+$/) || [''])[0].trim(); if (u) wrap.querySelector('.u').textContent = u; };
     show();
     new MutationObserver(show).observe(out, { childList: true, characterData: true, subtree: true });
     range.addEventListener('input', show);
@@ -106,10 +143,17 @@ window.UI = (function () {
       let v = parseFloat(String(inp.value).replace(',', '.')); if (!isFinite(v)) { show(); return; }
       v = Math.min(+range.max, Math.max(+range.min, v));
       range.value = v; range.dispatchEvent(new Event('input', { bubbles: true })); range.dispatchEvent(new Event('change', { bubbles: true }));
-      inp.value = range.value;
+      inp.value = loc(range.value);
     };
     inp.addEventListener('change', commit);
-    inp.addEventListener('keydown', e => { if (e.key === 'Enter') { commit(); inp.blur(); } });
+    inp.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { commit(); inp.blur(); return; }
+      if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+      e.preventDefault();
+      const st = +range.step || 1, v = parseFloat(String(inp.value).replace(',', '.'));
+      inp.value = loc(+((isFinite(v) ? v : +range.value) + (e.key === 'ArrowUp' ? st : -st)).toFixed(6)); commit();
+    });
+    window.addEventListener('langchange', show);
   }
   const scanRanges = () => document.querySelectorAll('.side .ctl input[type=range]').forEach(enhance);
   document.querySelectorAll('.side').forEach(el => new MutationObserver(scanRanges).observe(el, { childList: true, subtree: true }));
@@ -129,11 +173,14 @@ window.UI = (function () {
     if (!url) { $('stConn').textContent = 'yok (önizleme)'; return; }
     try {
       const ac = new AbortController(), t = setTimeout(() => ac.abort(), 2500);
-      const r = await fetch(url + '/health', { signal: ac.signal }); clearTimeout(t);
+      // (/health needs no token; the token goes along when there is one, the light never asks for it)
+      const r = await fetch(url + '/health', { signal: ac.signal, headers: window.ServerAuth ? ServerAuth.header() : {} }); clearTimeout(t);
       $('stConn').textContent = r.ok ? 'bağlı' : `yanıt ${r.status}`;
     } catch (e) { $('stConn').textContent = 'ulaşılamıyor'; }
   }
   ping(); setInterval(ping, 30000);
+  // a server that wants an access token (G2): Settings can enter it again (after the dialog was closed, or a new token)
+  if (window.ServerAuth && ServerAuth.need()) { $('tokBox').hidden = false; $('tokSet').addEventListener('click', () => { $('dlgSet').close && $('dlgSet').close(); ServerAuth.enter(); }); }
 
   // ---------- keyboard ----------
   const PRESET = { ant: [0, -1, 0.12], right: [-1, 0, 0.12], left: [1, 0, 0.12], sup: [0, -0.03, 1], inf: [0, -0.03, -1] };

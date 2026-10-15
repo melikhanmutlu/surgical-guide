@@ -7,6 +7,7 @@ import base64
 import io
 import json
 import os
+import shutil
 import socket
 import sys
 import tempfile
@@ -81,20 +82,28 @@ def synthetic_case(sp=0.3):
     return crop, bone.astype(np.uint8)
 
 
+def r9_ok(r):
+    """A clean guide answer: production-ready, no issues, the version stamped in the reply and the STL header."""
+    head = base64.b64decode(r["stl_b64"])[:80]
+    return r["production_ok"] is True and r["issues"] == [] and r["version"] and head.startswith(b"YOLMED guide ") and r["version"].encode() in head
+
+
 def main():
-    tmp = tempfile.mkdtemp(prefix="yolmed_test_", dir=os.path.dirname(os.path.abspath(__file__)))
+    tmp = tempfile.mkdtemp(prefix="yolmed_test_")          # outside the checkout
     db = os.path.join(tmp, "cases.sqlite")
     port = free_port()
-    srv = yolmed_server.make_server("127.0.0.1", port, db)
+    srv = yolmed_server.make_server("127.0.0.1", port, db, token="", allow_origin="")   # whatever the environment says
     th = threading.Thread(target=srv.serve_forever, daemon=True); th.start()
     base = f"http://127.0.0.1:{port}"
     try:
         # ---- unchanged endpoints
         st, h, b = call(base, "GET", "/health")
-        assert st == 200 and json.loads(b)["backend"] == "threshold"
-        assert h["Access-Control-Allow-Private-Network"] == "true"
-        st, h, _ = call(base, "OPTIONS", "/cases")
-        assert st == 204 and "PUT" in h["Access-Control-Allow-Methods"]
+        hb = json.loads(b)
+        assert st == 200 and hb["backend"] == "threshold" and hb["store"] == "ok" and hb["version"], hb
+        # same-origin by default: no CORS, no private-network grant
+        assert "Access-Control-Allow-Origin" not in h and "Access-Control-Allow-Private-Network" not in h, dict(h)
+        st, h, _ = call(base, "OPTIONS", "/cases", headers={"Origin": "http://evil.example", "Access-Control-Request-Private-Network": "true"})
+        assert st == 204 and "Access-Control-Allow-Origin" not in h and "Access-Control-Allow-Private-Network" not in h, dict(h)
         hu = np.full((8, 10, 12), -1000, np.int16); hu[2:6, 3:7, 4:9] = 1200
         st, h, b = call(base, "POST", "/segment?nx=12&ny=10&nz=8&sp=1,1,1&origin=0,0,0&axes=1,0,0,0,1,0,0,0,1",
                         raw=hu.tobytes(), headers={"Content-Type": "application/octet-stream"})
@@ -137,7 +146,7 @@ def main():
         st, r = J(call(base, "POST", f"/cases/{a}/versions", {"plan": {}, "note": {"x": 1}, "author": ["a"]})); assert st == 400, (st, r)
         st, r = J(call(base, "PUT", f"/cases/{a}/draft", {"plan": {"blob": "x" * yolmed_server.MAX_PLAN_BODY}})); assert st == 413, (st, r)
         st, h, _ = call(base, "POST", "/segment?nx=1&ny=1&nz=1", raw=b"", headers={"Content-Type": "application/octet-stream"})
-        assert st == 400 and h.get("Access-Control-Allow-Origin") == "*", (st, dict(h))
+        assert st == 400 and h.get("Content-Type", "").startswith("application/json"), (st, dict(h))
         req_, _m = synthetic_case(0.6)
         st, r = J(call(base, "POST", "/guide", {"crop": req_, "mask_b64": "", "frame": {}, "g": {}, "planes": [{}] * (yolmed_server.MAX_PLANES + 1)}))
         assert st == 400, (st, r)
@@ -163,7 +172,7 @@ def main():
         print(f"guide: server {r['ms']} ms, round-trip {wall_ms:.0f} ms, stages {r['stage_ms']}, grid {r['grid']}")
         print(f"guide: faces {r['faces']}, volume {r['volume_mm3']:.1f} mm3, bodies {r['bodies']}, "
               f"watertight {r['watertight']}, dropped {r['dropped_fragments']}, STL {len(r['stl_b64']) * 3 // 4 / 1e6:.1f} MB")
-        assert r["watertight"] is True and r["bodies"] == 1
+        assert r["watertight"] is True and r["bodies"] == 1 and r9_ok(r), (r.get("issues"), r.get("repair"))
         tm = trimesh.load(io.BytesIO(base64.b64decode(r["stl_b64"])), file_type="stl")
         assert tm.is_watertight and tm.body_count == 1 and abs(tm.volume - r["volume_mm3"]) < 1e-3 * r["volume_mm3"]
         lo, hi = tm.bounds
@@ -251,6 +260,9 @@ def main():
         req8 = dict(req, screws=req["screws"] + [{"entry": [60, 0, 8], "dir": [0, 0, -1], "d": 2.0, "D": 5.0, "sleeveH": 5.0}])
         st, r8 = J(call(base, "POST", "/guide", req8))
         assert st == 200 and r8["watertight"] and r8["bodies"] == 1 and len(r8["screws"]) == 3 and r8["screws"][2].get("no_body") is True, (st, r8.get("screws"), r8.get("error"))
+        # ... and the answer says the STL is not production-ready, naming the screw (the studio blocks the package)
+        assert r8["production_ok"] is False and {"code": "screw_no_body", "screw": 2} in r8["issues"] and r8["screws_missing"] == 1, r8["issues"]
+        assert r9_ok(r5), r5.get("issues")
         # the same request gives the same STL (deterministic production)
         st, r9 = J(call(base, "POST", "/guide", req))
         assert r9["stl_b64"] == J(call(base, "POST", "/guide", req))[1]["stl_b64"]
@@ -274,8 +286,7 @@ def main():
         print("connecting bar OK")
     finally:
         srv.shutdown(); srv.server_close()
-        os.remove(db)
-        os.rmdir(tmp)
+        shutil.rmtree(tmp, ignore_errors=True)
     print("ALL TESTS PASSED")
 
 

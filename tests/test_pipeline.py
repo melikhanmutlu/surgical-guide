@@ -173,6 +173,60 @@ class GuideParts(unittest.TestCase):
                 self.assertLess(w, k + h, (h, k))
         self.assertAlmostEqual(guides._slot_width(1.0, 0.3), 1.2)
 
+    def test_wall_check_measures_sheet_thickness(self):
+        """Denetim 3 (Orta): the pipeline had no minimum-wall check. A 2.4 mm plate with a 0.6 mm sliver beside a slot."""
+        h = 0.3
+        g = np.zeros((40, 40, 60), bool)
+        g[10:18, 5:35, 5:55] = True                   # 8 voxels = 2.4 mm thick plate
+        r = guides.wall_check(g, h)
+        self.assertAlmostEqual(r["wall_p1_mm"], 2.4, delta=h)
+        self.assertEqual((r["thin_mm2"], r["held_parts"]), (0.0, 0))
+        g[10:18, 5:35, 30:32] = False                 # a slot through the plate ...
+        g[10:16, 5:35, 30:32] = False
+        g[16:18, 5:35, 30:32] = True                  # ... that leaves a 0.6 mm sliver (2 voxels) across it
+        r = guides.wall_check(g, h, 1.5)
+        self.assertGreater(r["thin_mm2"], 2.0, r)                 # the sliver's 0.6 x 9 mm (two layers of centre voxels)
+        self.assertEqual(r["held_parts"], 1, r)                    # the half plate beyond the slot hangs on the sliver only
+        self.assertGreater(r["held_mm3"], 100, r)
+        g[10:18, 5:8, 30:32] = True                   # a full-thickness bridge at one end: nothing hangs on the sliver
+        r = guides.wall_check(g, h, 1.5)
+        self.assertEqual(r["held_parts"], 0, r)
+        g2 = np.zeros((40, 40, 60), bool)              # a feathered rim (wedge edge) is thin but holds nothing
+        for k in range(60):
+            g2[10:10 + max(1, min(8, k // 2)), 5:35, k] = True
+        r = guides.wall_check(g2, h, 1.5)
+        self.assertGreater(r["thin_mm2"], 0, r)
+        self.assertEqual(r["held_parts"], 0, r)
+
+    def test_fibula_guide_reports_seat_and_wall(self):
+        from surgiguide import phantom
+        vol = phantom.leg_phantom(spacing=(1.0, 1.0, 1.0))
+        m, info = segment.fibula_bone(vol, side="right")
+        self.assertEqual((info["status"], info["side"]), ("ok", "right"), info)   # the phantom is a right leg (fibula at -x of the tibia)
+        F = P.Fibula(vol, m, side="right")
+        plan = {"segments": [dict(fib_start=F.s_min + 80, fib_end=F.s_min + 110, length_mm=30, n_start_fib=np.array([1.0, 0, 0]),
+                                  n_end_fib=np.array([1.0, 0, 0]))], "kerf": 1.0}
+        _, _, rep = guides.fibula_guide(vol, m, F, plan, h=0.5)
+        self.assertTrue(rep["seat"]["ok"], rep["seat"])
+        self.assertGreater(rep["seat"]["free_directions"], 0, rep["seat"])
+        self.assertIn("wall_p1_mm", rep["wall"])
+
+
+class Pipeline(unittest.TestCase):
+    def test_wrong_leg_stops_with_a_reason(self):
+        """D4 P1 / P14: the demo leg is a right leg; --side left stops with exit 2, says why and records it in plan.json."""
+        import json
+        import subprocess
+        with tempfile.TemporaryDirectory() as d:
+            p = subprocess.run([sys.executable, os.path.join(HERE, "..", "run_pipeline.py"), "--demo", "--side", "left", "--out", d],
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=600)
+            self.assertEqual(p.returncode, 2, p.stdout[-2000:] + p.stderr[-2000:])
+            self.assertIn("no fibula of the left leg", p.stderr)
+            with open(os.path.join(d, "plan.json")) as f:
+                out = json.load(f)
+            self.assertIn("left leg", out["error"])
+            self.assertTrue(out["software"]["version"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -8,14 +8,20 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
   const St = window.Studio; if (!St) return;
   const $ = id => document.getElementById(id), S = St.S;
   const nowISO = () => new Date().toISOString();
-  const when = iso => new Date(iso).toLocaleString('tr-TR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  // dates and times in the interface language (dates.js); the fallback only runs without it (unit tests)
+  const DF = k => t => (window.DateFmt ? DateFmt[k](t) : k === 'time' ? new Date(t).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }) : new Date(t).toLocaleString('tr-TR'));
+  const when = DF('short'), hhmm = DF('time');
   const rid = () => Math.random().toString(36).slice(2, 10);
   const esc = t => String(t).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+
+  // server calls carry the access token when the server asks for one (auth.js, G2)
+  const sfetch = (u, o) => (window.ServerAuth ? ServerAuth.fetch(u, o) : fetch(u, o));
 
   // ---------- backends ----------
   function RestBackend(base) {
     const req = async (method, path, body) => {
-      const r = await fetch(base + path, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
+      const r = await sfetch(base + path, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
+      if (r.status === 401) throw new Error(xl('sunucu erişim anahtarını kabul etmedi (Ayarlar → Erişim anahtarını gir)'));
       if (!r.ok) throw new Error(`sunucu ${r.status}`);
       return r.json();
     };
@@ -68,9 +74,13 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
   async function pickBackend() {
     const url = St.serverUrl();
     if (url) {
+      if (window.ServerAuth) await ServerAuth.ready();   // the token first (G2), so the probe below carries it
       try {
         const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 1500);
-        const r = await fetch(url + '/cases', { signal: ctl.signal }); clearTimeout(t);
+        // (a plain probe that never asks for the token: a 401 means the server is there and wants one, which the
+        // backend's first call asks for; it is not "offline")
+        const r = await fetch(url + '/cases', { signal: ctl.signal, headers: window.ServerAuth ? ServerAuth.header() : {} }); clearTimeout(t);
+        if (r.status === 401) return RestBackend(url);
         if (r.ok && Array.isArray(await r.json())) return RestBackend(url);
       } catch (e) { /* not reachable from here */ }
     }
@@ -91,7 +101,9 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
   // are derived updates of the restored entry, and counting the key press would let them truncate the redo list.
   const isHistGesture = e => (e.type === 'keydown' && (e.ctrlKey || e.metaKey) && /^[zy]$/i.test(e.key))
     || (e.type === 'pointerdown' && e.target && e.target.closest && e.target.closest('#undo, #redo, #histList'));
-  ['pointerdown', 'keydown', 'input', 'change'].forEach(t => document.addEventListener(t, e => { if (e.isTrusted && !isHistGesture(e)) userAt = performance.now(); }, true));
+  // gest counts presses (pointer or key): the snapshots of one press (a drag, a slider pulled) make one undo step
+  let gest = 0;
+  ['pointerdown', 'keydown', 'input', 'change'].forEach(t => document.addEventListener(t, e => { if (e.isTrusted && !isHistGesture(e)) { userAt = performance.now(); if (t === 'pointerdown' || t === 'keydown') gest++; } }, true));
   const setSave = (text, cls) => { $('saveState').textContent = text; $('stSave').textContent = text; $('saveState').style.color = cls === 'err' ? 'var(--crit)' : ''; };
   function renderCaseHead() {
     $('caseName').disabled = !!caseId;
@@ -112,7 +124,7 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
   function diffObj(a, b, names, prefix, out) {
     const ch = Object.keys(names).filter(k => a[k] !== b[k]);
     ch.forEach(k => out.push(`${prefix}${prefix ? ' ' : ''}${names[k]} ${num(a[k], k)} → ${num(b[k], k)}`));
-    if (!ch.length && !!a.ok !== !!b.ok) out.push(`${xl(prefix || 'Rezeksiyon sınırı')} ${xl(b.ok ? 'onaylandı' : 'onayı kaldırıldı')}`);
+    if (!ch.length && !!a.ok !== !!b.ok) out.push(`${xl(prefix || 'Rezeksiyon aralığı')} ${xl(b.ok ? 'onaylandı' : 'onayı kaldırıldı')}`);
   }
   function describe(a, b) {
     if (!a || !b) return 'Başlangıç';
@@ -141,7 +153,8 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
     const t = out.map(capital);
     return t.length > 2 ? `${t[0]} · ${t[1]} +${t.length - 2}` : t.join(' · ');
   }
-  const entry = (plan, label) => ({ plan, label, at: Date.now() });
+  // auto: the label was written from the change itself, so it is written again when the entry's plan is updated
+  const entry = (plan, label, auto) => ({ plan, label, at: Date.now(), g: gest, ...(auto ? { auto: true } : {}) });
   function baseline(label) { const p = St.planOf(); lastJSON = JSON.stringify(p); H.list = [entry(p, label || 'Başlangıç')]; H.idx = 0; lastSnap = performance.now(); updUndo(); }
   function snapshot(label, forceUser) {
     if (S.restoring || !S.red) return;
@@ -154,9 +167,16 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
     lastSnap = performance.now();
     lastJSON = js;
     if (H.idx < 0) { H.list = [entry(plan, 'Başlangıç')]; H.idx = 0; }
-    else if (!user) H.list[H.idx].plan = plan;     // derived update (preset, async recompute): not an undo step
-    else {
-      const e = entry(plan, label || describe(H.list[H.idx].plan, plan));
+    else if (!user) {
+      // derived update (preset, async recompute, the rest of a drag): not an undo step. The entry's label is written
+      // again from its own change, so a drag reads with the value it ended at, not the one of its first snapshot (D5)
+      const e = H.list[H.idx]; e.plan = plan;
+      if (e.auto && H.idx > 0) e.label = describe(H.list[H.idx - 1].plan, plan);
+    } else if (!label && H.idx > 0 && H.idx === H.list.length - 1 && H.list[H.idx].auto && H.list[H.idx].g === gest) {
+      // the same press still going on (a drag past the first snapshot): its one step now ends where the press ended
+      const e = H.list[H.idx]; e.plan = plan; e.label = describe(H.list[H.idx - 1].plan, plan); e.at = Date.now();
+    } else {
+      const e = entry(plan, label || describe(H.list[H.idx].plan, plan), !label);
       H.list = H.list.slice(0, H.idx + 1); H.list.push(e); if (H.list.length > 150) H.list.shift(); H.idx = H.list.length - 1;
     }
     updUndo();
@@ -184,8 +204,9 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
       finally { going = null; want = null; }
     })();
   }
-  const step = d => goTo((want !== null ? want : H.idx) + d);
-  const ago = t => { const s = (Date.now() - t) / 1000; return s < 50 ? 'şimdi' : s < 3600 ? `${Math.round(s / 60)} dk önce` : new Date(t).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }); };
+  // (clamped: Ctrl+Z pressed more often than there are steps ends at the first one, not on an ignored index, W26)
+  const step = d => { const i = Math.max(0, Math.min(H.list.length - 1, (want !== null ? want : H.idx) + d)); return goTo(i); };
+  const ago = t => { const s = (Date.now() - t) / 1000; return s < 50 ? 'şimdi' : s < 3600 ? `${Math.round(s / 60)} dk önce` : hhmm(t); };
   function renderHist() {
     const ul = $('histList'); if (!ul) return;
     const rows = H.list.map((e, i) => ({ e, i })).reverse();
@@ -226,7 +247,7 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
   }
   async function saveNow() {
     if (!backend) return;
-    try { await ensureCase(); clearTimeout(saveTimer); pendingSave = null; const r = await backend.saveDraft(caseId, St.planOf()); dirty = false; setSave('Kaydedildi ' + when(r.updated_at || nowISO()).split(' ').pop()); }
+    try { await ensureCase(); clearTimeout(saveTimer); pendingSave = null; const r = await backend.saveDraft(caseId, St.planOf()); dirty = false; setSave('Kaydedildi ' + hhmm(r.updated_at || nowISO())); }
     catch (e) { setSave('Kaydedilemedi', 'err'); St.alertMsg('Plan kaydedilemedi: ' + e.message); }
   }
   function setAutosave(on) {
@@ -242,7 +263,7 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
     clearTimeout(saveTimer);
     saveTimer = setTimeout(async () => {
       const p = pendingSave; pendingSave = null;
-      try { await ensureCase(); const r = await backend.saveDraft(caseId, p); setSave('Kaydedildi ' + when(r.updated_at || nowISO()).split(' ').pop()); }
+      try { await ensureCase(); const r = await backend.saveDraft(caseId, p); setSave('Kaydedildi ' + hhmm(r.updated_at || nowISO())); }
       catch (e) { setSave('Kaydedilemedi', 'err'); St.alertMsg('Plan kaydedilemedi: ' + e.message); }
     }, 1000);
   }

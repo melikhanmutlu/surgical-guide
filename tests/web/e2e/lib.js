@@ -10,7 +10,8 @@ const { chromium } = require(PW);
 
 const E2E = path.resolve(__dirname, '..');
 const KANIT = process.env.KANIT || path.join(E2E, 'kanit');
-const SCRATCH = process.env.E2E_SCRATCH || '/tmp/claude-0/-home-user-surgical-guide/d83a87c2-2e54-57a0-92c4-018343200ae7/scratchpad/e2e';
+const SCRATCH = process.env.E2E_SCRATCH || path.join(require('os').tmpdir(), 'yolmed-e2e');
+const TOKEN = process.env.E2E_TOKEN || '';   // server started with YOLMED_TOKEN: typed into the access-token dialog on every page load
 const BASE = process.env.BASE || 'http://127.0.0.1:8840';
 const CDN_CACHE = path.join(SCRATCH, 'cdn');
 fs.mkdirSync(CDN_CACHE, { recursive: true });
@@ -24,7 +25,7 @@ function cdnFetch(url) {
   const f = path.join(CDN_CACHE, key), meta = f + '.type';
   if (!fs.existsSync(f)) {
     try {
-      const hdr = execFileSync('curl', ['-sS', '-L', '-A', 'Mozilla/5.0 Chrome/120', '-D', '-', '-o', f, url], { timeout: 60000 }).toString();
+      const hdr = execFileSync('curl', ['-sS', '-L', '--retry', '2', '-A', 'Mozilla/5.0 Chrome/120', '-D', '-', '-o', f, url], { timeout: 180000 }).toString();
       const m = [...hdr.matchAll(/content-type:\s*([^\r\n]+)/ig)].pop();
       fs.writeFileSync(meta, m ? m[1] : 'application/octet-stream');
     } catch (e) { try { fs.unlinkSync(f); } catch (_) {} return null; }
@@ -51,6 +52,11 @@ async function start(opt = {}) {
     if (!r) return route.abort();
     return route.fulfill({ status: 200, body: r.body, headers: { 'content-type': r.type, 'access-control-allow-origin': '*' } });
   });
+  // CSP violations (the server pins the CDN to exact package paths) are console errors of their own kind, so a blocked
+  // script, codec or worker shows up in every scenario's error count and in tablo.md
+  await context.addInitScript(() => {
+    addEventListener('securitypolicyviolation', e => console.error(`CSP violation: ${e.violatedDirective} ${e.blockedURI || ''} (${e.sourceFile || ''}:${e.lineNumber || ''})`));
+  });
   const page = await context.newPage();
   page.setDefaultTimeout(opt.timeout || 120000);
   const log = [];          // every console line
@@ -61,7 +67,7 @@ async function start(opt = {}) {
   page.on('console', m => {
     const line = `[${stamp()}s][${scenario}][${m.type()}] ${m.text()}`;
     log.push(line);
-    if (m.type() === 'error') errors.push({ scenario, kind: 'console.error', text: m.text().slice(0, 600) });
+    if (m.type() === 'error') errors.push({ scenario, kind: /^CSP violation|Content Security Policy/.test(m.text()) ? 'csp' : 'console.error', text: m.text().slice(0, 600) });
   });
   page.on('pageerror', e => { const t = (e.stack || e.message || String(e)).slice(0, 1200); log.push(`[${stamp()}s][${scenario}][pageerror] ${t}`); errors.push({ scenario, kind: 'pageerror', text: t }); });
   page.on('requestfailed', r => { const t = `${r.method()} ${r.url()} ${r.failure() && r.failure().errorText}`; log.push(`[${stamp()}s][${scenario}][requestfailed] ${t}`); if (!/fonts\.g/.test(r.url())) errors.push({ scenario, kind: 'requestfailed', text: t }); });
@@ -134,13 +140,43 @@ async function start(opt = {}) {
         };
       });
     },
+    // no load being built (setVolume) and no guide / resection rebuild pending or running: a measurement taken
+    // right after the busy bar hides can otherwise read a value the next rebuild still changes
+    async settle(timeout = 240000) {
+      await page.waitForFunction(() => window.Studio && !(Studio.loadBusy && Studio.loadBusy()), null, { timeout });
+      await page.evaluate(() => Studio.settled && Studio.settled()); await h.idle(timeout, 400);
+    },
+    // the plan has been written to the case store: settled, then "Kaydedildi …" shown for longer than the autosave
+    // debounce (1 s, store.js queueSave), so no save is still queued behind it
+    async saved(timeout = 60000) {
+      await h.settle(); const end = Date.now() + timeout; let since = 0;
+      while (Date.now() < end) {
+        const ok = await page.evaluate(() => /^Kaydedildi/.test((document.getElementById('saveState') || {}).textContent || '')).catch(() => false);
+        if (ok) { if (!since) since = Date.now(); if (Date.now() - since >= 1500) return true; } else since = 0;
+        await sleep(150);
+      }
+      return false;
+    },
+    // the fibula plan has been computed (segments exist) and every rebuild has settled
+    async fibReady(timeout = 240000) {
+      await page.waitForFunction(() => window.Fibula && Fibula.state().last, null, { timeout }); await h.settle(timeout);
+    },
     async waitReady(timeout = 240000) {
       await page.waitForFunction(() => window.Studio && Studio.S && Studio.S.vol && Studio.parts && Studio.parts.bone, null, { timeout });
       await h.idle(timeout);
     },
     async goto(url = BASE + '/', o = {}) {
       await page.goto(url, { waitUntil: 'domcontentloaded' });
+      if (TOKEN) await h.token();
       if (o.ready !== false) await h.waitReady();
+    },
+    // access-token dialog (#dlgTok) of a server started with YOLMED_TOKEN: wait for it, type the token, connect
+    tokenAsked: 0,
+    async token(timeout = 60000) {
+      await page.waitForSelector('#dlgTok[open]', { timeout });
+      await page.fill('#tokIn', TOKEN); await page.press('#tokIn', 'Enter');
+      await page.waitForSelector('#dlgTok[open]', { state: 'detached', timeout: 10000 }).catch(() => page.waitForFunction(() => !document.getElementById('dlgTok').open, null, { timeout: 10000 }));
+      h.tokenAsked++;
     },
     // world point (array or {x,y,z}) -> page pixel coordinates in the 3D view
     async proj(w) {
@@ -207,11 +243,11 @@ async function start(opt = {}) {
       fs.writeFileSync(path.join(outDir, `results_${name}.json`), JSON.stringify({ name, base: BASE, viewport, results, errors }, null, 1));
       try { await browser.close(); } catch (_) {}
       const p = results.filter(r => r.pass === true).length, f = results.filter(r => r.pass === false).length;
-      console.log(`== ${name}: ${p} pass, ${f} fail, ${results.length - p - f} info, ${errors.length} console/page errors`);
+      console.log(`== ${name}: ${p} pass, ${f} fail, ${results.length - p - f} info, ${errors.length} console/page errors, ${errors.filter(e => e.kind === 'csp').length} CSP violations${TOKEN ? `, token dialog ${h.tokenAsked}×` : ''}`);
       return { pass: p, fail: f, results, errors };
     },
   };
   return h;
 }
 
-module.exports = { start, sleep, E2E, KANIT, SCRATCH, BASE };
+module.exports = { start, sleep, E2E, KANIT, SCRATCH, BASE, TOKEN };

@@ -227,12 +227,15 @@ const G = (() => {
   const KUHN = (() => { const t = []; [[1, 2, 4], [1, 4, 2], [2, 1, 4], [2, 4, 1], [4, 1, 2], [4, 2, 1]].forEach(([a, b]) => t.push([0, a, a | b, 7])); return t; })();
   function marchTets(field, nx, ny, nz, level = 0) {
     const nxy = nx * ny, off = [0, 1, nx, nx + 1, nxy, nxy + 1, nxy + nx, nxy + nx + 1];
-    const vid = new Int32Array(nx * ny * nz * 8);   // vertex index + 1 per (lower node, edge direction mask)
+    // vertex index + 1 per (lower node, edge direction mask). A cube layer k only meets the nodes of layers k and k+1,
+    // so two node layers are kept (ring buffer), not the whole grid: 32 B per voxel was ~100 MB per guide rebuild on a
+    // long guide grid (Denetim 4 W18)
+    const vid = new Int32Array(2 * nxy * 8);
     let pos = new Float32Array(1 << 16), np = 0, idx = new Uint32Array(1 << 17), ni = 0;
     const val = new Float32Array(8), ins = [0, 0, 0, 0], outs = [0, 0, 0, 0];
     let ci = 0, cj = 0, ck = 0, v0 = 0;
     const edge = (x, y) => {   // x < y (as cube-corner codes, y a superset of x)
-      const key = (v0 + off[x]) * 8 + (y ^ x);
+      const nd = v0 + off[x], key = ((((nd / nxy) | 0) & 1) * nxy + nd % nxy) * 8 + (y ^ x);
       let id = vid[key];
       if (id) return id - 1;
       let t = val[x] / (val[x] - val[y]); if (t < 0.01) t = 0.01; else if (t > 0.99) t = 0.99;
@@ -251,6 +254,7 @@ const G = (() => {
       if (d >= 0) { idx[ni++] = a; idx[ni++] = b; idx[ni++] = c; } else { idx[ni++] = a; idx[ni++] = c; idx[ni++] = b; }
     };
     for (let k = 0; k < nz - 1; k++) for (let j = 0; j < ny - 1; j++) {
+      if (j === 0 && k > 0) { const b = ((k + 1) & 1) * nxy * 8; vid.fill(0, b, b + nxy * 8); }   // layer k+1 reuses layer k-1's slot
       const r = nx * (j + ny * k);
       for (let i = 0; i < nx - 1; i++) {
         v0 = r + i; ci = i; cj = j; ck = k;
