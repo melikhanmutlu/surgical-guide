@@ -27,6 +27,9 @@
   function startLoad() { if (loadCtl) loadCtl.cancelled = true; return (loadCtl = { cancelled: false, byUser: false }); }
   // another load while the previous one is already building the case (setVolume) would race it: refuse with a notice
   function loadBlocked() { if (!committing) return false; alertMsg('Önceki yükleme sürüyor; bitince yeniden deneyin.'); return true; }
+  // a plan action while a case is being read or built would plan the outgoing volume and have its state (anchor, cuts)
+  // cleared under a running guide fit ("Otomatik planla" during the sample download threw in fitWrap): refuse with a notice
+  function planBlocked() { if (!loadCtl && !committing) return false; alertMsg('Vaka yükleniyor; yükleme bitince yeniden deneyin.'); return true; }
   function progress(ctl) {
     const t0 = performance.now(); let last = -1e9;
     clearInterval(busyTick); $('busy').hidden = false; $('busy').setAttribute('aria-busy', 'true'); document.body.classList.add('is-busy'); $('busyBar').hidden = false; $('busyBar').classList.add('det'); $('busyCancel').hidden = !ctl;
@@ -401,7 +404,8 @@
 
   async function setVolume(vol, label, kind) {
     committing = true;
-    try { return await setVolumeNow(vol, label, kind); } finally { committing = false; }
+    // a rebuild job that started before the load (guide fit, lesion plan) finishes before the case state is replaced
+    try { await jobLock; return await setVolumeNow(vol, label, kind); } finally { committing = false; }
   }
   async function setVolumeNow(vol, label, kind) {
     $('caseMsg').hidden = true;
@@ -699,6 +703,7 @@
   }
   const makeGuide = () => exclusive(makeGuideNow);
   async function makeGuideNow() {
+    if (committing) return;      // queued before a load began building the new case: its anchor and cuts are gone
     if (!S.anchor || !S.planes.length) { alertMsg('Önce kesileri belirleyin.'); return; }
     S.guideOn = true; placeScrews(); S.sel = null;
     busy(true, 'Rezeksiyon güncelleniyor… 1/2'); await sleep(); await rebuildResection();
@@ -710,7 +715,7 @@
   }
   // one button: region (sample spot, painted lesion, or one click on the model), cuts, resected piece removed, guide
   async function autoPrep() {
-    if (!S.red || !parts.bone) return;
+    if (!S.red || !parts.bone || planBlocked()) return;
     // a fresh automatic plan sizes the body from the bone again
     Object.assign(S.gAuto, AUTO_DEFAULT); S.fitLog = [];
     const pts = window.Lesion && Lesion.points ? Lesion.points() : [];

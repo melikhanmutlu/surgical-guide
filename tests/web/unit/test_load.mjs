@@ -53,6 +53,19 @@ test('sample with no plan: no question', async () => {
   assert.equal(asked, 0); assert.equal(fetched, 1);
 });
 
+// e2e: "Otomatik planla" pressed while the sample was downloading planned the outgoing case; the load then cleared the
+// anchor under the running guide fit: "Cannot read properties of null (reading 'p')" in fitWrap
+test('Otomatik planla while a case is loading: refused with a notice, nothing is planned', async () => {
+  // the outgoing case is still on screen (its volume and bone model) while the sample download is under way
+  const red = S.red, bone = St.parts.bone; S.red = red || { nx: 1, ny: 1, nz: 1 }; St.parts.bone = bone || { obj: {} };
+  S.anchor = null; S.planes = []; S.screws = []; S.guideOn = false; el('caseMsg').textContent = '';
+  try {
+    fire('autoPrep', 'click'); await tick();
+    assert.equal(S.anchor, null); assert.equal(S.planes.length, 0); assert.equal(S.guideOn, false);
+    assert.match(el('caseMsg').textContent, /Vaka yükleniyor/);
+  } finally { S.red = red; if (bone) St.parts.bone = bone; else delete St.parts.bone; }
+});
+
 test('picks apply to the mandible: with the fibula-only view on, setMode(anchor) switches the view and says so', () => {
   const calls = []; let view = 'f';
   P.g.Fibula = { view: () => view, setView: v => { calls.push(v); view = v; }, active: () => false };
@@ -100,6 +113,16 @@ test('W6: "Örnek vaka" while a DICOM read is running cancels the read (with a n
   await new Promise(r => setTimeout(r, 1500));
   assert.equal(S.source.type, 'sample', 'the DICOM read did not land over the sample');
   assert.match(el('caseMsg').textContent, /Yükleme iptal edildi/);
+});
+
+test('a new volume waits for a guide job that is already running before it clears the plan', async () => {
+  const T = P.g.THREE, n = 16, hu = new Int16Array(n * n * n).fill(-1000);
+  S.anchor = { p: new T.Vector3(1, 2, 3), n: new T.Vector3(0, 0, 1), axis: new T.Vector3(1, 0, 0) };
+  let seen = 'not run';
+  const job = St.exclusive(async () => { await new Promise(r => setTimeout(r, 300)); seen = S.anchor ? S.anchor.p.x : null; });
+  const load = St.setVolume({ hu, nx: n, ny: n, nz: n, sp: [1, 1, 1], origin: [0, 0, 0], axes: [[1, 0, 0], [0, 1, 0], [0, 0, 1]], meta: {} }, 'test', 'dicom');
+  await job; assert.equal(seen, 1, 'the running job still had its anchor');
+  await load; assert.equal(S.anchor, null, 'the new volume cleared the plan afterwards');
 });
 
 await run('loading and picks');
