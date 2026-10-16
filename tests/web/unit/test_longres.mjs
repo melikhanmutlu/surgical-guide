@@ -74,6 +74,37 @@ test('bar (A2): no bar unless two pieces; the bar switch alone on a one-piece la
   assert.ok(checks().some(c => /yalnız iki guide'lı düzende/.test(c[2])));
 });
 
+// A stump on the curve of the chin has its cut oblique to its piece's axis (the piece follows its own bone, not the cut
+// normal): the slot then ran out through the end of a body ending square to the axis, cut a corner off past the slot
+// and the guide came out in three bodies, so the fit ladder rejected every rung ("takılamıyor"). Each piece must stay
+// one body, seat along its own direction, keep the slot at its cut (trimmed at the capture flange past it) and hold
+// its screws.
+test('two guides (A1): a cut oblique to its piece on the arc still gives one body per piece, seated, trimmed at the flange', async () => {
+  await volume(ARC, { x: 50, y: 24, z: 50 });
+  for (const yaw of [60, -60]) {
+    setPlan([-30, 30], { split: 2, bar: true }); S.planes[0].yaw = yaw; S.guideOn = true; St.placeScrews(); await St.rebuildResection();
+    const o = await St.buildGuideSet(Object.assign({ g: S.g, P: S.anchor.p, pls: St.planesWorld(), scs: St.screwsWorld(), bone: St.boneAt, field: St.guideField(), h: 0.4, noBarMesh: true }, St.frameAxes()));
+    const R = o.result, A = St.planesWorld().sort((a, b) => a.off - b.off)[0];
+    assert.equal(R.pieces, 2, `yaw ${yaw}: bodies ` + R.parts.map(p => p.result.pieces));
+    R.parts.forEach((p, i) => {
+      assert.equal(p.result.pieces, 1, `yaw ${yaw}: piece ${i} bodies`);
+      assert.ok(p.result.seat && p.result.seat.ok && p.result.seat.free > 0, `yaw ${yaw}: piece ${i} has a free insertion direction of its own`);
+    });
+    assert.ok(R.parts[0].pls.some(p => p.pl === A.pl), 'the slot of the oblique cut is on its piece');
+    assert.ok(R.screwInfo.length >= 2 && R.screwInfo.every(si => si.ok), `yaw ${yaw}: screws ` + R.screwInfo.map(si => si.ok));
+    assert.ok(R.parts.every(p => p.lugOk) && R.bar && R.bar.ok, 'lugs and bar');
+    // nothing of the oblique piece reaches past the capture flange into the defect
+    const gr = o.grid.parts[0], NA = A.N.clone(); if (NA.dot(R.parts[0].frame.u) > 0) NA.negate();
+    let far = -Infinity;
+    for (let k = 0; k < gr.nz; k++) for (let j = 0; j < gr.ny; j++) for (let i = 0; i < gr.nx; i++) if (gr.Gm[i + gr.nx * (j + gr.ny * k)]) {
+      const q = gr.P.clone().addScaledVector(gr.u, gr.lo[0] + i * gr.h).addScaledVector(gr.v, gr.lo[1] + j * gr.h).addScaledVector(gr.n, gr.lo[2] + k * gr.h);
+      far = Math.max(far, q.sub(A.p).dot(NA));
+    }
+    assert.ok(far <= A.w / 2 + S.g.flange + 0.6, `yaw ${yaw}: piece reaches ${far.toFixed(1)} mm past the cut`);
+    o.mesh.geometry.dispose();
+  }
+});
+
 test('longCase (A1): lesion >= 55 mm, the straight axis leaving the bone, none for a short straight segment', async () => {
   setPlan([-25, 25]); Object.assign(S.lesion, { from: -30, to: 30 });
   assert.equal(St.longCase().why, 'len');

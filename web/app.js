@@ -1000,7 +1000,7 @@
   // of one cut passes the bone of the other side far from it. Screws keep their distance from a slot plane within
   // SLOT_REACH mm of the slot (in the plane), which covers the bone section the saw goes through (the cut-miss test
   // samples ±W/2 + 6 mm across and 45 mm down)
-  const SLOT_REACH = 45, CUT_OFF_MAX = 80, PIECE_GAIN = 20, PIECE_TURN = 70, CUT_STEEP = 0.83, CUT_ALONG_DEG = 60;
+  const SLOT_REACH = 45, CUT_OFF_MAX = 80, PIECE_GAIN = 20, PIECE_TURN = 70, PIECE_BACK_MAX = 30, CUT_STEEP = 0.83, CUT_ALONG_DEG = 60;
   const SCREW_CREST_TOL = 6, SCREW_SLOT_GAP = 2, SCREW_MIN_DEPTH = 4, SCREW_GAP_MIN = 5, SCREW_GAP_MAX = 15, SCREW_GAP_FAR = 22, SCREW_GAP_BACK = 12, SCREW_CORE_R = 1.5, L_MAX = 160;
   // a screw hole closer than this to the osteotomy plane leaves a thin bone bridge that can break (checks only, a warning)
   const SCREW_CUT_GAP = 5, SCREW_CUT_WARN = 3;   // 5 mm = recommended bone bridge (info below it); a warning only under 3 mm
@@ -1686,7 +1686,7 @@
     }
     const dd = G.blur(dist, nx, ny, nz);
     // periosteum allowance (soft tissue left on the bone) adds to the clearance
-    const c = g.clear + (g.peri || 0), w = g.wall, gap = splitGap(g, pls), cw = c + w;
+    const c = g.clear + (g.peri || 0), w = g.wall, gap = ctx.gap || splitGap(g, pls), cw = c + w;
     const colTopBone = new Float32Array(nx * ny).fill(-Infinity);
     for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) if (Bs[i + nx * (j + ny * k)]) colTopBone[i + nx * j] = lo[2] + k * h;
     // the wrap depth follows the bone: on a curved jaw the bone drops away from the guide plane towards the guide
@@ -2076,6 +2076,8 @@
     const pf = pieceFrames(), fa = pf ? pf.a : cutFrame(A, ctx.u.clone().negate(), ctx.n), fb = pf ? pf.b : cutFrame(B, ctx.u, ctx.n);
     if (!fa || !fb) return buildGuide(Object.assign({}, ctx, { g: Object.assign({}, g, { split: 1 }) }));
     const parts = [], meshes = [], infos = [], withBar = !!g.bar, defS = screwDef(), E = withBar ? resEnds() : null;
+    // each piece is trimmed at the capture flange past its own slot, as the single guide with a gap is (splitGap)
+    const gap = splitGap({ split: 1 }, [A, B]);
     for (const [fr, side] of [[fa, -1], [fb, 1]]) {
       // this piece: the cuts and screws on its side of the defect middle
       const myPls = pls.filter(p => Math.sign(p.p.dot(ctx.u) - mid) === side || sorted.length === 2 && p === (side < 0 ? A : B));
@@ -2084,26 +2086,31 @@
       // extent along the piece's own u: the capture flange past the slot on the defect side, the screws on the kept side
       let reach = 10;
       for (const s of myScs) reach = Math.max(reach, (s.entry ? s.entry.clone().sub(fr.P).dot(fr.u) : s.sc.part ? s.sc.u : 0) + s.sc.D / 2 + 2);
-      const back = half + g.flange;
-      const pieceAt = reach => {
-        const L = Math.min(100, Math.max(16, Math.ceil(reach + back))), cShift = (reach - back) / 2;
+      const back0 = half + g.flange;
+      let back = back0;
+      // (a longer reach behind the slot (pieceBack) lengthens the box towards the defect only: the anchor, width and
+      // depth stay those of the piece's own span)
+      const pieceAt = (reach, back) => {
+        const L0 = Math.min(100, Math.max(16, Math.ceil(reach + back0))), cShift = (reach - back0) / 2;
+        const L = back > back0 ? Math.min(100, Math.ceil(reach + back)) : L0, uc = back > back0 ? -(back - back0) / 2 : 0;
         const Pc = fr.P.clone().addScaledVector(fr.u, cShift);
         // the piece's anchor lies on the bone surface at its centre (walk down the normal), so the wrap is measured from the bone
         let Pq = null; const top = Pc.clone().addScaledVector(fr.n, 20);
         for (let t = 0; t < 70; t += 0.25) { const c = top.clone().addScaledVector(fr.n, -t); if (boneAt(c)) { Pq = c; break; } }
         const frame = { P: Pq || Pc, u: fr.u, v: fr.v, n: fr.n };
-        const auto = S.gAuto || AUTO_DEFAULT, sz = ctx.field ? sizeBody(frame, ctx.field, -L / 2, L / 2, g, { W: !!auto.W, wrap: !!auto.wrap }) : { W: g.W, vc: 0, wrap: g.wrap, wrapU: null };
-        return { frame, gi: Object.assign({}, g, { split: 0, L, W: sz.W, vc: sz.vc, wrap: Math.min(g.wrap, sz.wrap), wrapU: sz.wrapU }) };
+        const auto = S.gAuto || AUTO_DEFAULT, sz = ctx.field ? sizeBody(frame, ctx.field, -L0 / 2, L0 / 2, g, { W: !!auto.W, wrap: !!auto.wrap }) : { W: g.W, vc: 0, wrap: g.wrap, wrapU: null };
+        return { frame, gi: Object.assign({}, g, { split: 0, L, uc, W: sz.W, vc: sz.vc, wrap: Math.min(g.wrap, sz.wrap), wrapU: sz.wrapU }) };
       };
-      let { frame, gi } = pieceAt(reach);
+      let { frame, gi } = pieceAt(reach, back);
+      { const bk = pieceBack(cut, fr, g, gi, frame.P.clone().sub(fr.P).dot(fr.n)); if (bk > back + 0.5) { back = bk; ({ frame, gi } = pieceAt(reach, back)); } }
       // (the connecting bar's lug stands on the piece like a screw sleeve, the drill through it; when the screws leave
       // no room for it the piece reaches a lug's width further along its kept bone)
       let lug = withBar ? placeLug(frame, gi, cut, myScs, E, defS, false) : null;
-      if (withBar && !lug) { const w = pieceAt(reach + BAR.lugD + 1), l2 = placeLug(w.frame, w.gi, cut, myScs, E, defS, false); if (l2) { ({ frame, gi } = w); lug = l2; } }
+      if (withBar && !lug) { const w = pieceAt(reach + BAR.lugD + 1, back), l2 = placeLug(w.frame, w.gi, cut, myScs, E, defS, false); if (l2) { ({ frame, gi } = w); lug = l2; } }
       if (withBar && !lug) lug = placeLug(frame, gi, cut, myScs, E, defS, true);
-      const o = await buildGuide(Object.assign({}, ctx, frame, { g: gi, pls: myPls, scs: lug ? myScs.concat([lug]) : myScs }));
+      const o = await buildGuide(Object.assign({}, ctx, frame, { g: gi, pls: myPls, scs: lug ? myScs.concat([lug]) : myScs, gap }));
       const li = lug && o.result.screwInfo.find(i => i.s === lug);
-      parts.push({ frame, g: gi, pls: myPls, scs: myScs, result: o.result, grid: o.grid, wrapProfile: o.result.wrapProfile, side, lug, lugOk: !!(li && li.ok) });
+      parts.push({ frame, g: gi, pls: myPls, scs: myScs, gap, result: o.result, grid: o.grid, wrapProfile: o.result.wrapProfile, side, lug, lugOk: !!(li && li.ok) });
       meshes.push(o.mesh); infos.push(...o.result.screwInfo);
     }
     // merged mesh (two bodies), screws back in their original order, the seat as the worse of the two pieces
@@ -2121,6 +2128,20 @@
     let barMesh = null;
     if (withBar) { result.bar = barPlan(parts, g); if (result.bar.ok && !ctx.noBarMesh) barMesh = buildBarMesh(result.bar.spec, 0.4); }
     return { mesh, result, barMesh, grid: Object.assign(parts[0].grid, { parts: parts.map(p => p.grid) }) };
+  }
+  // how far a piece reaches behind its cut point (along -u, into the defect) so that the slot runs out through both
+  // edges of its body and the capture flange past it is whole: a stump on the curve of the chin has its cut oblique to
+  // the piece axis, and a body ending square to u there cuts the slot off at a corner and leaves the part past the slot
+  // a loose second body (the rib along the body edge never crosses the slot). Measured over the bone top and the rib
+  // (deeper down the flange past the slot hangs from it); the flange planes of the gap trim the longer body back to the
+  // flange. fr: the cut frame; dn: the piece anchor's height above it; at most PIECE_BACK_MAX mm.
+  function pieceBack(cut, fr, g, gi, dn) {
+    const pc = cut.pSlot || cut.p, keep = Math.sign(fr.P.clone().sub(pc).dot(cut.N)) || 1, Nd = cut.N.clone().multiplyScalar(-keep);
+    const a = Nd.dot(fr.u), b = Nd.dot(fr.v), c = Nd.dot(fr.n), e = pc.clone().sub(fr.P).dot(Nd), t = cut.w / 2 + g.flange, vc = gi.vc || 0;
+    let back = cut.w / 2 + Math.abs(cut.shift || 0) + g.flange;
+    if (a > -0.2) return back;
+    for (const vv of [vc - gi.W / 2, vc + gi.W / 2]) for (const nn of [dn, dn + g.clear + g.wall + g.bridge]) back = Math.max(back, (b * vv + c * nn - t - e) / a);
+    return Math.min(back, PIECE_BACK_MAX);
   }
   function mergeMeshes(meshes, material) {
     let np = 0, ni = 0;
@@ -2154,14 +2175,14 @@
   const BAR = { r: 2, padR: 3.5, padT: 4, gap: 0.3, lugD: 7, clearBone: 1.5, clearGuide: 0.8, maxD: 60, color: 0xc08a2e };
   function placeLug(fr, gi, cut, scs, E, def, onScrew = true) {
     const R = BAR.lugD / 2, H = def.sleeveH + 1, sInf = -(Math.sign(fr.v.z) || 1), vc = gi.vc || 0;
-    const body = screwBodyOn(fr, -gi.L / 2, gi.L / 2, gi.W, vc, gi.wrap, gi.wrapU, 0); if (!body) return null;
+    const uc = gi.uc || 0, body = screwBodyOn(fr, uc - gi.L / 2, uc + gi.L / 2, gi.W, vc, gi.wrap, gi.wrapU, 0); if (!body) return null;
     const pc = cut.pSlot || cut.p, keep = Math.sign(fr.P.clone().sub(pc).dot(cut.N)) || 1;
     const ents = scs.filter(s => s.entry).map(s => { const q = s.entry.clone().sub(fr.P); return { uu: q.dot(fr.u), vv: q.dot(fr.v), R: s.sc.D / 2, r: s.sc.d / 2 }; });
     // candidates over the whole piece on its kept side of the slot: the inferior lanes first, then the farther from the
     // slot (the more bone under the lug). The lug may merge with a screw sleeve (both are part of the guide; the lug is a
     // millimetre higher, so the pad above it clears the sleeve) but each drill hole stays outside the other boss.
     const cands = [], half = gi.W / 2 - R - 1.5;
-    for (let vv = vc - half; vv <= vc + half + 1e-6; vv += 1) for (let uu = -gi.L / 2 + R + 0.5; uu <= gi.L / 2 - R - 0.5 + 1e-6; uu += 1) {
+    for (let vv = vc - half; vv <= vc + half + 1e-6; vv += 1) for (let uu = uc - gi.L / 2 + R + 0.5; uu <= uc + gi.L / 2 - R - 0.5 + 1e-6; uu += 1) {
       const q = fr.P.clone().addScaledVector(fr.u, uu).addScaledVector(fr.v, vv), sd = q.clone().sub(pc).dot(cut.N) * keep;
       if (sd - cut.w / 2 - R < SCREW_SLOT_GAP) continue;
       if (ents.some(e => Math.hypot(e.uu - uu, e.vv - vv) < Math.max(e.R + def.d / 2, R + e.r) + 0.8)) continue;
@@ -3439,7 +3460,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
       crop: { nx, ny, nz, sp: vol.sp.slice(), origin: G.worldOf(vol, ...lo), axes: vol.axes.map(a => a.slice()) }, mask_b64: btoa(bin),
       frame: { p: arr(c.P), u: arr(c.u), v: arr(c.v), n: arr(c.n) }, g: Object.assign(clone(c.g), { clear: c.g.clear + (c.g.peri || 0) }), resolution: 0.2,
       planes: c.pls.map(pl => ({ p: arr(pl.pSlot || pl.p), N: arr(pl.N), w: pl.w })),
-      gap: (gp => gp && { A: { p: arr(gp.A.p), N: arr(gp.A.N), w: gp.A.w }, B: { p: arr(gp.B.p), N: arr(gp.B.N), w: gp.B.w }, flange: c.g.flange })(splitGap(c.g, c.pls)),
+      gap: (gp => gp && { A: { p: arr(gp.A.p), N: arr(gp.A.N), w: gp.A.w }, B: { p: arr(gp.B.p), N: arr(gp.B.N), w: gp.B.w }, flange: c.g.flange })(c.gap || splitGap(c.g, c.pls)),
       screws: c.scs.filter(s => s.entry).map(s => ({ entry: arr(s.entry), dir: arr(s.dir), d: s.sc.d + (c.g.fit || 0), D: s.sc.D, sleeveH: s.sc.sleeveH })),
       wrap_profile: c.wrapProfile || null,
       stops: ss.pos || ss.neg ? { pos: ss.pos ? [g.stopL || 6, g.stopD || 5] : null, neg: ss.neg ? [g.stopL || 6, g.stopD || 5] : null } : null,
@@ -3497,7 +3518,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
       if (S.result && S.result.parts && S.result.parts.length === 2) {
         // a two-frame guide: one server call per piece on its own frame, the two STLs joined into one file
         const rs = [];
-        for (const pt of S.result.parts) rs.push(await serverGuide(Object.assign({ vol: S.vol, red: S.red, F: S.maskF, thr: segThr(), g: pt.g, P: pt.frame.P, pls: pt.pls, scs: pt.lug ? pt.scs.concat([pt.lug]) : pt.scs, wrapProfile: pt.wrapProfile, seatDir: pt.result.seatDir }, pt.frame), ac.signal));
+        for (const pt of S.result.parts) rs.push(await serverGuide(Object.assign({ vol: S.vol, red: S.red, F: S.maskF, thr: segThr(), g: pt.g, P: pt.frame.P, pls: pt.pls, gap: pt.gap, scs: pt.lug ? pt.scs.concat([pt.lug]) : pt.scs, wrapProfile: pt.wrapProfile, seatDir: pt.result.seatDir }, pt.frame), ac.signal));
         r = { stl: mergeStl(rs[0].stl, rs[1].stl), watertight: rs.every(x => x.watertight), bodies: rs.reduce((s, x) => s + x.bodies, 0), volume: rs.reduce((s, x) => s + x.volume, 0), faces: rs.reduce((s, x) => s + x.faces, 0), ms: rs.reduce((s, x) => s + x.ms, 0),
           productionOk: rs.every(x => x.productionOk), issues: rs.flatMap((x, k) => x.issues.map(i => Object.assign({ piece: k + 1 }, i))), screwsMissing: rs.reduce((s, x) => s + x.screwsMissing, 0), screwNos: rs.flatMap(x => x.screwNos),
           resolution: Math.max(...rs.map(x => x.resolution || 0)) || null, requestedResolution: rs[0].requestedResolution, version: rs[0].version };
