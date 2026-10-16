@@ -2064,6 +2064,7 @@ window.I18N_EN = {
 "Greft sırasını ters çevir": "Reverse the graft order",
 "Fibulanın distal ucu defektin öbür ucuna gelir; pedikülün çıktığı proksimal uç ilk kesiye taşınır. Alıcı damar o tarafta ise ya da pedikül yetmiyorsa kullanın.": "The distal end of the fibula goes to the other end of the defect; the proximal end, where the pedicle leaves, moves to the first cut. Use it when the recipient vessel is on that side or the pedicle is too short.",
 "Elle yerleştirilen vidalar da sıfırlandı.": "Hand-placed screws were reset too.",
+"Fibula segmenti #: lateral yüz bukkale çevrilirse pedikül kret ya da bukkal tarafta kalıyordu; dönüş pedikülü lingual-alt tarafa getirecek şekilde seçildi (lateral yüz bukkal değil).": "Fibula segment #: turning the lateral face buccal left the pedicle towards the crest or the buccal side; the roll was chosen to put the pedicle lingual-inferior (the lateral face is not buccal).",
 "Her segment, fibulanın lateral yüzü (plak ve guide yüzü) bukkala, pedikül lingual tarafa gelecek şekilde kendi ekseni etrafında döndürülür. Kaydırıcıyla elle değiştirmek öneriyi kapatır.": "Each segment is turned about its own axis so the fibula's lateral face (plate and guide face) faces buccally and the pedicle lingually. Changing it by hand with the slider turns the suggestion off.",
 "Klinik eşikler": "Clinical thresholds",
 "Örnek": "Sample",

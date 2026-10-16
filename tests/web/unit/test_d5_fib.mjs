@@ -102,4 +102,15 @@ test('F7: hand-placed screws are reset when the segment count changes', async ()
   if (W.Fibula.plan().n !== 2) assert.ok(!W.Fibula.plan().fsc, 'cleared with the count change');
 });
 
+test('R1: straight bone with oblique cuts gives a straight defect line (length ~ chord, deviation ~ 0)', async () => {
+  S.planes[0].yaw = 25; S.planes[1].yaw = -25;
+  await cuts(-30, 30);
+  await start();
+  const D = W.Fibula.defect(), c = W.Fibula.state().last;
+  const chord = D.pts[0].distanceTo(D.pts[D.pts.length - 1]);
+  assert.ok(D.L < chord * 1.05, `defect line ${D.L} mm vs chord ${chord} mm (a hook at the oblique cuts made it longer)`);
+  assert.ok(c.dev < 2, `deviation ${c.dev} mm`);
+  S.planes[0].yaw = 0; S.planes[1].yaw = 0; await cuts(-30, 30);
+});
+
 await run('d5_fib');

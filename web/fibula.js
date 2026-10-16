@@ -288,7 +288,10 @@ window.Fibula = (function () {
     const add = (x, q) => { x[0] += q.x; x[1] += q.y; x[2] += q.z; x[3]++; };
     for (let k = 0; k < r.nz; k++) for (let j = 0; j < r.ny; j++) for (let i = 0; i < r.nx; i++) {
       if (!S.resMask[i + r.nx * (j + r.ny * k)]) continue;
-      const q = V(...G.worldOf(r, i, j, k)), t = q.clone().sub(A.p).dot(dir), b = Math.min(nb - 1, Math.max(0, Math.floor(t / bw)));
+      const q = V(...G.worldOf(r, i, j, k)), dA = q.clone().sub(A.p).dot(NA), dB = -q.clone().sub(B.p).dot(NB);
+      // the slabs follow the cut planes, blended from A's to B's (Denetim 5 R1): slabs square to the A-B chord are clipped by an
+      // oblique cut, and the centroid of the clipped sliver sits to one side of the bone (a hook of 4-15 mm in the defect line)
+      const t = dA + dB > 1e-6 ? len * Math.min(1, Math.max(0, dA / (dA + dB))) : q.clone().sub(A.p).dot(dir), b = Math.min(nb - 1, Math.max(0, Math.floor(t / bw)));
       add(acc[b], q); const hq = q.dot(vup); if (hq > crest[b]) crest[b] = hq;
       const da = q.clone().sub(A.p).dot(NA) - A.w / 2, db = -(q.clone().sub(B.p).dot(NB)) - B.w / 2;
       BANDS.forEach((w, n) => { if (da < w) add(ea[n], q); if (db < w) add(eb[n], q); });
@@ -416,20 +419,30 @@ window.Fibula = (function () {
     // Roll: with rollAuto each segment is turned about its axis so the fibula's lateral face (plate and guide side) faces
     // buccally on the neo-mandible, which puts the posteromedial pedicle lingually. In the graft basis (x, b, z) a fibula
     // vector v lands on (v·a) x + (v·e2) b + (v·e3) z, and rolling by φ turns its (b, z) part by φ.
-    const [, fe2, fe3] = F.c.FA, an = anatDirs();
-    let cursor = F.c.smin + P0.distal, prevEnd = null;
+    const [, fe2, fe3] = F.c.FA, an = anatDirs(), rd = v => THREE.MathUtils.degToRad(v);
+    // The roll that turns the fibula's lateral face buccal; if that leaves the pedicle towards the crest or the buccal side (a
+    // reversed graft order or the other leg mirrors the section), the roll that puts the pedicle lingual-inferior instead
+    // (Denetim 5 R2). Returns degrees and whether the pedicle rule took over.
+    const autoRoll = (x, b0, out) => {
+      const z0 = V().crossVectors(x, b0), turn = (t, w) => Math.atan2(t.dot(z0), t.dot(b0)) - Math.atan2(w.dot(fe3), w.dot(fe2));
+      const upv = V(0, 0, 1).sub(x.clone().multiplyScalar(x.z)).normalize();
+      let ph = turn(out, an.lat), pedOnly = false;
+      const pa = Math.atan2(an.ped.dot(fe3), an.ped.dot(fe2)) + ph, pv = b0.clone().multiplyScalar(Math.cos(pa)).addScaledVector(z0, Math.sin(pa));
+      if (pv.dot(out) > 0.5 || pv.dot(upv) > 0.5) { ph = turn(out.clone().negate().sub(upv).normalize(), an.ped); pedOnly = true; }
+      return { deg: Math.round(((r2d(ph) % 360) + 540) % 360 - 180), pedOnly };
+    };
+    let cursor = F.c.smin + P0.distal, prevEnd = null; const pedRoll = [];
     for (let i = 0; i < n; i++) {
       const x = d[i], b0 = D.up.clone().sub(x.clone().multiplyScalar(D.up.dot(x))).normalize(), out = buccal(x, P[i], P[i + 1]);
       if (P0.rollAuto && out) {
-        const z0 = V().crossVectors(x, b0), ph = r2d(Math.atan2(out.dot(z0), out.dot(b0)) - Math.atan2(an.lat.dot(fe3), an.lat.dot(fe2)));
-        P0.roll[i] = Math.round(((ph % 360) + 540) % 360 - 180);
+        const ar = autoRoll(x, b0, out); P0.roll[i] = ar.deg; pedRoll[i] = ar.pedOnly;
       }
       const b = b0.applyAxisAngle(x, deg(P0.roll[i] || 0)), z = V().crossVectors(x, b);
       const loc = v => V(v.dot(x), v.dot(b), v.dot(z)), n0 = loc(normals[i]), n1 = loc(normals[i + 1]), img = v => b.clone().multiplyScalar(v.dot(fe2)).addScaledVector(z, v.dot(fe3)).normalize();
       if (prevEnd) cursor += between(prevEnd, n0);
       const L = P[i + 1].distanceTo(P[i]);
       segs.push({ i, L, s0: cursor, s1: cursor + L, x, b, z, n0, n1, P0: P[i], P1: P[i + 1], N0: normals[i], N1: normals[i + 1], barrel: 0,
-        a0: r2d(Math.acos(Math.min(1, Math.abs(n0.x)))), a1: r2d(Math.acos(Math.min(1, Math.abs(n1.x)))), out, lat: img(an.lat), ped: img(an.ped) });
+        a0: r2d(Math.acos(Math.min(1, Math.abs(n0.x)))), a1: r2d(Math.acos(Math.min(1, Math.abs(n1.x)))), out, lat: img(an.lat), ped: img(an.ped), pedRoll: !!pedRoll[i] });
       cursor += L; prevEnd = n1;
     }
     // double barrel: one straight strut dblH above the lower one, cut to the same mandible planes; a short piece
@@ -441,8 +454,7 @@ window.Fibula = (function () {
       const x = U0.clone().sub(U1).normalize(), out = buccal(x, U1, U0);
       let b = D.up.clone().sub(x.clone().multiplyScalar(D.up.dot(x))).normalize();
       if (P0.rollAuto && out) {
-        const z0 = V().crossVectors(x, b), ph = r2d(Math.atan2(out.dot(z0), out.dot(b)) - Math.atan2(an.lat.dot(fe3), an.lat.dot(fe2)));
-        b = b.applyAxisAngle(x, deg(Math.round(((ph % 360) + 540) % 360 - 180)));
+        b = b.applyAxisAngle(x, deg(autoRoll(x, b, out).deg));
       }
       const z = V().crossVectors(x, b), NB1 = D.NB.clone().negate(), NA1 = D.NA.clone().negate();
       const loc = v => V(v.dot(x), v.dot(b), v.dot(z)), n0 = loc(NB1), n1 = loc(NA1), L = U0.distanceTo(U1), img = v => b.clone().multiplyScalar(v.dot(fe2)).addScaledVector(z, v.dot(fe3)).normalize();
@@ -815,6 +827,7 @@ window.Fibula = (function () {
     if (P0.distal < DISTAL_MIN) out.push(['crit', 'Kritik', xl(`Distal korunan fibula ${fmt(P0.distal, 0)} mm; ayak bileği stabilitesi için en az ${DISTAL_MIN} mm.`)]);
     // pedicle side on the neo-mandible: lingual or inferior, never buccal (under the skin and the plate) and not towards
     // the crest (implants, occlusion). Only where the segment has an outer side (a curved arch).
+    c.segs.filter(g => g.pedRoll && P0.rollAuto).forEach(g => out.push(['info', 'Bilgi', xl(`Fibula segmenti ${g.i + 1}: lateral yüz bukkale çevrilirse pedikül kret ya da bukkal tarafta kalıyordu; dönüş pedikülü lingual-alt tarafa getirecek şekilde seçildi (lateral yüz bukkal değil).`), 'fib']));
     c.segs.filter(g => !g.barrel && g.out && g.ped).forEach(g => {
       const bu = r2d(Math.acos(Math.max(-1, Math.min(1, g.ped.dot(g.out))))), upv = V(0, 0, 1).sub(g.x.clone().multiplyScalar(g.x.z)).normalize(), upA = r2d(Math.acos(Math.max(-1, Math.min(1, g.ped.dot(upv)))));
       if (bu < 60) out.push(['warn', 'Uyarı', xl(`Fibula segmenti ${g.i + 1}: pedikül tarafı bukkala bakıyor (bukkal yönle ${fmt(bu, 0)}°). Pedikül lingual ya da alt tarafta olmalı; segment dönüşünü kontrol edin.`), 'fib']);
