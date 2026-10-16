@@ -220,14 +220,14 @@ window.Fibula = (function () {
     const rads = [];
     for (let p = 0; p < pts.length; p += 3) { const o = off[Math.floor(pts[p] - smin)]; rads.push(Math.hypot(pts[p + 1] - o[0], pts[p + 2] - o[1])); }
     rads.sort((x, y) => x - y);
-    const FR = rads[Math.floor(rads.length * 0.9)] + Math.min(...red.sp) / 2;
+    const FR = rads[Math.floor(rads.length * 0.9)] + Math.min(...red.sp) / 2, FRm = Math.max(FR, rads[Math.floor(rads.length * 0.99)] + Math.min(...red.sp) / 2);
     const Fm = G.blur(mask, nx, ny, nz), toW = (x, y, z) => G.worldOf(red, x, y, z);
     const geo = St.meshFromNets(G.surfaceNets(Fm, nx, ny, nz), toW, mat(BONE)).geometry;
     let tgeo = null;
     if (c.tibia) { const tm = new Uint8Array(n); for (let v = 0; v < n; v++) if (F.labels[v] === c.tibia.label) tm[v] = 1; tgeo = St.meshFromNets(G.surfaceNets(G.blur(tm, nx, ny, nz), nx, ny, nz), toW, mat(BONE)).geometry; }
     // uid: caches keyed on the candidate (screw sites, cross-sections) are tied to this exact frame and bone; an index
     // is not enough (a split renumbers the list, a donor-side change turns e2 of the same candidate)
-    F.c = { i, uid: ++candSeq, FC: c.C.clone(), FA: [a, e2, e3], smin, smax, FR, off, mask, Fm, geo, tgeo, centroid: [c.C.x, c.C.y, c.C.z] };
+    F.c = { i, uid: ++candSeq, FC: c.C.clone(), FA: [a, e2, e3], smin, smax, FR, FRm, off, mask, Fm, geo, tgeo, centroid: [c.C.x, c.C.y, c.C.z] };
     buildScenes();
   }
   const offAt = s => { const o = F.c.off; return o[Math.min(o.length - 1, Math.max(0, Math.round(s - F.c.smin)))]; };
@@ -323,8 +323,16 @@ window.Fibula = (function () {
     for (let b = 1; b < nb; b++) if (crest[b] === -Infinity) crest[b] = crest[b - 1];
     for (let b = nb - 2; b >= 0; b--) if (crest[b] === -Infinity) crest[b] = crest[b + 1];
     const crestAt = q => crest[Math.min(nb - 1, Math.max(0, Math.floor(q.clone().sub(A.p).dot(dir) / bw)))];
-    return { pts, s, L: s[s.length - 1], NA, NB, up: S.anchor.n.clone(), vup, crestAt, inPlane, A, B, mirrored, nmid: mid.length };
+    const D = { pts, s, L: s[s.length - 1], NA, NB, up: S.anchor.n.clone(), vup, crestAt, inPlane, A, B, mirrored, nmid: mid.length };
+    return S.fib && S.fib.plan && S.fib.plan.rev ? reverseDefect(D) : D;
   }
+  // Graft order reversed (plan.rev): segment 0 (distal fibula) goes to the other end of the defect, so the proximal end,
+  // where the pedicle leaves, lies at the first cut instead of the last (Denetim 5 F2). The defect line runs B -> A and
+  // the end normals turn with it (each points along the line).
+  function reverseDefect(D) {
+    return Object.assign({}, D, { pts: D.pts.slice().reverse(), s: D.s.map(x => D.L - x).reverse(), NA: D.NB.clone().negate(), NB: D.NA.clone().negate(), A: D.B, B: D.A });
+  }
+  const gEnds = E => (S.fib && S.fib.plan && S.fib.plan.rev ? [E.B, E.A] : [E.A, E.B]);   // the defect's first and last end
   // mid-sagittal plane: through the condyles' midpoint, normal along the line between them; without condyles the
   // patient's left-right axis through the centre of the mandible
   function symPlane() {
@@ -360,14 +368,14 @@ window.Fibula = (function () {
     liveRaf = requestAnimationFrame(() => {
       liveRaf = 0;
       const E = St.resEnds(); if (!E || E.condyle) return;
-      const D0 = last.D, dir = E.B.p.clone().sub(E.A.p).normalize();
-      const NA = E.A.N.clone(), NB = E.B.N.clone(); if (NA.dot(dir) < 0) NA.negate(); if (NB.dot(dir) < 0) NB.negate();
+      const D0 = last.D, [EA, EB] = gEnds(E), dir = EB.p.clone().sub(EA.p).normalize();
+      const NA = EA.N.clone(), NB = EB.N.clone(); if (NA.dot(dir) < 0) NA.negate(); if (NB.dot(dir) < 0) NB.negate();
       const onPlane = (q, p, N) => q.clone().addScaledVector(N, p.clone().sub(q).dot(N));
-      const PA = onPlane(D0.pts[0], E.A.p, NA), PB = onPlane(D0.pts[D0.pts.length - 1], E.B.p, NB);
+      const PA = onPlane(D0.pts[0], EA.p, NA), PB = onPlane(D0.pts[D0.pts.length - 1], EB.p, NB);
       const mid = D0.pts.slice(1, -1).filter(q => q.clone().sub(PA).dot(NA) > 3 && q.clone().sub(PB).dot(NB) < -3);
       const pts = [PA, ...mid, PB], sArr = [0];
       for (let i = 1; i < pts.length; i++) sArr.push(sArr[i - 1] + pts[i].distanceTo(pts[i - 1]));
-      const D = Object.assign({}, D0, { pts, s: sArr, L: sArr[sArr.length - 1], NA, NB, A: E.A, B: E.B });
+      const D = Object.assign({}, D0, { pts, s: sArr, L: sArr[sArr.length - 1], NA, NB, A: EA, B: EB });
       try { const c = compute(D); draw(c); syncOutputs(); } catch (e) { /* the full update on release redraws */ }
     });
   }
@@ -401,7 +409,10 @@ window.Fibula = (function () {
     // Space between two segments on the fibula: both saw slots (each slot lies outside its graft face) and a bone bridge
     // of at least wedgeBridge mm between them over the whole section (radius FR), so the two cuts never meet in the
     // bone and the guide keeps a wall between its two slots. Tilted cuts close in by FR·tan(angle) at the section edge.
-    const R = rules(), between = (pe, n0) => 2 * slotOf(P0) + R.wedgeBridge + FR * (tilt(pe) + tilt(n0));
+    const R = rules(), FRm = F.c.FRm || FR, slx = v => slotOf(P0) / Math.max(0.5, Math.abs(v.x));
+    // (Denetim 5 F4: the closure uses the thickest section radius, not the 90th percentile, and each slot is as thick along the
+    // axis as its face is oblique to it)
+    const between = (pe, n0) => slx(pe) + slx(n0) + R.wedgeBridge + FRm * (tilt(pe) + tilt(n0));
     // Roll: with rollAuto each segment is turned about its axis so the fibula's lateral face (plate and guide side) faces
     // buccally on the neo-mandible, which puts the posteromedial pedicle lingually. In the graft basis (x, b, z) a fibula
     // vector v lands on (v·a) x + (v·e2) b + (v·e3) z, and rolling by φ turns its (b, z) part by φ.
@@ -424,12 +435,20 @@ window.Fibula = (function () {
     // double barrel: one straight strut dblH above the lower one, cut to the same mandible planes; a short piece
     // (DBL_GAP) is taken out between the barrels on the fibula so the graft can fold on its periosteum
     if (P0.dbl) {
+      // The upper strut is folded back over the lower ones (Denetim 5 F1): it runs the other way, U1 -> U0, so it starts at
+      // the end the last lower segment finished at and the periosteal hinge on the fibula is only the fold itself.
       const h = dblH(), U0 = P[0].clone().addScaledVector(D.inPlane(D.NA), h), U1 = P[n].clone().addScaledVector(D.inPlane(D.NB), h);
-      const x = U1.clone().sub(U0).normalize(), b = D.up.clone().sub(x.clone().multiplyScalar(D.up.dot(x))).normalize(), z = V().crossVectors(x, b);
-      const loc = v => V(v.dot(x), v.dot(b), v.dot(z)), n0 = loc(D.NA), n1 = loc(D.NB), L = U0.distanceTo(U1);
-      cursor += between(prevEnd, n0) + DBL_GAP;
-      segs.push({ i: n, L, s0: cursor, s1: cursor + L, x, b, z, n0, n1, P0: U0, P1: U1, N0: D.NA, N1: D.NB, barrel: 1,
-        a0: r2d(Math.acos(Math.min(1, Math.abs(n0.x)))), a1: r2d(Math.acos(Math.min(1, Math.abs(n1.x)))) });
+      const x = U0.clone().sub(U1).normalize(), out = buccal(x, U1, U0);
+      let b = D.up.clone().sub(x.clone().multiplyScalar(D.up.dot(x))).normalize();
+      if (P0.rollAuto && out) {
+        const z0 = V().crossVectors(x, b), ph = r2d(Math.atan2(out.dot(z0), out.dot(b)) - Math.atan2(an.lat.dot(fe3), an.lat.dot(fe2)));
+        b = b.applyAxisAngle(x, deg(Math.round(((ph % 360) + 540) % 360 - 180)));
+      }
+      const z = V().crossVectors(x, b), NB1 = D.NB.clone().negate(), NA1 = D.NA.clone().negate();
+      const loc = v => V(v.dot(x), v.dot(b), v.dot(z)), n0 = loc(NB1), n1 = loc(NA1), L = U0.distanceTo(U1), img = v => b.clone().multiplyScalar(v.dot(fe2)).addScaledVector(z, v.dot(fe3)).normalize();
+      cursor += between(prevEnd, n0) + Math.max(DBL_GAP, Math.round(h * Math.PI / 2));
+      segs.push({ i: n, L, s0: cursor, s1: cursor + L, x, b, z, n0, n1, P0: U1, P1: U0, N0: NB1, N1: NA1, barrel: 1,
+        a0: r2d(Math.acos(Math.min(1, Math.abs(n0.x)))), a1: r2d(Math.acos(Math.min(1, Math.abs(n1.x)))), out, lat: out ? img(an.lat) : undefined, ped: out ? img(an.ped) : undefined });
       cursor += L;
     }
     // fibula -> mandible transform of each segment (the graft meshes and graftBone use it)
@@ -467,6 +486,10 @@ window.Fibula = (function () {
     // (app.js keepCuts, a cut almost along the new axis) moves in the jaw with the same numbers (Denetim 3 D-6). Appended
     // only when the guide is turned, so other plans keep their signature.
     if (S.g && S.g.rot) a.push(['rot', r3(S.g.rot)]);
+    // the bone axis of the guide frame turns every cut plane, and where the saw slot lies against the cut moves the stump
+    // faces (Denetim 5 F3); appended only when set / not the default
+    if (S.anchor && S.anchor.axis) a.push(['axis', [S.anchor.axis.x, S.anchor.axis.y, S.anchor.axis.z].map(x => Math.round(x * 1e4) / 1e4 + 0)]);
+    if (S.g && S.g.kerfSide === 0) a.push(['kerfSide', 0]);
     return JSON.stringify(a); };
 
   // ---------- scenes ----------
@@ -872,7 +895,7 @@ window.Fibula = (function () {
     $('fibDistal').value = P0.distal; $('fibDistalO').textContent = fmt(P0.distal, 0) + ' mm';
     $('fibVOff').value = P0.vOff || 0; $('fibVOffO').textContent = fmt(P0.vOff || 0) + ' mm';
     $('fibMirror').checked = !!P0.mirror;
-    $('fibRollAuto').checked = !!P0.rollAuto;
+    $('fibRollAuto').checked = !!P0.rollAuto; $('fibRev').checked = !!P0.rev;
     const ls = legSide(); $('fibSide').value = P0.side || '';
     $('fibSideMsg').textContent = ls.how === 'manual' ? '' : ls.how === 'tibia' ? (ls.side === 'L' ? 'Tibiaya göre sol bacak.' : 'Tibiaya göre sağ bacak.') : (ls.side === 'L' ? 'Tibia yok; sol bacak tahmini, doğrulayın.' : 'Tibia yok; sağ bacak tahmini, doğrulayın.');
     renderRules();
@@ -916,8 +939,9 @@ window.Fibula = (function () {
     if (!had) return;
     if (pick.n === keep.n) Object.assign(P0, keep);
     else {
+      const hadFsc = !!P0.fsc; delete P0.fsc;
       const set = keep.knots.some((k, i) => Math.abs(k - (i + 1) / keep.n) > 1e-3) || [keep.yaw, keep.pitch, keep.roll].some(a => a.some(x => x));
-      msg(xl(`Defekt boyu değişti; segment sayısı ${keep.n} → ${pick.n} oldu.`) + (set ? ' ' + xl('Segment sınırları, kesi açıları ve rotasyonlar sıfırlandı; kontrol edin.') : ''));
+      msg(xl(`Defekt boyu değişti; segment sayısı ${keep.n} → ${pick.n} oldu.`) + (set ? ' ' + xl('Segment sınırları, kesi açıları ve rotasyonlar sıfırlandı; kontrol edin.') : '') + (hadFsc ? ' ' + xl('Elle yerleştirilen vidalar da sıfırlandı.') : ''));
     }
   }
   let liveTimer = null;
@@ -981,6 +1005,7 @@ window.Fibula = (function () {
     // (no side = from the tibia; no rollAuto = the stored rolls, as before)
     if ('side' in q) q.side = q.side === 'L' || q.side === 'R' ? q.side : null;
     if ('rollAuto' in q) q.rollAuto = q.rollAuto ? 1 : 0;
+    if ('rev' in q) q.rev = q.rev ? 1 : 0;
     if ('rules' in q) { const r = cleanRules(q.rules); if (r) q.rules = r; else delete q.rules; }
     return { plan: q, warn };
   }
@@ -1109,7 +1134,7 @@ window.Fibula = (function () {
       note(xl(`Segment ${j}–${j + 1} arasındaki kesi seçildi; açısını aşağıdan ayarlayın.`)); return;
     }
     // the graft's two ends are cut to the mandible's own planes: those are edited on the mandible
-    const E = St.resEnds(), end = j === 0 ? E && E.A : E && E.B;
+    const E = St.resEnds(), ge = E && gEnds(E), end = j === 0 ? ge && ge[0] : ge && ge[1];
     const k = end && !end.virtual ? St.planesWorld().findIndex(q => Math.abs(q.off - end.off) < 1e-6 && q.N.distanceTo(end.N) < 1e-6) : -1;
     fsel.joint = j; fsel.seg = null; draw(last);
     if (k >= 0) { St.select('p' + k); setActive('m', true); note(xl(`Bu uç mandibuladaki Kesi ${k + 1} ile aynı düzlemde; açısını mandibulada değiştirince fibula da güncellenir.`)); }
@@ -1226,6 +1251,7 @@ window.Fibula = (function () {
     $(id).addEventListener('change', () => edited(false, true));
   });
   $('fibDbl').addEventListener('change', e => { if (!active()) return; plan().dbl = e.target.checked ? 1 : 0; edited(false, true); });
+  $('fibRev').addEventListener('change', e => { if (!active()) return; plan().rev = e.target.checked ? 1 : 0; guideKey = ''; edited(false, true); });
   $('fibRollAuto').addEventListener('change', e => { if (!active()) return; plan().rollAuto = e.target.checked ? 1 : 0; edited(false, true); });
   // donor side: without a tibia the guide's face (e2) follows it, so the candidate frame is rebuilt
   $('fibSide').addEventListener('change', e => {

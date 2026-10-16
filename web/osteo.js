@@ -65,14 +65,16 @@ window.Osteo = (function () {
     const out = [], lower = segs.filter(g => !g.barrel), upper = segs.filter(g => g.barrel);
     const mand = (g, end) => {
       // end 'A': stump behind -N of the first cut; end 'B': stump beyond +N of the last cut. N runs A -> B.
-      const P = end === 'A' ? E.A : E.B, N = (end === 'A' ? g.N0 : g.N1).clone(), sgn = end === 'A' ? -1 : 1, p = end === 'A' ? g.P0 : g.P1;
+      // 'A' / 'B' here are the graft's own first / last face; which mandible stump it meets is found from where it lies (a
+      // reversed graft order or a folded upper barrel meets the stumps the other way round, Denetim 5 F1/F2)
+      const N = (end === 'A' ? g.N0 : g.N1).clone(), sgn = end === 'A' ? -1 : 1, p = end === 'A' ? g.P0 : g.P1, atA = p.distanceTo(E.A.p) <= p.distanceTo(E.B.p), P = atA ? E.A : E.B;
       // planned gap at this end: the half slot behind the plane (0 when the kerf lies on the resected side, Studio.stumpGap)
       const gap = St.stumpGap ? St.stumpGap(P) : P.w / 2;
       const back = gap + 0.4, sec = section(p, N, Math.max(18, FR + 6), q => St.boneAt(q.clone().addScaledVector(N, sgn * back)), q => gb(g.i, q.clone().addScaledVector(N, -sgn * 0.4)));
       const ax = stumpAxis(p.clone().addScaledVector(N, sgn * gap), N.clone().multiplyScalar(sgn));
       // graft direction leaving the stump into the defect
       const into = g.x.clone().multiplyScalar(-sgn), axis = ax ? r2d(ax.angleTo(into)) : null;
-      return { kind: end, name: `Mandibula ${end === 'A' ? '1' : '2'} – segment ${g.i + 1}${g.barrel ? ' (üst)' : ''}`, short: end === 'A' ? `M1–S${g.i + 1}${g.barrel ? UP() : ''}` : `S${g.i + 1}${g.barrel ? UP() : ''}–M2`, seg: g.i, angle: axis, angleKind: 'eksen',
+      return { kind: end, name: `Mandibula ${atA ? '1' : '2'} – segment ${g.i + 1}${g.barrel ? ' (üst)' : ''}`, short: end === 'A' ? `M${atA ? 1 : 2}–S${g.i + 1}${g.barrel ? UP() : ''}` : `S${g.i + 1}${g.barrel ? UP() : ''}–M${atA ? 1 : 2}`, seg: g.i, angle: axis, angleKind: 'eksen',
         contact: sec.contact, graftArea: sec.areaB, otherArea: sec.areaA, gap };
     };
     lower.length && out.push(mand(lower[0], 'A'));

@@ -280,7 +280,9 @@ def make_plan(arch, fibula, s_a, s_b, n_segments=None, tol_mm=2.5, min_len=20.0,
             # Spacing between two grafts along the fibula: the two kerfs (one slot outside each graft face) plus the tilt of the
             # cut faces over the fibula radius, plus 1 mm. With upright cuts and kerf = 1 mm that is exactly 2 slots wide, i.e. no
             # bone is left between the slots: the grafts are cut with two adjacent saw passes and no waste wedge remains. This is
-            # the same formula as web/fibula.js (a margin would change the fibula length needed in both); left as it is.
+            # NOT the formula of web/fibula.js (that one adds a 2 mm bone bridge between the slots and divides each slot by the cosine of its face
+            # angle). Here the bone between the slots is zero by design: any bone left there becomes a disconnected strip of this
+            # pipeline's voxel guide, which is dropped (Denetim 5 F10; the studio's guide has a rib instead).
             # The slots are slot_w wide (= kerf unless set apart), so the room between grafts follows the slot.
             s_cursor += slot_w + 1.0 + fibula.radius * (tilt(prev_end_normal_f) + tilt(n0f))
         L = float(np.linalg.norm(P[i + 1] - P[i]))
