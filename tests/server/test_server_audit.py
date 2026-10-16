@@ -508,5 +508,20 @@ class T7_CorsHeaders(Base):
         self.assertNotRegex(r["error"], r"(KeyError|TypeError|Traceback|'frame')")
 
 
+class ThresholdComponents(unittest.TestCase):
+    """seg_server.run_threshold ranks the bone components by voxel count (np.bincount since the external audit)."""
+
+    def test_largest_component_first(self):
+        import types
+        import seg_server
+        a = np.full((30, 30, 30), -1000, np.int16)
+        a[2:6, 2:6, 2:6] = 1200       # 64 voxels
+        a[10:20, 10:20, 10:20] = 1200  # 1000 voxels
+        a[24:28, 2:12, 2:5] = 1200     # 120 voxels
+        out, st = seg_server.run_threshold(types.SimpleNamespace(array=a), keep=6)
+        self.assertEqual(len(st), 3)
+        self.assertEqual([int((out == k).sum()) for k in (1, 2, 3)], [1000, 120, 64])
+
+
 if __name__ == "__main__":
     unittest.main()

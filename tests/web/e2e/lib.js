@@ -250,4 +250,10 @@ async function start(opt = {}) {
   return h;
 }
 
-module.exports = { start, sleep, E2E, KANIT, SCRATCH, BASE, TOKEN };
+// zip contents through Python's zipfile (no external unzip binary, so the suites also run on Windows)
+const ZPY = "import zipfile, sys\nz = zipfile.ZipFile(sys.argv[2])\nif sys.argv[1] == 'list': print('\\n'.join(z.namelist()))\nelif sys.argv[1] == 'read': sys.stdout.buffer.write(z.read(sys.argv[3]))\nelse: [z.extract(n, sys.argv[3]) for n in sys.argv[4:]]";
+const py = args => require('child_process').execFileSync(process.platform === 'win32' ? 'python' : 'python3', ['-I', '-c', ZPY, ...args]);
+const zipList = p => py(['list', p]).toString().trim().split(/\r?\n/);
+const zipRead = (p, name) => py(['read', p, name]);
+const zipExtract = (p, names, dir) => py(['extract', p, dir, ...names]);
+module.exports = { start, sleep, E2E, KANIT, SCRATCH, BASE, TOKEN, zipList, zipRead, zipExtract };

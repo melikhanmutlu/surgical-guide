@@ -1,7 +1,8 @@
 // Denetim 5 fibula tests: graft order reversal (F2), double-barrel fold (F1), approval signature covers the bone axis (F3),
-// junction spacing (F4), hand-placed screws reset on a count change (F7). Run: node test_d5_fib.mjs
-// angle (D-6) and plans without slotW / nAuto keep theirs (W20); implant segment / position survive a restore (W4).
-// Run: node test_fibplan.mjs
+// junction spacing (F4), hand-placed screws reset on a count change (F7); review follow-ups: hand-placed screws also
+// reset by the count buttons and the barrel / order switches (F8), an order switched on and off again and a stamp made
+// before the v2 signature keep the approval (F9), condylar resection checks the real stump junction whichever face meets
+// it (F10), the recipient side follows the pedicle end (F11). Run: node test_d5_fib.mjs
 import { test, run, assert, near } from './lib/t.mjs';
 import { studio, ready } from './lib/harness.mjs';
 import zlib from 'node:zlib';
@@ -19,7 +20,7 @@ function legSample(joined) {
 }
 let LEG = legSample(false);
 const fetchStub = async url => { if (/sample_leg/.test(url)) return { json: async () => LEG }; throw new Error('offline'); };
-const P = studio({ dicom: true, pre: ['codecs.js', 'unzip.js'], extra: { fetch: fetchStub }, post: ['fibula.js', 'implant.js'] });
+const P = studio({ dicom: true, pre: ['codecs.js', 'unzip.js'], extra: { fetch: fetchStub }, post: ['condyle.js', 'fibula.js', 'implant.js', 'osteo.js', 'ves.js'] });
 const St = await ready(P); const T = P.g.THREE, S = St.S, G = P.eval('G'), W = P.g, $ = id => P.doc.getElementById(id);
 const V = (x = 0, y = 0, z = 0) => new T.Vector3(x, y, z);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -111,6 +112,52 @@ test('R1: straight bone with oblique cuts gives a straight defect line (length ~
   assert.ok(D.L < chord * 1.05, `defect line ${D.L} mm vs chord ${chord} mm (a hook at the oblique cuts made it longer)`);
   assert.ok(c.dev < 2, `deviation ${c.dev} mm`);
   S.planes[0].yaw = 0; S.planes[1].yaw = 0; await cuts(-30, 30);
+});
+
+test('F8: hand-placed screws are reset by the double barrel / reverse order switches (and the count buttons, setN)', async () => {
+  await start(); await cuts(-30, 30);
+  const P0 = W.Fibula.plan(), setFsc = () => { W.Fibula.plan().fsc = [{ seg: 0, off: 0, ang: 0 }]; };
+  setFsc(); $('fibDbl').checked = true; fire('fibDbl', 'change'); await sleep(50);
+  assert.equal(W.Fibula.plan().fsc, undefined, 'folding the barrel resets them');
+  $('fibDbl').checked = false; fire('fibDbl', 'change'); await sleep(50);
+  setFsc(); $('fibRev').checked = true; fire('fibRev', 'change'); await sleep(50);
+  assert.equal(W.Fibula.plan().fsc, undefined, 'reversing the order resets them');
+  $('fibRev').checked = false; fire('fibRev', 'change'); await sleep(50);
+});
+
+test('F9: an order switched on and off keeps the approval; a stamp made before the v2 signature is still valid', async () => {
+  await start(); await cuts(-30, 30);
+  if (W.Fibula.approved()) fire('fibApprove', 'click');
+  fire('fibApprove', 'click'); assert.equal(W.Fibula.approved(), true);
+  $('fibRev').checked = true; fire('fibRev', 'change'); await sleep(50); assert.equal(W.Fibula.approved(), false);
+  $('fibRev').checked = false; fire('fibRev', 'change'); await sleep(50);
+  assert.equal('rev' in W.Fibula.plan(), false, 'no rev: 0 left behind');
+  assert.equal(W.Fibula.approved(), true, 'back to the approved plan');
+  // an earlier stamp: the same signature without the v2 mark, the bone axis and the centred kerf entries
+  const P0 = W.Fibula.plan(), a = JSON.parse(P0.sig.slice(2)).filter(x => !(Array.isArray(x) && (x[0] === 'axis' || x[0] === 'kerfSide')));
+  P0.sig = JSON.stringify(a);
+  assert.equal(W.Fibula.approved(), true, 'a plan approved before this release keeps its approval');
+  S.planes[1].off += 2; assert.equal(W.Fibula.approved(), false, 'and loses it when a cut moves'); S.planes[1].off -= 2;
+});
+
+test('F10/F11: condylar resection, reversed order: the junction checked is the real stump (M1), never the new condyle; the recipient side follows the pedicle end', async () => {
+  W.Ref = { get: () => ({ cond: { R: [56, 0, -7], L: [-56, 0, -7] }, n: [1, 0, 0], d: 0 }) };
+  S.planes = [{ off: 10, yaw: 0, pitch: 0, w: 1.2 }]; S.lesion.condyle = 'R';
+  St.placeScrews(); await St.rebuildResection(); await St.regenerate(); St.emit('parts'); await sleep(30);
+  await start(); await sleep(100);
+  const stumps = () => { W.Osteo.update(); return (W.Osteo.get() || []).filter(o => o.kind !== 'J'); };
+  for (const rev of [false, true]) {
+    $('fibRev').checked = rev; fire('fibRev', 'change'); await sleep(100);
+    const r = stumps();
+    assert.equal(r.length, 1, `rev ${rev}: one stump junction: ` + JSON.stringify(r.map(o => o.name)));
+    assert.ok(/Mandibula 1/.test(r[0].name), `rev ${rev}: at the real stump (${r[0].name})`);
+    const E = St.resEnds(), segs = W.Fibula.state().last.segs, ex = segs[segs.length - 1].P1, nr = ex.distanceTo(E.A.p) <= ex.distanceTo(E.B.p) ? E.A : E.B, fr = nr === E.A ? E.B : E.A;
+    W.Vessels && W.Vessels.update && W.Vessels.update();
+    const sum = W.Vessels && W.Vessels.summary ? W.Vessels.summary() : null;
+    if (sum) assert.equal(sum.alici_taraf, nr.p.x > fr.p.x ? 'sol' : 'sağ', `rev ${rev}: recipient on the pedicle side`);
+  }
+  $('fibRev').checked = false; fire('fibRev', 'change'); await sleep(50);
+  S.lesion.condyle = null; S.planes = [{ off: -30, yaw: 0, pitch: 0, w: 1.2 }, { off: 30, yaw: 0, pitch: 0, w: 1.2 }];
 });
 
 await run('d5_fib');

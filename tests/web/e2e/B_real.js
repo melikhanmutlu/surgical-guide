@@ -234,10 +234,10 @@ if (require.main === module) (async () => {
     if (zipOk) {
       const [d] = await Promise.all([page.waitForEvent('download', { timeout: 300000 }), page.click('#expZip')]);
       const zp = path.join(h.SCRATCH, 'real_paket.zip'); await d.saveAs(zp);
-      const list = require('child_process').execFileSync('unzip', ['-Z1', zp]).toString().trim().split('\n');
+      const list = require('./lib').zipList(zp);
       out.push(`paket ${list.length} dosya: ${list.join(', ')}`);
       const keep = list.filter(f => /^(guide_uretim|guide_onizleme|fibula_guide_uretim|fibula_guide_onizleme)\.stl$|^(plan|fibula_plani|plak_plani|osteotomi_raporu|onay_kaydi|navigasyon)\.json$|^cerrahi_rapor\.pdf$/.test(f));
-      require('child_process').execFileSync('unzip', ['-o', '-q', zp, ...keep, '-d', REAL]);
+      require('./lib').zipExtract(zp, keep, REAL);
       fs.writeFileSync(path.join(REAL, 'paket_listesi.txt'), list.join('\n'));
     } else out.push('paket kilitli; yalnız tek STL ve plan');
     const files = await h.ev(() => {

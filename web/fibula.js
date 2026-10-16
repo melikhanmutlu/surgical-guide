@@ -487,7 +487,10 @@ window.Fibula = (function () {
   // approval is tied to what the surgeon decided (fibula parameters + mandible cuts), not to derived numbers; a cut's
   // point within its plane (pv / pn, a cut turned with the bone) moves the defect's end, so it counts when it is set
   const r3 = x => Math.round(x * 1000) / 1000;
-  const sig = () => { const { ok, by, at, sig: _s, ...p } = plan(); const a = [p, S.planes.map(q => (q.pv || q.pn ? [q.off, q.yaw, q.pitch, q.w, q.pv || 0, q.pn || 0] : [q.off, q.yaw, q.pitch, q.w])), S.anchor ? [S.anchor.p, S.anchor.n].map(v => [v.x, v.y, v.z].map(r3)) : null,
+  // (v2: the bone axis and a centred kerf are part of it. A stamp made before them, without the "2|" mark, is checked
+  // against the signature it was made with, so plans approved earlier keep their approval; a reversed order that was
+  // switched off again is the plan it was before.)
+  const sig = (legacy = false) => { const { ok, by, at, sig: _s, ...p } = plan(); if (!p.rev) delete p.rev; const a = [p, S.planes.map(q => (q.pv || q.pn ? [q.off, q.yaw, q.pitch, q.w, q.pv || 0, q.pn || 0] : [q.off, q.yaw, q.pitch, q.w])), S.anchor ? [S.anchor.p, S.anchor.n].map(v => [v.x, v.y, v.z].map(r3)) : null,
     // the defect also depends on the condyle (condylar resection) and on the bone mask itself
     S.lesion.condyle || null, S.lesion.condyle && window.Ref && Ref.get() ? Ref.get().cond[S.lesion.condyle] || null : null,
     document.getElementById('thr').value, window.SegEdit ? SegEdit.key() : ''];
@@ -500,9 +503,11 @@ window.Fibula = (function () {
     if (S.g && S.g.rot) a.push(['rot', r3(S.g.rot)]);
     // the bone axis of the guide frame turns every cut plane, and where the saw slot lies against the cut moves the stump
     // faces (Denetim 5 F3); appended only when set / not the default
+    if (legacy) return JSON.stringify(a);
     if (S.anchor && S.anchor.axis) a.push(['axis', [S.anchor.axis.x, S.anchor.axis.y, S.anchor.axis.z].map(x => Math.round(x * 1e4) / 1e4 + 0)]);
     if (S.g && S.g.kerfSide === 0) a.push(['kerfSide', 0]);
-    return JSON.stringify(a); };
+    return '2|' + JSON.stringify(a); };
+  const sigOk = s => (typeof s === 'string' && s.startsWith('2|') ? s === sig() : s === sig(true));
 
   // ---------- scenes ----------
   function clearLeg() { while (leg.children.length) { const c = leg.children.pop(); c.traverse(o => { if (o.material) o.material.dispose(); if (o.geometry && o.geometry !== F?.c?.geo && o.geometry !== F?.c?.tgeo) o.geometry.dispose(); }); } }
@@ -866,7 +871,7 @@ window.Fibula = (function () {
     return out;
   }
   const active = () => !!(F && F.c && S.fib && S.fib.plan);
-  const approved = () => active() && !!plan().ok && plan().sig === sig();
+  const approved = () => active() && !!plan().ok && sigOk(plan().sig);
   // clinical threshold profile: one number per rule; a value equal to the default is not stored
   const RULE_UI = [['segErr', 'Segment boyu, kritik sınır', 'mm'], ['segMin', 'Segment boyu, önerilen en az', 'mm'], ['stumpMin', 'Güdük segmenti, önerilen en az', 'mm'],
     ['devWarn', 'Defekt hattından sapma, uyarı', 'mm'], ['angleWarn', 'Segment uç kesisi açısı, uyarı', '°'], ['distalMin', 'Distal korunan fibula, en az', 'mm'], ['proxKeep', 'Proksimalde kalan fibula, en az', 'mm'],
@@ -967,8 +972,11 @@ window.Fibula = (function () {
     P0.knots.forEach((f, i) => { const o = $('fk' + i) && $('fk' + i).parentElement.querySelector('output'); if (o) o.textContent = fmt(f * Ld) + ' mm'; });
     P0.roll.forEach((r, i) => { const o = $('fr' + i) && $('fr' + i).parentElement.querySelector('output'); if (o) o.textContent = fmt(r, 0) + '°'; });
   }
+  // hand-placed screws (fsc) are tied to a segment index and a position along it: a new segment count, a folded or
+  // unfolded upper barrel or a reversed order moves them onto other bone (or onto a segment that no longer exists)
+  function dropFsc() { const P0 = plan(); if (!P0.fsc) return; delete P0.fsc; msg(xl('Elle yerleştirilen vidalar da sıfırlandı.')); }
   function setN(n) {
-    const P0 = plan(); P0.n = n; P0.knots = Array.from({ length: n - 1 }, (_, i) => (i + 1) / n);
+    const P0 = plan(); if (n !== P0.n) dropFsc(); P0.n = n; P0.knots = Array.from({ length: n - 1 }, (_, i) => (i + 1) / n);
     P0.yaw = Array(n + 1).fill(0); P0.pitch = Array(n + 1).fill(0); P0.roll = Array(n).fill(0);
   }
   function optimizeKnots() {
@@ -1018,7 +1026,7 @@ window.Fibula = (function () {
     // (no side = from the tibia; no rollAuto = the stored rolls, as before)
     if ('side' in q) q.side = q.side === 'L' || q.side === 'R' ? q.side : null;
     if ('rollAuto' in q) q.rollAuto = q.rollAuto ? 1 : 0;
-    if ('rev' in q) q.rev = q.rev ? 1 : 0;
+    if ('rev' in q) { if (q.rev) q.rev = 1; else delete q.rev; }
     if ('rules' in q) { const r = cleanRules(q.rules); if (r) q.rules = r; else delete q.rules; }
     return { plan: q, warn };
   }
@@ -1263,8 +1271,8 @@ window.Fibula = (function () {
     $(id).addEventListener('input', e => { const j = +$('fibJoint').value; plan()[key][j] = +e.target.value; $(id + 'O').textContent = fmt(+e.target.value, 0) + '°'; edited(true); });
     $(id).addEventListener('change', () => edited(false, true));
   });
-  $('fibDbl').addEventListener('change', e => { if (!active()) return; plan().dbl = e.target.checked ? 1 : 0; edited(false, true); });
-  $('fibRev').addEventListener('change', e => { if (!active()) return; plan().rev = e.target.checked ? 1 : 0; guideKey = ''; edited(false, true); });
+  $('fibDbl').addEventListener('change', e => { if (!active()) return; plan().dbl = e.target.checked ? 1 : 0; dropFsc(); edited(false, true); });
+  $('fibRev').addEventListener('change', e => { if (!active()) return; if (e.target.checked) plan().rev = 1; else delete plan().rev; dropFsc(); guideKey = ''; edited(false, true); });
   $('fibRollAuto').addEventListener('change', e => { if (!active()) return; plan().rollAuto = e.target.checked ? 1 : 0; edited(false, true); });
   // donor side: without a tibia the guide's face (e2) follows it, so the candidate frame is rebuilt
   $('fibSide').addEventListener('change', e => {

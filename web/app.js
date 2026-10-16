@@ -1461,6 +1461,18 @@
     return null;
   }
   const FIT_BUDGET_MS = 45000;
+  // the last guide fitWrap confirmed at the final resolution, with the inputs it was built from: regenerate() takes it
+  // instead of building the same guide a second time when nothing changed in between
+  let fitBuilt = null;
+  const fitKey = () => JSON.stringify([S.g, S.anchor && [S.anchor.p, S.anchor.n, S.anchor.axis].map(q => q.toArray()), S.planes.map(p => [p.off, p.yaw, p.pitch, p.w, p.pv || 0, p.pn || 0]),
+    S.screws.map(c => [c.u, c.v, c.tiltU, c.tiltV, c.d, c.D, c.sleeveH, c.len, c.part || 0])]);
+  // (the screws by identity too: the built result points at the screw objects it was made with)
+  function keepFit(o) { if (fitBuilt) disposeObj(fitBuilt.out.mesh); fitBuilt = { key: fitKey(), field: guideField(), scs: S.screws.slice(), out: o }; }
+  function takeFit() {
+    const f = fitBuilt; fitBuilt = null; if (!f) return null;
+    if (f.key === fitKey() && f.field === guideField() && f.scs.length === S.screws.length && f.scs.every((c, i) => c === S.screws[i])) return f.out;
+    disposeObj(f.out.mesh); return null;
+  }
   async function fitWrap() {
     if (!S.anchor) return null;
     const auto = S.gAuto, w0 = S.g.wrap, f0 = S.g.flange, s0 = S.g.split, log = [], t0 = performance.now();
@@ -1483,7 +1495,7 @@
       return bad + (held ? 0 : 1);
     };
     const test = async (h = 0.8) => {
-      const o = await buildGuideSet(Object.assign({ g: S.g, P: S.anchor.p, pls: planesWorld(), scs: screwsWorld(), bone: boneAt, field: guideField(), h, noBarMesh: true }, frameAxes())); const R = o.result, want = S.g.split && S.planes.length >= 2 ? 2 : 1; disposeObj(o.mesh);
+      const o = await buildGuideSet(Object.assign({ g: S.g, P: S.anchor.p, pls: planesWorld(), scs: screwsWorld(), bone: boneAt, field: guideField(), h, noBarMesh: true }, frameAxes())); const R = o.result, want = S.g.split && S.planes.length >= 2 ? 2 : 1;
       const bad = screwsBad(R), scOk = !bad, piecesOk = R.pieces === want, seatFree = !R.seat || !R.seat.ok || R.seat.free > 0;
       if (!scOk) log.push({ step: 'screws', split: S.g.split, wrap: S.g.wrap, flange: S.g.flange, ok: false, screws: bad });
       const score = (piecesOk ? 1000 : 0) + (seatFree ? 100 : 0) - bad - (h > 0.5 ? 0.5 : 0);
@@ -1491,7 +1503,10 @@
       onlyScrews = piecesOk && seatFree && !scOk;
       noBoneDrop = (S.screwDrops || []).some(d => d.why === 'noBone');
       rejected = R.screwInfo.filter(si => !si.ok && si.noBody && si.s.sc && !si.s.sc.hand).map(si => ({ part: si.s.sc.part || 0, u: si.s.sc.u, v: si.s.sc.v }));
-      return piecesOk && (h > 0.5 || seatFree) && scOk;
+      const pass = piecesOk && (h > 0.5 || seatFree) && scOk;
+      // a rung that passes at the final resolution is the guide the rebuild after the fit would make again: kept for it
+      if (pass && h <= 0.4) keepFit(o); else disposeObj(o.mesh);
+      return pass;
     };
     // coarse grid first, then confirm at the resolution of the final guide
     const okAt = async () => (await test()) && (await test(0.4));
@@ -2051,7 +2066,9 @@
   // one call for any layout: split = 2 builds two guides, each on its own frame at its cut (body and ramus side), and
   // merges them into one mesh / one result (pieces, contact, undercut, screws; seat = the worse of the two); every other
   // layout is one buildGuide on the given frame
+  let guideBuilds = 0;   // (counted for the tests: the fit's confirmed guide is not built a second time)
   async function buildGuideSet(ctx) {
+    guideBuilds++;
     const g = ctx.g, pls = ctx.pls;
     if (!(g.split === 2 && pls.length >= 2)) return buildGuide(ctx);
     const sorted = pls.slice().sort((a, b) => (a.off ?? a.p.dot(ctx.u)) - (b.off ?? b.p.dot(ctx.u)));
@@ -2322,7 +2339,8 @@
   // every edit bumps ver; a built guide is shown only if it is at least as new as the one on screen
   const live = { ver: 0, shown: 0, running: false, dirty: false, planes: false, resAt: 0 };
   async function regenerate() {
-    if (!S.anchor) return;
+    // (nothing to build yet: a rebuild scheduled before a resection region is chosen must not leave "busy" on screen)
+    if (!S.anchor) { busy(false); return; }
     if (!S.guideOn) {
       // cuts only: no guide until the user asks for one
       live.shown = live.ver; S.liveScrews = null; S.result = null; S.grid = null;
@@ -2333,7 +2351,9 @@
     const ver = live.ver;
     busy(true, pipeGuide ? 'Guide üretiliyor… 4/4' : 'Guide üretiliyor…'); await sleep();
     const pls = planesWorld(), scs = screwsWorld();
-    const out = await buildGuideSet(Object.assign({ g: S.g, P: S.anchor.p, pls, scs, bone: boneAt, field: guideField() }, frameAxes()));
+    let out = takeFit();
+    if (out && out.result.bar && out.result.bar.ok && S.g.bar) out.barMesh = buildBarMesh(out.result.bar.spec, 0.4);
+    if (!out) out = await buildGuideSet(Object.assign({ g: S.g, P: S.anchor.p, pls, scs, bone: boneAt, field: guideField() }, frameAxes()));
     if (ver < live.shown) { disposeObj(out.mesh); if (out.barMesh) disposeObj(out.barMesh); return; }
     live.shown = ver; S.liveScrews = null;
     setPart('guide', 'Guide', out.mesh, COLORS.guide);
@@ -3555,13 +3575,16 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
 
   // ---------- plan state: serialise / restore (case store, versions, undo) ----------
   const vec = q => [q.x, q.y, q.z].map(x => Math.round(x * 1000) / 1000);
+  const unit = q => [q.x, q.y, q.z].map(x => x + 0);
   const clone = o => JSON.parse(JSON.stringify(o));
   function planOf() {
     const r = S.red;
     return {
       schema: 1, source: S.source ? clone(S.source) : null,
       seg: { thr: +$('thr').value, method: S.segMethod || '', sel: r ? S.comps.filter(c => S.selected.has(c.label)).map(c => G.worldOf(r, ...c.centroid).map(x => Math.round(x * 10) / 10)) : [] },
-      anchor: S.anchor ? { p: vec(S.anchor.p), n: vec(S.anchor.n), axis: vec(S.anchor.axis), ...(S.anchor.base ? { base: { p: vec(S.anchor.base.p), n: vec(S.anchor.base.n), c: vec(S.anchor.base.c) } } : {}) } : null,
+      // the frame's unit vectors are kept at full precision: rounded to 1e-3 and renormalised on reading they no longer
+      // match the approval signatures (itemSig compares them to 1e-4), and every approval dropped on reopen or undo
+      anchor: S.anchor ? { p: vec(S.anchor.p), n: unit(S.anchor.n), axis: unit(S.anchor.axis), ...(S.anchor.base ? { base: { p: vec(S.anchor.base.p), n: unit(S.anchor.base.n), c: vec(S.anchor.base.c) } } : {}) } : null,
       g: clone(S.g), gAuto: clone(S.gAuto), lesion: clone(S.lesion), planes: clone(S.planes), screws: clone(S.screws),
       perSide: +$('perSide').value || 2, guideOn: !!S.guideOn, resRemoved: !!S.resRemoved, surgeon: $('surgeon').value.trim(), fibula: S.fib ? clone(S.fib.plan) : null,
       measures: clone(S.measures || []), ext: window.PlanExt ? Object.fromEntries(Object.entries(PlanExt).map(([k, f]) => [k, f.get()])) : {},
@@ -3594,12 +3617,15 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
         if (want.size) S.selected = want;
         renderComps();
       }
+      // a vector saved at full precision is already unit: kept bit for bit (renormalising moves its last digits, and the
+      // approval signatures and the plan hash would no longer match); a 1e-3 vector of an older plan is normalised
+      const unitOf = q => (Math.abs(q.lengthSq() - 1) < 1e-12 ? q : q.normalize());
       const v3 = a => (Array.isArray(a) && a.length === 3 && a.every(x => Number.isFinite(+x)) ? V(+a[0], +a[1], +a[2]) : null);
       const an = plan.anchor && { p: v3(plan.anchor.p), n: v3(plan.anchor.n), axis: v3(plan.anchor.axis) };
       S.anchor = an && an.p && an.n && an.n.lengthSq() > 1e-6 && an.axis && an.axis.lengthSq() > 1e-6 && an.axis.clone().normalize().cross(an.n.clone().normalize()).lengthSq() > 1e-4
-        ? { p: an.p, n: an.n.normalize(), axis: an.axis.normalize() } : null;
+        ? { p: an.p, n: unitOf(an.n), axis: unitOf(an.axis) } : null;
       const ab = S.anchor && plan.anchor.base && { p: v3(plan.anchor.base.p), n: v3(plan.anchor.base.n), c: v3(plan.anchor.base.c) };
-      if (ab && ab.p && ab.c && ab.n && ab.n.lengthSq() > 1e-6) S.anchor.base = { p: ab.p, n: ab.n.normalize(), c: ab.c };
+      if (ab && ab.p && ab.c && ab.n && ab.n.lengthSq() > 1e-6) S.anchor.base = { p: ab.p, n: unitOf(ab.n), c: ab.c };
       const num = (o, keys, d) => { const r = {}; keys.forEach(k => { const v = Number(o && o[k]); r[k] = Number.isFinite(v) ? v : d[k]; }); return r; };
       const who = o => ({ ok: !!(o && o.ok), ...(o && o.ok && typeof o.by === 'string' ? { by: o.by.slice(0, 120) } : {}), ...(o && o.ok && typeof o.at === 'string' ? { at: o.at.slice(0, 40) } : {}), ...(o && o.ok && typeof o.sig === 'string' ? { sig: o.sig.slice(0, 32) } : {}) });
       const G0 = G_DEFAULT;
@@ -3678,7 +3704,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   function sfetch(u, o) { return window.ServerAuth ? ServerAuth.fetch(u, o) : fetch(u, o); }
   function serverUrl() { return ($('aiUrl').value || '').trim().replace(/\/+$/, ''); }
   function select(sel) { if (sel) S.guideSel = false; S.sel = sel; emit('select', sel); renderElements(); rebuildElementParts(S.result ? S.result.pls : planesWorld(), S.result ? S.result.screwInfo : []); applyExplode(); render(); }
-  window.Studio = { mandibleView, endModes, onEndModes, startLoad, loadStopped, loadBusy: () => committing, LOAD_CANCELLED, renderComps, setGuideRot, setGuideRoll, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, resEnds, splitGap, cutMisses, evalScrew, resectedAt, resectedNear, resPiece, boneTrack, cutAlongBone, bestScrew,
+  window.Studio = { guideBuilds: () => guideBuilds, mandibleView, endModes, onEndModes, startLoad, loadStopped, loadBusy: () => committing, LOAD_CANCELLED, renderComps, setGuideRot, setGuideRoll, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, resEnds, splitGap, cutMisses, evalScrew, resectedAt, resectedNear, resPiece, boneTrack, cutAlongBone, bestScrew,
     boneSections, sizeBody, autoBody, buildGuideSet, cutsAngle, cutFrame, pieceFrames, pieceBody, screwBodyOn, pieceWrapTop, frameAt, stumpGap, mergeStl, mergeMeshes, AUTO_DEFAULT, G_DEFAULT, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume, boneField, simplifyMesh, BAR, barPlan, barSdf, buildBarMesh, placeLug, longCase, axisOffBone, ramusAxis, stopSides, LONG_MM, CUT_OFF_MAX, prodKey, serverBar, guideField, lockState: () => lock, bonelessCut, reframe, exclusive, settled, makeGuide, prodReply, prodWhy, gateChecks, swInfo, swLine, sfetch, reportHTML };
   bus.addEventListener('planeDragged', () => { renderElements(); schedule(true, true); });
   // messages assembled at run time are written in the language that was active: write them again when it changes

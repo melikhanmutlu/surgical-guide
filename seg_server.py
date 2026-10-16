@@ -105,7 +105,7 @@ def run_threshold(vol, hu=250.0, keep=6):
     lab, n = ndi.label(mask)
     if n == 0:
         return np.zeros(vol.array.shape, np.uint8), []
-    sizes = ndi.sum(mask, lab, range(1, n + 1))
+    sizes = np.bincount(lab.ravel(), minlength=n + 1)[1:]   # voxels per component (ndi.sum is slow with many components)
     order = np.argsort(sizes)[::-1][:keep]
     out = np.zeros(vol.array.shape, np.uint8)
     structs = []

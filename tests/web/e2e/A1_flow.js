@@ -299,14 +299,14 @@ const fs = require('fs'), path = require('path'), { execFileSync } = require('ch
   let zipPath = null;
   await h.run('A1.8b', '8 · Teslim', 'Üretim paketi (zip) indir, içeriği listele', 'guide_uretim.stl, plan.json, cerrahi_rapor.pdf, fibula ve plak dosyaları', async () => {
     zipPath = await dl('#expZip', 'A_guide_paketi.zip');
-    const list = execFileSync('unzip', ['-Z1', zipPath]).toString().trim().split('\n');
+    const list = require('./lib').zipList(zipPath);
     const need = ['guide_uretim.stl', 'guide_onizleme.stl', 'kemik_kalan.stl', 'kemik_tam.stl', 'rezeke_parca.stl', 'plan.json', 'rapor.html', 'cerrahi_rapor.pdf'];
     const miss = need.filter(f => !list.includes(f));
     fs.writeFileSync(path.join(h.outDir, 'A_guide_paketi.list.txt'), list.join('\n'));
     return { pass: !miss.length, actual: `${list.length} dosya: ${list.join(', ')}${miss.length ? ' · EKSİK: ' + miss.join(',') : ''}`, evidence: path.relative(H.E2E, zipPath) };
   });
   await h.run('A1.8c', '8 · Teslim', 'Paketteki plan.json: içerik ve yeniden açılabilirlik', 'Geçerli JSON; kesiler/vidalar plandaki ile aynı', async () => {
-    const txt = execFileSync('unzip', ['-p', zipPath, 'plan.json']).toString();
+    const txt = require('./lib').zipRead(zipPath, 'plan.json').toString();
     let j = null; try { j = JSON.parse(txt); } catch (e) { return { pass: false, actual: 'JSON değil' }; }
     const s = await h.ev(() => ({ pl: Studio.S.planes.map(p => p.off), sc: Studio.S.screws.length, full: Object.keys(Studio.planOf()) }));
     const keys = Object.keys(j);

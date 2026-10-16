@@ -152,8 +152,8 @@ class Headers(unittest.TestCase):
         self.assertTrue(r["version"])
 
     def test_health_fails_when_the_store_is_not_writable(self):
-        if os.geteuid() == 0:
-            # root writes through file modes: simulate with a store whose check fails
+        if not hasattr(os, "geteuid") or os.geteuid() == 0:
+            # root writes through file modes (and Windows has no file modes for this): simulate with a store whose check fails
             orig = yolmed_server.Handler.store.check
             yolmed_server.Handler.store.check = lambda: (False, "disk full")
             try:

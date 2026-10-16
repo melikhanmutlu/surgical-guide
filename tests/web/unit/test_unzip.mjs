@@ -19,8 +19,9 @@ def build(spec, method):
         for n, d in spec:
             z.writestr(n, build(d['zip'], method) if isinstance(d, dict) else d.encode('latin1'))
     return b.getvalue()
-open(sys.argv[1], 'wb').write(build(json.loads(sys.argv[2]), sys.argv[3]))`;
-  execFileSync('python3', ['-I', '-c', code, f, JSON.stringify(spec), method]);
+open(sys.argv[1], 'wb').write(build(json.loads(sys.stdin.read()), sys.argv[2]))`;
+  // the spec goes on stdin: a large one passed as an argument passes Windows' 32 767-character command line limit
+  execFileSync('python3', ['-I', '-c', code, f, method], { input: JSON.stringify(spec) });
   return f;
 }
 const asFile = (f, name) => new File([fs.readFileSync(f)], name || path.basename(f));

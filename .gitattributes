@@ -1,0 +1,12 @@
+# Text files are checked out with LF everywhere: the vendored scripts carry Subresource Integrity hashes
+# (web/index.html), and a CRLF checkout on Windows changes their bytes so the browser refuses them.
+* text=auto eol=lf
+*.stl binary
+*.3mf binary
+*.zip binary
+*.gz binary
+*.png binary
+*.jpg binary
+*.pdf binary
+*.wasm binary
+*.dcm binary

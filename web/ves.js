@@ -46,13 +46,19 @@ window.Vessels = (function () {
     return best ? [best[0], best[1] - 25, best[2] - 10].map(x => Math.round(x * 10) / 10) : null;
   }
 
+  let autoRecip = null;
+  const recipSide = () => P.recip || autoRecip;
   function compute() {
     last = null;
     const st = fib(); if (!st || !st.F || !st.F.c || !st.last || !st.last.segs.length) return null;
     const F = st.F, L = legFrame(F), segs = st.last.segs;
     if (!P.donor) P.donor = Fibula.legSide().side;
-    if (!P.recip) { const E = St.resEnds(); P.recip = E && E.B.p.x > (E.A.p.x) ? 'L' : 'R'; }
-    const rp = P.rp || defaultRecipient(P.recip);
+    // recipient side not chosen: the side of the defect end the pedicle leaves from (the graft's proximal end, which a
+    // reversed graft order or a folded double barrel puts at the first end); worked out each time, not stored, so it
+    // follows those switches
+    const E = St.resEnds(), ex = segs[segs.length - 1].P1;
+    if (E) { const atA = ex.distanceTo(E.A.p) <= ex.distanceTo(E.B.p), nr = atA ? E.A : E.B, fr = atA ? E.B : E.A; autoRecip = nr.p.x > fr.p.x ? 'L' : 'R'; }
+    const rp = P.rp || defaultRecipient(recipSide());
     const sProx = segs[segs.length - 1].s1, sDist = segs[0].s0, sOrigin = L.smax - P.origin;
     if (P.perf == null) P.perf = Math.round((sDist + sProx) / 2 - L.smin);   // start over the middle of the graft
     const sPerf = L.smin + P.perf;
@@ -129,7 +135,7 @@ window.Vessels = (function () {
   // ---------- summary, checks, report ----------
   function summary() {
     const R = last; if (!R) return null;
-    return { verici_bacak: side(P.donor), alici_taraf: side(P.recip), pedikul_mevcut_mm: Math.round(R.avail), pedikul_gerekli_mm: R.need == null ? null : Math.round(R.need),
+    return { verici_bacak: side(P.donor), alici_taraf: side(recipSide()), pedikul_mevcut_mm: Math.round(R.avail), pedikul_gerekli_mm: R.need == null ? null : Math.round(R.need),
       perforator_distalden_mm: P.perf, perforator_segmenti: R.perfSeg >= 0 ? R.perfSeg + 1 : null, deri_adasi_mm: [P.padL, P.padW], arter_cikisi_fibula_basindan_mm: P.origin,
       alici_nokta: R.rp, alici_nokta_tahmini: !P.rp };
   }
@@ -170,7 +176,7 @@ window.Vessels = (function () {
       $('vsPick').addEventListener('click', () => { if (window.SegEdit) SegEdit.off(); if (window.Measure && Measure.active()) $('toolMeasure').click(); picking = true; const mb = $('modeBadge'); mb.hidden = false; mb.textContent = 'Alıcı damar noktasına (ör. fasiyal arter çentiği) mandibula görünümünde tıklayın. Vazgeçmek için Esc.'; if (window.Fibula && Fibula.view() !== 'm') $('scM').click(); });
       $('vsAuto').addEventListener('click', () => { P.rp = null; changed(); });
     }
-    $('vsDonor').value = P.donor || 'R'; $('vsRecip').value = P.recip || 'R';
+    $('vsDonor').value = P.donor || 'R'; $('vsRecip').value = recipSide() || 'R';
     F.forEach(([k, , , , , un]) => { if (document.activeElement !== $('vs_' + k)) $('vs_' + k).value = P[k]; $('vso_' + k).textContent = `${P[k]} ${un}`; });
     $('vsAuto').disabled = !P.rp;
     $('vsSum').innerHTML = s ? `<dt>Pedikül</dt><dd>${s.pedikul_mevcut_mm} mm mevcut · ${s.pedikul_gerekli_mm ?? '–'} mm gerekli</dd><dt>Pedikül çıkışı</dt><dd>greftin proksimal ucu</dd><dt>Perforatör</dt><dd>${s.perforator_segmenti ? 'segment ' + s.perforator_segmenti : 'greft dışında'}</dd><dt>Alıcı nokta</dt><dd>${s.alici_nokta_tahmini ? 'tahmini' : 'elle seçildi'}</dd>` : '<dt>Durum</dt><dd>fibula planı bekleniyor</dd>';

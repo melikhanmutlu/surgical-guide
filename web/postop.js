@@ -250,9 +250,27 @@ window.PostOp = (function () {
   function planeFit(pts, guess) {
     const c = pts.reduce((a, b) => a.add(b), V()).multiplyScalar(1 / pts.length), C = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
     pts.forEach(q => { const d = [q.x - c.x, q.y - c.y, q.z - c.z]; for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) C[i][j] += d[i] * d[j]; });
-    const tr = C[0][0] + C[1][1] + C[2][2]; let nv = guess.clone();
-    for (let it = 0; it < 200; it++) nv = V((tr - C[0][0]) * nv.x - C[0][1] * nv.y - C[0][2] * nv.z, -C[1][0] * nv.x + (tr - C[1][1]) * nv.y - C[1][2] * nv.z, -C[2][0] * nv.x - C[2][1] * nv.y + (tr - C[2][2]) * nv.z).normalize();
-    return nv;
+    // the eigenvector of the smallest eigenvalue, by Jacobi rotations (exact to rounding; the power iteration on
+    // tr·I - C used before converged slowly on a long thin cut face, where its two top eigenvalues are almost equal)
+    const E = eig3(C); let k = 0; for (let i = 1; i < 3; i++) if (E.val[i] < E.val[k]) k = i;
+    const nv = V(E.vec[0][k], E.vec[1][k], E.vec[2][k]).normalize();
+    return nv.dot(guess) < 0 ? nv.negate() : nv;
+  }
+  // eigen decomposition of a symmetric 3x3 matrix (cyclic Jacobi): values val[k], vectors as the columns of vec
+  function eig3(M) {
+    const a = M.map(r => r.slice()), v = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+    for (let sweep = 0; sweep < 50; sweep++) {
+      const off = a[0][1] ** 2 + a[0][2] ** 2 + a[1][2] ** 2;
+      if (off < 1e-30 * (a[0][0] ** 2 + a[1][1] ** 2 + a[2][2] ** 2 + 1e-300)) break;
+      for (const [p, q] of [[0, 1], [0, 2], [1, 2]]) {
+        if (Math.abs(a[p][q]) < 1e-300) continue;
+        const th = (a[q][q] - a[p][p]) / (2 * a[p][q]), t = Math.sign(th || 1) / (Math.abs(th) + Math.sqrt(th * th + 1)), c = 1 / Math.sqrt(t * t + 1), s = t * c;
+        for (let r = 0; r < 3; r++) { const x = a[r][p], y = a[r][q]; a[r][p] = c * x - s * y; a[r][q] = s * x + c * y; }
+        for (let r = 0; r < 3; r++) { const x = a[p][r], y = a[q][r]; a[p][r] = c * x - s * y; a[q][r] = s * x + c * y; }
+        for (let r = 0; r < 3; r++) { const x = v[r][p], y = v[r][q]; v[r][p] = c * x - s * y; v[r][q] = s * x + c * y; }
+      }
+    }
+    return { val: [a[0][0], a[1][1], a[2][2]], vec: v };
   }
 
   // ---------- 3D: the post-op surface, aligned, coloured by distance to the planned reconstruction ----------
@@ -400,5 +418,5 @@ window.PostOp = (function () {
   bus.addEventListener('changed', () => { if (R && !R.stale && planSig() !== sig) { R.stale = true; render(); St.renderChecks(); } });
   bus.addEventListener('planApplied', render);
   render();
-  return { load, run, simulate, clear, result: () => R, summary };
+  return { load, run, simulate, clear, result: () => R, summary, planeFit };
 })();

@@ -77,7 +77,10 @@ window.Osteo = (function () {
       return { kind: end, name: `Mandibula ${atA ? '1' : '2'} – segment ${g.i + 1}${g.barrel ? ' (üst)' : ''}`, short: end === 'A' ? `M${atA ? 1 : 2}–S${g.i + 1}${g.barrel ? UP() : ''}` : `S${g.i + 1}${g.barrel ? UP() : ''}–M${atA ? 1 : 2}`, seg: g.i, angle: axis, angleKind: 'eksen',
         contact: sec.contact, graftArea: sec.areaB, otherArea: sec.areaA, gap };
     };
-    lower.length && out.push(mand(lower[0], 'A'));
+    // a graft face that meets the virtual end (the new condyle of a condylar resection) has no stump to check; which face
+    // that is follows where it lies, not its 'A' / 'B' name (reversed order, folded upper barrel)
+    const stump = (g, end) => { const p = end === 'A' ? g.P0 : g.P1; if (!E.condyle || p.distanceTo(E.A.p) <= p.distanceTo(E.B.p)) out.push(mand(g, end)); };
+    if (lower.length) stump(lower[0], 'A');
     for (let j = 0; j < lower.length - 1; j++) {
       const a = lower[j], b = lower[j + 1], N = a.N1;
       const sec = section(a.P1, N, FR + 5, q => gb(a.i, q.clone().addScaledVector(N, -0.4)), q => gb(b.i, q.clone().addScaledVector(N, 0.4)));
@@ -88,8 +91,8 @@ window.Osteo = (function () {
       out.push({ kind: 'J', name: `Segment ${a.i + 1} – segment ${b.i + 1}`, short: `S${a.i + 1}–S${b.i + 1}`, seg: b.i, angle: wedge, bend, angleKind: 'kama',
         contact: sec.contact, graftArea: Math.min(sec.areaA, sec.areaB), otherArea: Math.max(sec.areaA, sec.areaB), gap: gm == null ? 0 : gm, measured: gm != null, shift: sec.ca && sec.cb ? sec.ca.distanceTo(sec.cb) : null });
     }
-    if (!E.condyle && lower.length) out.push(mand(lower[lower.length - 1], 'B'));
-    upper.forEach(g => { out.push(mand(g, 'A')); if (!E.condyle) out.push(mand(g, 'B')); });
+    if (lower.length) stump(lower[lower.length - 1], 'B');
+    upper.forEach(g => { stump(g, 'A'); stump(g, 'B'); });
     out.forEach(o => { o.overlap = o.graftArea > 0 ? o.contact / o.graftArea : 0; });
     return out;
   }

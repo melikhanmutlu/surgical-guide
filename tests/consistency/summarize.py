@@ -224,13 +224,13 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--cfg", required=True); ap.add_argument("--out", required=True)
     a = ap.parse_args()
-    cfg = json.load(open(a.cfg))
+    cfg = json.load(open(a.cfg, encoding="utf-8"))
     for ds, c in cfg.items():
         ref = c.get("ref", "app")
         if c["type"] == "browser":
             if c.get("repeat"):
-                repeat_rows(ds, json.load(open(c["repeat"])))
-            m = json.load(open(c["run"] + "/metrics.json"))
+                repeat_rows(ds, json.load(open(c["repeat"], encoding="utf-8")))
+            m = json.load(open(c["run"] + "/metrics.json", encoding="utf-8"))
             if m.get("mandible"):
                 guide_rows(ds, "mandibula", m["mandible"], ref, c.get("mand_bodies", m["mandible"].get("expect_bodies", 1)), app_seat_free=((m.get("result") or {}).get("seat") or {}).get("free"))
             if m.get("bar"):
@@ -244,8 +244,8 @@ if __name__ == "__main__":
                 fibmatch_rows(ds, m["fib_match"])
             warn_rows(ds, m)
         elif c["type"] == "pipeline":
-            pipeline_rows(ds, json.load(open(c["file"])), ref)
-    with open(a.out, "w", newline="") as fh:
+            pipeline_rows(ds, json.load(open(c["file"], encoding="utf-8")), ref)
+    with open(a.out, "w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
         w.writeheader(); w.writerows(rows)
     print(len(rows), "rows ->", a.out)

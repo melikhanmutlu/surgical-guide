@@ -19,8 +19,11 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
 
   // ---------- backends ----------
   function RestBackend(base) {
-    const req = async (method, path, body) => {
-      const r = await sfetch(base + path, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
+    const req = async (method, path, body, keep) => {
+      const data = body ? JSON.stringify(body) : undefined;
+      // keepalive lets a save started while the page closes finish (browsers cap such a body at 64 KB; a larger plan
+      // goes as a normal request and the "unsaved changes" prompt still stands)
+      const r = await sfetch(base + path, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body: data, ...(keep && data && data.length < 60000 ? { keepalive: true } : {}) });
       if (r.status === 401) throw new Error(xl('sunucu erişim anahtarını kabul etmedi (Ayarlar → Erişim anahtarını gir)'));
       if (!r.ok) throw new Error(`sunucu ${r.status}`);
       return r.json();
@@ -30,7 +33,7 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
       list: () => req('GET', '/cases'),
       create: m => req('POST', '/cases', m),
       get: id => req('GET', `/cases/${id}`),
-      saveDraft: (id, plan) => req('PUT', `/cases/${id}/draft`, { plan }),
+      saveDraft: (id, plan, keep) => req('PUT', `/cases/${id}/draft`, { plan }, keep),
       versions: id => req('GET', `/cases/${id}/versions`),
       addVersion: (id, v) => req('POST', `/cases/${id}/versions`, v),
       getVersion: (id, n) => req('GET', `/cases/${id}/versions/${n}`),
@@ -92,7 +95,7 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
   }
 
   // ---------- state ----------
-  let backend = null, caseId = null, caseName = '', lastJSON = null, userAt = -1e9, lastSnap = 0, snapTimer = null, saveTimer = null, pendingSave = null;
+  let backend = null, caseId = null, caseName = '', lastJSON = null, userAt = -1e9, lastSnap = 0, snapTimer = null, saveTimer = null, pendingSave = null, creating = null, volGen = 0;
   let autosave = true, dirty = false;
   try { autosave = localStorage.getItem('yolmed.autosave') !== '0'; } catch (e) {}
   const H = { list: [], idx: -1 };   // entries: {plan, label, at, cp}
@@ -218,6 +221,10 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
   St.bus.addEventListener('changed', () => { if (S.restoring) return; clearTimeout(snapTimer); snapTimer = setTimeout(snapshot, 300); });
   St.bus.addEventListener('volume', e => {
     if (e.detail && e.detail.restoring) return;
+    // a draft still waiting for its autosave belongs to the case that was open, not to the scan just loaded: it is
+    // saved there now (or dropped when that case was never created), never into a case made for the new scan
+    clearTimeout(saveTimer); const p = pendingSave, id = caseId; pendingSave = null; volGen++; creating = null;
+    if (p && id && backend) backend.saveDraft(id, p).catch(err => St.alertMsg('Plan kaydedilemedi: ' + err.message));
     caseId = null; caseName = ''; $('caseName').value = ''; H.list = []; H.idx = -1; lastJSON = null; lastSnap = performance.now(); updUndo(); renderCaseHead(); renderVersions([]); setSave('Kaydedilmedi');
     markCurrent();
   });
@@ -233,13 +240,20 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
   });
 
   // ---------- drafts ----------
+  // one creation at a time: a save that starts while the case is being created waits for it (two overlapping saves
+  // made two cases and split the drafts between them); a new scan loaded meanwhile does not adopt the case made
   async function ensureCase() {
     if (caseId) return caseId;
-    const src = S.source || {};
-    caseName = $('caseName').value.trim() || `${src.type === 'sample' ? 'Örnek' : src.name || 'Vaka'} · ${new Date().toLocaleDateString('tr-TR')}`; // i18n-skip: default case name is stored data
-    const r = await backend.create({ name: caseName, kind: S.kind || '', fingerprint: src.fp || '' });
-    caseId = r.id; remember(); renderCaseHead(); refreshList();
-    return caseId;
+    if (creating) return creating;
+    const gen = volGen;
+    creating = (async () => {
+      const src = S.source || {};
+      const name = $('caseName').value.trim() || `${src.type === 'sample' ? 'Örnek' : src.name || 'Vaka'} · ${new Date().toLocaleDateString('tr-TR')}`; // i18n-skip: default case name is stored data
+      const r = await backend.create({ name, kind: S.kind || '', fingerprint: src.fp || '' });
+      if (gen === volGen) { caseId = r.id; caseName = name; remember(); renderCaseHead(); refreshList(); }
+      return r.id;
+    })();
+    try { return await creating; } finally { if (gen === volGen) creating = null; }
   }
   function changedPlan(plan) {
     if (autosave) { queueSave(plan); return; }
@@ -247,7 +261,7 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
   }
   async function saveNow() {
     if (!backend) return;
-    try { await ensureCase(); clearTimeout(saveTimer); pendingSave = null; const r = await backend.saveDraft(caseId, St.planOf()); dirty = false; setSave('Kaydedildi ' + hhmm(r.updated_at || nowISO())); }
+    try { const id = await ensureCase(); clearTimeout(saveTimer); pendingSave = null; const r = await backend.saveDraft(id, St.planOf()); dirty = false; setSave('Kaydedildi ' + hhmm(r.updated_at || nowISO())); }
     catch (e) { setSave('Kaydedilemedi', 'err'); St.alertMsg('Plan kaydedilemedi: ' + e.message); }
   }
   function setAutosave(on) {
@@ -263,11 +277,17 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
     clearTimeout(saveTimer);
     saveTimer = setTimeout(async () => {
       const p = pendingSave; pendingSave = null;
-      try { await ensureCase(); const r = await backend.saveDraft(caseId, p); setSave('Kaydedildi ' + hhmm(r.updated_at || nowISO())); }
+      try { const id = await ensureCase(); const r = await backend.saveDraft(id, p); setSave('Kaydedildi ' + hhmm(r.updated_at || nowISO())); }
       catch (e) { setSave('Kaydedilemedi', 'err'); St.alertMsg('Plan kaydedilemedi: ' + e.message); }
     }, 1000);
   }
-  async function flush() { if (pendingSave) { clearTimeout(saveTimer); const p = pendingSave; pendingSave = null; await ensureCase(); await backend.saveDraft(caseId, p); setSave('Kaydedildi'); } }
+  async function flush(keep) {
+    if (!pendingSave) return;
+    clearTimeout(saveTimer); const p = pendingSave; pendingSave = null;
+    // (closing the page: only a case that exists can take the draft without waiting for a create)
+    const id = caseId || (keep ? null : await ensureCase()); if (!id) { pendingSave = p; return; }
+    await backend.saveDraft(id, p, keep); setSave('Kaydedildi');
+  }
 
   // ---------- case list ----------
   async function refreshList() {
@@ -309,8 +329,8 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
   async function loadVersions() { if (!caseId) { renderVersions([]); return; } try { renderVersions(await backend.versions(caseId)); } catch (e) { $('verMsg').textContent = 'Sürümler alınamadı: ' + e.message; } }
   async function saveVersion(note) {
     try {
-      await ensureCase(); await flush();
-      const plan = St.planOf(), r = await backend.addVersion(caseId, { plan, note: note || '', author: plan.surgeon || '' });
+      const id = await ensureCase(); await flush();
+      const plan = St.planOf(), r = await backend.addVersion(id, { plan, note: note || '', author: plan.surgeon || '' });
       $('verMsg').textContent = `${xl('Sürüm')} S${r.n} ${xl('oluşturuldu.')}`; $('verNote').value = ''; dirty = false;
       if (H.idx >= 0) { H.list[H.idx].cp = `S${r.n}${note ? ' · ' + note : ''}`; renderHist(); }
       loadVersions(); refreshList();
@@ -349,7 +369,7 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
     else baseline();
   })();
   window.addEventListener('beforeunload', e => {
-    if (pendingSave) { try { flush(); } catch (err) {} }
+    if (pendingSave) { flush(true).catch(() => {}); }
     if (dirty) { e.preventDefault(); e.returnValue = ''; }
   });
   window.CaseStore = { versionLabel, caseName: () => caseName || $('caseName').value.trim(), history: H, goTo, describe, saveNow, setAutosave, saveVersion };

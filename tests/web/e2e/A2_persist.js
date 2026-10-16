@@ -162,7 +162,7 @@ const diff = (a, b) => Object.keys(Object.assign({}, a, b)).filter(k => JSON.str
       await h.openStep(8);
       const [d] = await Promise.all([page.waitForEvent('download', { timeout: 240000 }), page.click('#expZip')]);
       const p = require('path').join(h.outDir, 'A2.10_paket_geri_al.zip'); await d.saveAs(p);
-      list = require('child_process').execFileSync('unzip', ['-Z1', p]).toString().trim().split('\n');
+      list = require('./lib').zipList(p);
     }
     const plak = list.filter(f => /^plak/.test(f));
     return { pass: a.zip && b.zip && plak.length >= 2, actual: `onay sonrası paket=${a.zip}; geri al sonrası paket=${b.zip}, bekleyen ${JSON.stringify(b.pend)}, Plate.get() dolu=${b.plateLast}; paket ${list.length} dosya, plak dosyaları: ${plak.join(', ') || 'YOK'}` };

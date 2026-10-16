@@ -92,7 +92,7 @@ const layout = () => {
       const out = [];
       for (const f of ['index.html', 'app.js', 'i18n_en.js', 'fibula.js']) {
         const live = execFileSync('curl', ['-sS', '--max-time', '30', LIVE + (f === 'index.html' ? '' : f)]);
-        const loc = fs.readFileSync(path.join('/home/user/surgical-guide/web', f));
+        const loc = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'web', f));
         out.push(`${f}: ${md5(live) === md5(loc) ? 'aynı' : 'FARKLI'} (${live.length}/${loc.length} B)`);
       }
       return { pass: !out.some(x => /FARKLI/.test(x)), actual: out.join('; ') };

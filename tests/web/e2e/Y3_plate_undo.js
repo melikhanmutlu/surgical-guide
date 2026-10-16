@@ -41,7 +41,7 @@ const H = require('./lib');
       await h.openStep(8);
       const [d] = await Promise.all([page.waitForEvent('download', { timeout: 240000 }), page.click('#expZip')]);
       const p = require('path').join(h.outDir, 'A2.10_paket_geri_al.zip'); await d.saveAs(p);
-      list = require('child_process').execFileSync('unzip', ['-Z1', p]).toString().trim().split('\n');
+      list = require('./lib').zipList(p);
     }
     const plak = list.filter(f => /^plak/.test(f));
     const flagsOk = f0.some(Boolean) && JSON.stringify(f0) === JSON.stringify(b.flags);
