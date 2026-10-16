@@ -233,9 +233,12 @@ test('fibula bridge: two segments leave both saw slots and the bone bridge betwe
   const keep = St.clone(W.Fibula.plan()), q = St.clone(keep); q.n = 2; q.nAuto = 0; q.knots = [0.5]; q.yaw = [0, 20, 0]; q.pitch = [0, 0, 0]; q.roll = [0, 0]; q.fsc = null;
   await W.Fibula.apply(q); await sleep(30);
   const st = W.Fibula.state(), [a, b] = st.last.segs, sw = W.Fibula.slotOf(), FR = st.F.c.FR, tilt = v => Math.hypot(v.y, v.z) / Math.abs(v.x);
-  near(b.s0 - a.s1, 2 * sw + W.Fibula.RULES.wedgeBridge + FR * (tilt(a.n1) + tilt(b.n0)), 1e-9);
+  // (Denetim 5 F4: the closure uses the thickest section radius, and each slot is as thick along the axis as its face is oblique)
+  const FRm = st.F.c.FRm, slx = v => sw / Math.max(0.5, Math.abs(v.x));
+  near(b.s0 - a.s1, slx(a.n1) + slx(b.n0) + W.Fibula.RULES.wedgeBridge + FRm * (tilt(a.n1) + tilt(b.n0)), 1e-9);
   // at the section edge the two cut planes are still apart by both slots and the bridge
-  assert.ok(b.s0 - a.s1 - FR * (tilt(a.n1) + tilt(b.n0)) - 2 * sw >= W.Fibula.RULES.wedgeBridge - 1e-9);
+  assert.ok(b.s0 - a.s1 - FRm * (tilt(a.n1) + tilt(b.n0)) - slx(a.n1) - slx(b.n0) >= W.Fibula.RULES.wedgeBridge - 1e-9);
+  assert.ok(FRm >= FR);
   await W.Fibula.apply(keep);
 });
 test('fibula plan: a stored plan without side / rollAuto / rules keeps those keys absent (approval signature unchanged)', async () => {
