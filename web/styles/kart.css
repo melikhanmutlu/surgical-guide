@@ -28,7 +28,7 @@ html[data-style="k1"] .pill { padding: 5px 12px 5px 9px; background: var(--sunke
 html[data-style="k1"] .work { gap: 16px; padding: 16px; background: var(--bg); }
 html[data-style="k1"] .side { border: 0 !important; border-radius: var(--R); box-shadow: var(--cardshadow); }
 html[data-style="k1"] .stagewrap { border-radius: var(--R); overflow: hidden; box-shadow: var(--cardshadow); }
-html[data-style="k1"] .hud { border-radius: 12px; border: 1px solid var(--line); box-shadow: var(--shadow); padding: 6px 8px; }
+html[data-style="k1"] .hud { border-radius: 0; border: 0; border-top: 1px solid var(--line); box-shadow: none; padding: 6px 8px; }
 
 /* ---------- steps read like the reference's side menu: quiet rows, the open one tinted ---------- */
 html[data-style="k1"] .progress { padding: 18px 18px 14px; border-bottom: 1px solid var(--line); background: var(--panel); }

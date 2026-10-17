@@ -124,5 +124,7 @@ window.Layers = (function () {
     },
   };
   render();
-  return { add, list: () => layers, targets: () => layers.map(L => St.parts[pid(L)]).filter(pt => pt && pt.visible).map(pt => pt.obj), PRESETS };
+  // a stable key for the layer list's names (web/app.js partNames): the layer's place in the list, not its run-time id
+  const keyOf = id => { const i = layers.findIndex(L => pid(L) === id); return i < 0 ? id : 'layer@' + i; };
+  return { add, keyOf, list: () => layers, targets: () => layers.map(L => St.parts[pid(L)]).filter(pt => pt && pt.visible).map(pt => pt.obj), PRESETS };
 })();

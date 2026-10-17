@@ -121,6 +121,8 @@
 
   // scene parts (each can be shown, hidden, isolated, exploded)
   const parts = {};
+  const partNames = {};   // user names of the layer list rows (renamePart below)
+  const partKey = id => (window.Layers && Layers.keyOf ? Layers.keyOf(id) : id);
   function setPart(id, label, obj, color) {
     if (parts[id]) { scene.remove(parts[id].obj); disposeObj(parts[id].obj); }
     if (!obj) { delete parts[id]; return; }
@@ -2431,7 +2433,7 @@
     pt.obj.traverse(c => { if (!c.material) return; const m = c.material; if (m.userData.baseOpacity === undefined) m.userData.baseOpacity = m.opacity; m.opacity = m.userData.baseOpacity * a; m.transparent = m.opacity < 1; m.depthWrite = m.opacity >= 1 && m.userData.baseOpacity >= 1; m.needsUpdate = true; });
   }
   function renderParts() {
-    const row = pt => `<li><label><input type="checkbox" data-p="${pt.id}" ${pt.visible ? 'checked' : ''}><i style="background:#${pt.color.toString(16).padStart(6, '0')}"></i><span>${esc(pt.label)}</span></label><input type="range" min="0.1" max="1" step="0.05" value="${pt.opacity ?? 1}" data-o="${pt.id}" aria-label="${esc(pt.label)} saydamlığı" title="Saydamlık"><button class="ghost sm" data-iso="${pt.id}" title="Yalnız bunu göster" aria-label="${esc(pt.label)}: yalnız bunu göster"><svg class="i"><use href="#i-eye"/></svg></button></li>`;
+    const row = pt => { const own = partNames[partKey(pt.id)], nm = esc(own || pt.label); return `<li><label><input type="checkbox" data-p="${pt.id}" ${pt.visible ? 'checked' : ''}><i style="background:#${pt.color.toString(16).padStart(6, '0')}"></i><span class="pname" data-rn="${pt.id}" tabindex="0" title="Adını değiştirmek için çift tıklayın (F2)"${own ? ' translate="no"' : ''}>${nm}</span></label><input type="range" min="0.1" max="1" step="0.05" value="${pt.opacity ?? 1}" data-o="${pt.id}" aria-label="${nm} saydamlığı" title="Saydamlık"><button class="ghost sm" data-iso="${pt.id}" title="Yalnız bunu göster" aria-label="${nm}: yalnız bunu göster"><svg class="i"><use href="#i-eye"/></svg></button></li>`; };
     // grouped so a long list reads by role: anatomy, the cuts, the guide and its screws, the reconstruction
     const GROUPS = [['Anatomi', id => /^(bone|resected|mirror|lesion|lesionPaint|postop|ctx_|layer)/.test(id)], ['Plan', id => /^(plane|anchor)/.test(id)], ['Guide', id => /^(guide|screw)/.test(id)], ['Rekonstrüksiyon', id => /^(grafts|implants|plate)/.test(id)], ['Diğer', () => true]];
     const all = Object.values(parts), seen = new Set();
@@ -2444,7 +2446,44 @@
       Object.values(parts).forEach(pt => { pt.visible = pt.id === b.dataset.iso; pt.obj.visible = pt.visible; });
       renderParts(); fitTo(parts[b.dataset.iso].obj); render();
     }));
+    $('parts').querySelectorAll('[data-rn]').forEach(el => {
+      el.addEventListener('dblclick', e => { e.preventDefault(); editPartName(el); });
+      el.addEventListener('keydown', e => { if (e.key === 'F2' || e.key === 'Enter') { e.preventDefault(); editPartName(el); } });
+    });
   }
+  // layer names: the user may rename any row of the layer list. The names are display labels kept with the plan
+  // (PlanExt.names) but outside the plan hash and the approval stamps (web/audit.js planHash): a name moves no geometry,
+  // so renaming never drops an approval. An empty name goes back to the default one.
+  function renamePart(id, name) {
+    const pt = parts[id]; if (!pt) return false;
+    const k = partKey(id), v = String(name ?? '').replace(/\s+/g, ' ').trim().slice(0, 60);
+    if ((partNames[k] || '') === (v === pt.label ? '' : v)) return false;
+    if (!v || v === pt.label) delete partNames[k]; else partNames[k] = v;
+    renderParts(); emit('changed'); return true;
+  }
+  const partName = id => (parts[id] ? partNames[partKey(id)] || parts[id].label : '');
+  function editPartName(el) {
+    const id = el.dataset.rn, pt = parts[id]; if (!pt || el.querySelector('input')) return;
+    const inp = document.createElement('input');
+    inp.type = 'text'; inp.className = 'pname-in'; inp.maxLength = 60; inp.value = partName(id); inp.setAttribute('aria-label', xl('Katman adı'));
+    let done = false;
+    const end = ok => { if (done) return; done = true; if (!(ok && renamePart(id, inp.value))) renderParts(); };
+    inp.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); end(true); } else if (e.key === 'Escape') { e.preventDefault(); end(false); } });
+    inp.addEventListener('blur', () => end(true));
+    inp.addEventListener('click', e => e.preventDefault());   // a click in the field does not toggle the row's checkbox
+    el.textContent = ''; el.appendChild(inp); inp.focus(); inp.select();
+  }
+  (window.PlanExt = window.PlanExt || {}).names = {
+    label: 'Katman adları',
+    get: () => (Object.keys(partNames).length ? Object.assign({}, partNames) : undefined),
+    set(x) {
+      Object.keys(partNames).forEach(k => delete partNames[k]);
+      if (x && typeof x === 'object' && !Array.isArray(x)) Object.entries(x).slice(0, 200).forEach(([k, v]) => { if (typeof v === 'string' && v.trim()) partNames[String(k).slice(0, 40)] = v.trim().slice(0, 60); });
+      renderParts();
+    },
+  };
+  // a new scan starts with the default names (a reopened plan brings its own through PlanExt.names)
+  bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring) && Object.keys(partNames).length) PlanExt.names.set(null); });
   // cuts are edited in the resection step, screws in their own step; approval happens only in the review step
   const DF = k => t => (window.DateFmt ? DateFmt[k](t) : k === 'time' ? new Date(t).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }) : new Date(t).toLocaleString('tr-TR'));   // dates.js: the interface language
   const apprText = o => o.ok ? `${xl('Onaylı')}${o.by ? ' · ' + esc(o.by) : ''}${o.at ? ' · ' + DF('time')(o.at) : ''}. ${xl('Değişiklik onayı kaldırır.')}` : 'Sistem önerisi; cerrah onayı İnceleme ve onay adımında verilir.';
@@ -3725,7 +3764,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   function sfetch(u, o) { return window.ServerAuth ? ServerAuth.fetch(u, o) : fetch(u, o); }
   function serverUrl() { return ($('aiUrl').value || '').trim().replace(/\/+$/, ''); }
   function select(sel) { if (sel) S.guideSel = false; S.sel = sel; emit('select', sel); renderElements(); rebuildElementParts(S.result ? S.result.pls : planesWorld(), S.result ? S.result.screwInfo : []); applyExplode(); render(); }
-  window.Studio = { guideBuilds: () => guideBuilds, mandibleView, endModes, onEndModes, startLoad, loadStopped, loadBusy: () => committing, LOAD_CANCELLED, renderComps, setGuideRot, setGuideRoll, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, resEnds, splitGap, cutMisses, evalScrew, resectedAt, resectedNear, resPiece, boneTrack, cutAlongBone, bestScrew,
+  window.Studio = { renamePart, partName, guideBuilds: () => guideBuilds, mandibleView, endModes, onEndModes, startLoad, loadStopped, loadBusy: () => committing, LOAD_CANCELLED, renderComps, setGuideRot, setGuideRoll, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, resEnds, splitGap, cutMisses, evalScrew, resectedAt, resectedNear, resPiece, boneTrack, cutAlongBone, bestScrew,
     boneSections, sizeBody, autoBody, buildGuideSet, cutsAngle, cutFrame, pieceFrames, pieceBody, screwBodyOn, pieceWrapTop, frameAt, stumpGap, mergeStl, mergeMeshes, AUTO_DEFAULT, G_DEFAULT, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume, boneField, simplifyMesh, BAR, barPlan, barSdf, buildBarMesh, placeLug, longCase, axisOffBone, ramusAxis, stopSides, LONG_MM, CUT_OFF_MAX, prodKey, serverBar, guideField, lockState: () => lock, bonelessCut, reframe, exclusive, settled, makeGuide, prodReply, prodWhy, gateChecks, swInfo, swLine, sfetch, reportHTML };
   bus.addEventListener('planeDragged', () => { renderElements(); schedule(true, true); });
   // messages assembled at run time are written in the language that was active: write them again when it changes

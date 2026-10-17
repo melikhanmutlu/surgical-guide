@@ -102,8 +102,9 @@ h1.brand { margin: 0; } .brand { display: flex; align-items: center; gap: 10px; 
 .pane { overflow: auto; padding: 14px; display: grid; gap: 12px; align-content: start; scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
 
 /* stage */
-.stagewrap { position: relative; min-width: 0; min-height: 0; }
-.views { position: absolute; inset: 0; display: grid; gap: 1px; background: var(--line-strong); grid-template-columns: 1fr; grid-template-rows: 1fr; }
+/* the viewer: the views on top, the view bar docked under them (the whole area, with or without the slice panels) */
+.stagewrap { position: relative; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.views { position: relative; flex: 1 1 auto; min-height: 0; display: grid; gap: 1px; background: var(--line-strong); grid-template-columns: 1fr; grid-template-rows: 1fr; }
 .views[data-mode="quad"] { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
 .views[data-mode="quad"][data-max]:not([data-max=""]) { grid-template-columns: 1fr; grid-template-rows: 1fr; }
 .cell { position: relative; min-width: 0; min-height: 0; overflow: hidden; background: var(--stage); }
@@ -119,7 +120,7 @@ h1.brand { margin: 0; } .brand { display: flex; align-items: center; gap: 10px; 
 /* keyboard pick (region / screw modes): Enter takes the point under this ring while the 3D view has focus */
 .stage[data-kbpick]:focus-within::after { content: ""; position: absolute; left: 50%; top: 50%; width: 18px; height: 18px; margin: -11px 0 0 -11px; border: 2px solid var(--accent); border-radius: 50%; pointer-events: none; }
 .stage[data-kbpick="half"]:focus-within::after { left: 25%; }
-.hud { position: absolute; left: 0; right: 0; margin: 0 auto; width: fit-content; bottom: 14px; z-index: 2; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 6px 10px; padding: 6px 8px; background: var(--glass); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); max-width: calc(100% - 28px); }
+.hud { position: relative; flex: none; z-index: 3; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 6px 10px; padding: 6px 8px; background: var(--panel); border: 0; border-top: 1px solid var(--line-strong); border-radius: 0; box-shadow: none; }
 .hud label { white-space: nowrap; color: var(--muted); } .hud input[type=range] { width: 130px; }
 .hud .divider { width: 1px; height: 20px; background: var(--line); }
 .overlay { position: absolute; left: 14px; top: 14px; z-index: 3; font: 500 13px var(--font-body); background: var(--panel); color: var(--accent); border: 1px solid var(--accent-line); padding: 6px 10px; border-radius: var(--r); box-shadow: var(--shadow); }
@@ -167,6 +168,9 @@ input[type=checkbox] { accent-color: var(--accent); }
 .parts li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--line); }
 .parts label { display: flex; gap: 8px; align-items: center; min-width: 0; }
 .parts i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+.parts .pname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: text; border-radius: 3px; }
+.parts .pname:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.parts .pname-in { width: 100%; min-width: 0; height: 24px; padding: 0 6px; font-size: 13px; }
 .parts button, .appr li .act button { height: 26px; padding: 0 8px; font-size: 12.5px; }
 
 /* status: a coloured rule and label, no filled cards */
@@ -308,8 +312,7 @@ button.link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2p
 .seropt:has(input:checked) { border-color: var(--accent); background: var(--hover); }
 .seropt span { display: grid; gap: 2px; } .seropt small { color: var(--muted); font: 12px var(--font-mono); } .seropt em { color: var(--warn); font-style: normal; font-size: 12px; }
 #serDlg .btns { justify-content: flex-end; }
-/* scene overlays share the 3D cell: in 2×2 the bar sits in the 3D quarter, the badge stays left of the cube, narrow stages get a compact bar */
-.views[data-mode="quad"][data-max=""] ~ .hud { right: 50%; bottom: calc(50% + 14px); max-width: calc(50% - 28px); }
+/* scene overlays share the 3D cell (the view bar stays docked under the whole viewer): the badge stays left of the cube, narrow stages get a compact bar */
 #modeBar { max-width: calc(100% - 150px); display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 6px 6px 12px; background: var(--accent-soft); border: 1.5px solid var(--accent); color: var(--fg); }
 #modeBar[hidden] { display: none; }
 #modeBar .mb-from { font: 600 11px var(--font-body); text-transform: uppercase; letter-spacing: .04em; color: var(--accent); white-space: nowrap; }
@@ -337,7 +340,6 @@ button.primary:disabled { opacity: 1; background: var(--sunken); color: var(--mu
 .presets button:hover { color: var(--fg); }
 .views[data-mode="strip"] { grid-template-columns: 1fr minmax(180px, 26%); grid-template-rows: 1fr 1fr 1fr; }
 .views[data-mode="strip"] #cell3d { grid-row: 1 / 4; }
-.views[data-mode="strip"][data-max=""] ~ .hud { right: max(180px, 26%); }
 .views[data-mode="strip"][data-max=""] ~ .viewtools { right: calc(max(180px, 26%) + 12px); }
 .views[data-mode="quad"][data-max=""] ~ .viewtools { right: calc(50% + 12px); }
 .views[data-mode="strip"][data-max]:not([data-max=""]) { grid-template-columns: 1fr; grid-template-rows: 1fr; }
