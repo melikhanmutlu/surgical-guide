@@ -302,7 +302,10 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
   // ---------- follow the app ----------
   St.bus.addEventListener('volume', () => {
     st.cache.clear(); VIEWS.forEach(v => { v.imgKey = null; v.zoom = 1; v.pan = [0, 0]; });
-    const d = dims(); setCursor(S.anchor ? toIdx([S.anchor.p.x, S.anchor.p.y, S.anchor.p.z]) : d.map(x => (x - 1) / 2));
+    // a new case opens the slices on the bone model (the mandible), not the middle of the scan (the skull base on a
+    // head CT)
+    const d = dims(), b = St.parts.bone && new THREE.Box3().setFromObject(St.parts.bone.obj), c = b && !b.isEmpty() && b.getCenter(new THREE.Vector3());
+    setCursor(S.anchor ? toIdx([S.anchor.p.x, S.anchor.p.y, S.anchor.p.z]) : c ? toIdx([c.x, c.y, c.z]) : d.map(x => (x - 1) / 2));
   });
   St.bus.addEventListener('parts', () => { if (S.anchor && !st.placed) { st.placed = true; jumpTo(S.anchor.p); } redraw(); });
   St.bus.addEventListener('preview', redraw);

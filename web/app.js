@@ -633,6 +633,21 @@
     const cond = E && E.condyle ? (E.B.cond || E.B.p).toArray() : null;
     return JSON.stringify([S.anchor && S.anchor.p.toArray(), S.anchor && S.anchor.n.toArray(), S.anchor && S.anchor.axis.toArray(), S.g.rot, S.g.kerfSide, S.lesion.condyle || '', cond, S.planes.map(p => [p.off, p.yaw, p.pitch, p.w, p.pv || 0, p.pn || 0])]);
   }
+  // of the components (labels from G.components) inside the index box lo..hi: the largest of those whose nearest voxel
+  // lies within NEAR_TIE mm of the nearest one's distance to the point q
+  const NEAR_TIE = 3;
+  function nearestPiece(labels, comps, r, lo, hi, q) {
+    const dmin = new Map();
+    for (let k = lo[2]; k <= hi[2]; k++) for (let j = lo[1]; j <= hi[1]; j++) for (let i = lo[0]; i <= hi[0]; i++) {
+      const l = labels[i + r.nx * (j + r.ny * k)]; if (!l) continue;
+      const w = G.worldOf(r, i, j, k), d = (w[0] - q.x) ** 2 + (w[1] - q.y) ** 2 + (w[2] - q.z) ** 2;
+      if (!(dmin.get(l) <= d)) dmin.set(l, d);
+    }
+    let bd = Infinity; dmin.forEach(d => { if (d < bd) bd = d; });
+    if (!Number.isFinite(bd)) return null;
+    const reach = (Math.sqrt(bd) + NEAR_TIE) ** 2;
+    return comps.filter(cm => dmin.get(cm.label) <= reach).reduce((a, b) => (!a || b.size > a.size ? b : a), null);
+  }
   function resPiece() {
     if (!S.anchor || !S.mask || !S.red) return null;
     const E = resEnds(); if (!E) return null;
@@ -657,10 +672,10 @@
     }
     const { labels, comps } = G.components(cand, r.nx, r.ny, r.nz, 1);
     if (comps.length) {
-      // the piece nearest the anchor
-      let bd = Infinity, best = null;
-      const near = E.condyle ? Bc : ap;
-      comps.forEach(cm => { const d = V(...G.worldOf(r, ...cm.centroid)).distanceTo(near); if (d < bd) { bd = d; best = cm; } });
+      // the piece at the anchor (the condyle): the components whose nearest voxel lies within 3 mm of the closest one's,
+      // and of those the largest. (Nearest by centroid picked a 0.08 cm³ tooth crown next to the anchor over the 7 cm³
+      // body segment on a real CT, whose centroid lies deeper in the bone: the resected piece was empty.)
+      const near = E.condyle ? Bc : ap, best = nearestPiece(labels, comps, r, lo, hi, near);
       const mask = new Uint8Array(cand.length), box = [Infinity, Infinity, Infinity, -1, -1, -1];
       for (let v = 0; v < cand.length; v++) if (labels[v] === best.label) {
         mask[v] = 1; const i = v % r.nx, j = ((v / r.nx) | 0) % r.ny, k = (v / nxy) | 0;
@@ -794,7 +809,7 @@
     else if (!S.anchor) {
       const pr = S.presetRay, hit = pr && new THREE.Raycaster(pr.from, pr.dirv).intersectObject(parts.bone.obj, false)[0];
       if (!hit) { S.autoAfter = true; setMode('anchor'); alertMsg('Modelde ya da kesitlerde rezeksiyon bölgesine bir kez tıklayın; gerisi otomatik yapılacak.'); return; }
-      setAnchor(hit.point.clone(), pr.dirv.clone().negate()); suggest();
+      setAnchor(hit.point.clone(), pr.dirv.clone().negate()); chooseAxis(null); suggest();
     }
     if (!S.planes.length) suggest();
     S.resRemoved = true; showResected();
@@ -1383,7 +1398,7 @@
     if (S.g.split === 2 && pls.length >= 2 && pieceFrames()) {
       const mid = (pls[0].off + pls[pls.length - 1].off) / 2;
       hand.forEach(sc => { if (!sc.part && reframe(sc, Math.sign(sc.u - mid) || 1)) moved++; });
-      const sp = splitScrews(pls, per, def, E, hand.filter(sc => sc.part)); if (sp) { S.screws = sp; setLength(pls); return moved; }
+      const sp = splitScrews(pls, per, def, E, hand.filter(sc => sc.part)); if (sp) { S.screws = sp; sp.forEach(fitScrewLen); setLength(pls); return moved; }
     }
     hand.forEach(sc => { if (!sc.part) return; if (reframe(sc, 0)) moved++; else { delete sc.part; unapprove(sc); moved++; } });
     // the ends to hold: both outer cuts, or (one cut) both sides of it; a condylar resection keeps bone on one side only,
@@ -1408,9 +1423,24 @@
         if (best) out.push(best); else S.screwDrops.push({ pl: pw.pl, cut: Math.max(0, S.planes.indexOf(pw.pl)), side, want: perEnd, why: screwWhy(why) });
       }
     }
-    S.screws = out;
+    S.screws = out; out.forEach(fitScrewLen);
     setLength(pls);
     return moved;
+  }
+  // An automatic guide screw ends inside the bone: its length is cut down to 1 mm short of where the drill path first
+  // leaves bone (the far cortex, or a canal), in whole mm, never below SCREW_LEN_MIN. Guide screws only hold the
+  // guide while the cuts are made; a tip through the lingual cortex reaches the floor of the mouth (lingual nerve,
+  // sublingual vessels) and a path across the canal the inferior alveolar nerve, while a monocortical screw holds a
+  // guide as well. A screw the surgeon placed keeps its length (the checks still report an exit).
+  const SCREW_LEN_MIN = 6;
+  function fitScrewLen(sc) {
+    if (!sc || sc.hand || sc.lug) return;
+    const w = screwWorld(sc); if (!w.entry) return;
+    let exit = null;
+    for (let t = 1; t <= sc.len + 1e-9; t += 0.25) if (!boneAt(w.entry.clone().addScaledVector(w.dir, t))) { exit = t; break; }
+    if (exit === null) return;
+    const L = Math.floor(exit - 1);
+    if (L >= SCREW_LEN_MIN && L < sc.len) sc.len = L;
   }
   // the drops still open: the cut is still there and its end holds fewer screws than the placement wanted
   function liveDrops() {
@@ -1540,15 +1570,19 @@
     if (ramusAxis()) return { len, why: 'ramus' };
     const off = axisOffBone(); return off ? { len, why: 'axis', at: off.off } : null;
   }
-  // the guide axis runs up the ramus. With the condyles known: the centre lies within 55 mm of one and the axis points at
-  // it (the scanner's z says little: a jaw scanned tilted 35-50° has a body axis as steep as 0.6-0.8 in z). Without
+  // the guide axis runs up the ramus. With the condyles known: the centre lies within 55 mm of one, the axis points at
+  // it and leaves the dental arch (the scanner's z says little: a jaw scanned tilted 35-50° has a body axis as steep as 0.6-0.8 in z). Without
   // them, an axis that is nearly vertical in the scan.
   function ramusAxis() {
     if (!S.anchor) return false;
     const u = frameAxes().u, ref = window.Ref && Ref.get && Ref.get(), conds = ref && ref.cond ? ['R', 'L'].map(k => ref.cond[k]).filter(Boolean).map(p => V(...p)) : [];
     if (!conds.length) return Math.abs(u.z) > 0.85;
     const c = conds.reduce((a, b) => (b.distanceTo(S.anchor.p) < a.distanceTo(S.anchor.p) ? b : a)), d = c.clone().sub(S.anchor.p), L = d.length();
-    return L < 55 && Math.abs(u.dot(d) / (L || 1)) > 0.7;
+    if (!(L < 55 && Math.abs(u.dot(d) / (L || 1)) > 0.7)) return false;
+    // near the angle the body itself runs back and up towards the condyle (34° off it on the real CT, 45 mm away): an
+    // axis closer to the dental arch than to the condyle there is the body, not the ramus
+    const ar = archAt(S.anchor.p, u);
+    return !(ar && Math.abs(ar.t.dot(u)) > Math.abs(u.dot(d) / (L || 1)));
   }
   // the straight guide axis between the outer cuts: the first position where no bone lies within AXIS_DROP mm below the
   // guide plane across the body width (a single straight guide cannot follow the bone there), or null
@@ -1682,10 +1716,8 @@
     const hit = rc.intersectObjects(targets, false)[0]; if (!hit) return false;
     const nrm = hit.face.normal.clone().transformDirection(hit.object.matrixWorld); if (nrm.dot(out) < 0) nrm.negate();
     setAnchor(hit.point.clone(), nrm);
-    // the guide axis runs along the bone. Candidates: the local bone PCA, the arch tangent and the painted stroke's
-    // direction (6 mm or more across the seating normal). On the chin or up the ramus the 16 mm PCA is ambiguous, and a
-    // lesion as tall as it is long gives a stroke that runs across the bone; so the candidate along which the bone runs
-    // furthest under the guide wins, the stroke being kept when it runs at least 70 % as far (it says which way the resection goes)
+    // the guide axis runs along the bone; the painted stroke's direction (6 mm or more across the seating normal) is
+    // one more candidate (it says which way the resection goes)
     let stroke = null;
     const nA = S.anchor.n, flat = pts.map(q => q.clone().sub(c).addScaledVector(nA, -q.clone().sub(c).dot(nA)));
     if (flat.length >= 2) {
@@ -1696,16 +1728,29 @@
       const span = Math.max(...flat.map(d => d.dot(e))) - Math.min(...flat.map(d => d.dot(e)));
       if (span >= 6 && e.lengthSq() > 0.5) { if (e.dot(S.anchor.axis) < 0) e.negate(); stroke = e; }
     }
+    chooseAxis(stroke);
+    return true;
+  }
+  // The guide axis of a new centre (a click on the model or a slice, or a painted lesion): candidates are the 16 mm
+  // bone PCA, its perpendicular, the arch tangent and the painted stroke. On the chin, up the ramus or over a tall body
+  // with teeth the 16 mm PCA is ambiguous (on a real CT it ran 45° up the body: cuts across the jaw, a 40 mm tall guide
+  // in two pieces for an 18 mm resection), and a lesion as tall as it is long gives a stroke that runs across the bone;
+  // so the candidate along which the bone runs furthest under the guide wins, the stroke and then the arch tangent being
+  // kept when they run at least 70 % as far (on the body a slant from the teeth down to the angle can run further than
+  // the arch: 81 vs 72 mm on the real CT; up the ramus the arch runs only the ramus width and loses). Then the slab PCA
+  // at the guide's scale (refineAxis).
+  function chooseAxis(stroke) {
+    const nA = S.anchor.n;
     const cands = [{ d: S.anchor.axis.clone(), from: 'pca' }, { d: V().crossVectors(nA, S.anchor.axis), from: 'pca90' }], ar = archAt(S.anchor.p, S.anchor.axis);
     if (ar) cands.push({ d: ar.t.clone(), from: 'arch' });
     if (stroke) cands.push({ d: stroke, from: 'lesion' });
     cands.forEach(k => { k.d.addScaledVector(nA, -k.d.dot(nA)).normalize(); k.run = k.d.lengthSq() > 0.5 ? boneRun(S.anchor.p, nA, k.d) : 0; });
     S.axisRuns = cands.map(k => ({ from: k.from, run: k.run, d: k.d.toArray().map(x => Math.round(x * 100) / 100) }));   // (for the record: what each direction measured)
-    const best = cands.reduce((a, b) => (b.run > a.run ? b : a)), pick = stroke && cands[cands.length - 1].run >= 0.7 * best.run ? cands[cands.length - 1] : best;
+    const best = cands.reduce((a, b) => (b.run > a.run ? b : a)), near = k => k && k.run >= 0.7 * best.run;
+    const pick = [stroke && cands[cands.length - 1], cands.find(k => k.from === 'arch')].find(near) || best;
     if (pick.d.dot(S.anchor.axis) < 0) pick.d.negate();
     S.anchor.axis = pick.d; S.anchor.axisFrom = pick.from;
     refineAxis();
-    return true;
   }
   // how far the bone runs under a guide seated at p (normal n) along direction d: from p both ways, 1 mm steps, while
   // bone lies within 12 mm under the surface (a gap of more than 3 mm ends the run); mm, both sides added
@@ -2915,7 +2960,7 @@
     if (S.mode === 'anchor') {
       const nrm = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
       if (nrm.dot(rayDir || ray.ray.direction) > 0) nrm.negate();
-      setAnchor(hit.point.clone(), nrm); $('caseMsg').hidden = true;   // the "click the region" prompt is answered
+      setAnchor(hit.point.clone(), nrm); chooseAxis(null); $('caseMsg').hidden = true;   // the "click the region" prompt is answered
       setMode('orbit'); suggest();
       if (S.autoAfter) { S.autoAfter = false; autoPrep(); }
     } else if (S.mode === 'screw' && S.anchor) {
@@ -3795,7 +3840,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   function sfetch(u, o) { return window.ServerAuth ? ServerAuth.fetch(u, o) : fetch(u, o); }
   function serverUrl() { return ($('aiUrl').value || '').trim().replace(/\/+$/, ''); }
   function select(sel) { if (sel) S.guideSel = false; S.sel = sel; emit('select', sel); renderElements(); rebuildElementParts(S.result ? S.result.pls : planesWorld(), S.result ? S.result.screwInfo : []); applyExplode(); render(); }
-  window.Studio = { renamePart, partName, guideBuilds: () => guideBuilds, mandibleView, endModes, onEndModes, startLoad, loadStopped, loadBusy: () => committing, LOAD_CANCELLED, renderComps, setGuideRot, setGuideRoll, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, resEnds, splitGap, cutMisses, evalScrew, resectedAt, resectedNear, resPiece, boneTrack, cutAlongBone, bestScrew,
+  window.Studio = { chooseAxis, nearestPiece, renamePart, partName, guideBuilds: () => guideBuilds, mandibleView, endModes, onEndModes, startLoad, loadStopped, loadBusy: () => committing, LOAD_CANCELLED, renderComps, setGuideRot, setGuideRoll, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, resEnds, splitGap, cutMisses, evalScrew, resectedAt, resectedNear, resPiece, boneTrack, cutAlongBone, bestScrew,
     boneSections, sizeBody, autoBody, buildGuideSet, cutsAngle, cutFrame, pieceFrames, pieceBody, screwBodyOn, pieceWrapTop, frameAt, stumpGap, mergeStl, mergeMeshes, AUTO_DEFAULT, G_DEFAULT, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume, boneField, simplifyMesh, BAR, barPlan, barSdf, buildBarMesh, placeLug, longCase, axisOffBone, ramusAxis, stopSides, LONG_MM, CUT_OFF_MAX, prodKey, serverBar, guideField, lockState: () => lock, bonelessCut, reframe, exclusive, settled, makeGuide, prodReply, prodWhy, gateChecks, swInfo, swLine, sfetch, reportHTML, lesionMargins, anchorFromSlice, ramusAxis };
   bus.addEventListener('planeDragged', () => { renderElements(); schedule(true, 'drag'); });
   // messages assembled at run time are written in the language that was active: write them again when it changes

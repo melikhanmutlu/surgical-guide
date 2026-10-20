@@ -153,4 +153,49 @@ test('boneWarnings: too big, and cut off by the scan range', () => {
   assert.equal(B.boneWarnings(red, new Uint8Array(1e6)).length, 0);
 });
 
+// one ramus with its condyle handed to the skull piece by the neck cut (real CT, Denetim 5): the healthy side's mirror
+// image gives it back; the skull base it touched, and a block touching only the healthy side, stay where they are
+function oneSidedJaw() {
+  const g = grid(150, 110, 120);
+  const pts = []; for (let a = 0; a <= 180; a += 2) pts.push([75 + 50 * Math.cos(a * Math.PI / 180), 30 + 50 * Math.sin(a * Math.PI / 180), 30]);
+  const arch = (x, y, z) => pts.some(([px, py, pz]) => (x - px) ** 2 + (y - py) ** 2 + (z - pz) ** 2 <= 36);
+  const ramusR = cyl('z', 25, 30, 30, 85, 5), ramusL = cyl('z', 125, 30, 30, 85, 5);
+  const neckR = cyl('z', 25, 30, 85, 92, 2), neckL = cyl('z', 125, 30, 85, 92, 2);
+  const base = (x, y, z) => x >= 10 && x <= 140 && y >= 10 && y <= 60 && z >= 92 && z <= 112;
+  const lab = new Int32Array(g.nx * g.ny * g.nz);
+  for (let k = 0; k < g.nz; k++) for (let j = 0; j < g.ny; j++) for (let i = 0; i < g.nx; i++) {
+    const v = g.at(i, j, k);
+    if (arch(i, j, k) || ramusL(i, j, k)) lab[v] = 1;                 // the mandible as cut: arch + left ramus
+    else if (ramusR(i, j, k) || neckR(i, j, k) || neckL(i, j, k) || base(i, j, k)) lab[v] = 2;   // skull piece took the right ramus
+  }
+  const red = { nx: g.nx, ny: g.ny, nz: g.nz, sp: g.sp };
+  return { g, lab, red, ramusR, base };
+}
+test('mirrorRecover: a ramus left on the skull piece goes back to the mandible, the skull base stays', () => {
+  const { g, lab, red, ramusR, base } = oneSidedJaw();
+  const pieces = [{ label: 1, size: lab.filter(x => x === 1).length, box: [0, 0, 0, 0, 0, 0] }, { label: 2, size: lab.filter(x => x === 2).length, box: [0, 0, 0, 0, 0, 0] }];
+  const pl = B.midPlane(red, lab, 1);
+  assert.ok(Math.abs(pl.n[0]) > 0.99, 'midplane across x, got ' + pl.n);
+  const res = B.mirrorRecover(red, lab, 1, pieces);
+  assert.ok(res.added > 2, 'added ' + JSON.stringify(res));
+  let inR = 0, gotR = 0, baseTaken = 0;
+  for (let k = 0; k < g.nz; k++) for (let j = 0; j < g.ny; j++) for (let i = 0; i < g.nx; i++) {
+    const v = g.at(i, j, k);
+    if (ramusR(i, j, k) && k < 80) { inR++; if (lab[v] === 1) gotR++; }
+    if (base(i, j, k) && lab[v] === 1) baseTaken++;
+  }
+  assert.ok(gotR / inR > 0.95, `right ramus back on the mandible: ${gotR}/${inR}`);
+  assert.equal(baseTaken, 0, 'no skull base voxel moves to the mandible');
+  assert.equal(pieces[0].size, lab.filter(x => x === 1).length, 'the mandible piece size follows');
+});
+test('mirrorRecover: a symmetric mandible is left alone', () => {
+  const { lab, red, ramusR } = oneSidedJaw();
+  const g = grid(150, 110, 120);
+  for (let k = 0; k < g.nz; k++) for (let j = 0; j < g.ny; j++) for (let i = 0; i < g.nx; i++) if (lab[g.at(i, j, k)] === 2 && ramusR(i, j, k)) lab[g.at(i, j, k)] = 1;
+  const before = Int32Array.from(lab);
+  const res = B.mirrorRecover(red, lab, 1, [{ label: 1, size: 0 }, { label: 2, size: 0 }]);
+  assert.ok(res.fit >= 0.8, 'fit ' + res.fit); assert.equal(res.added, 0);
+  assert.deepEqual(Array.from(lab), Array.from(before));
+});
+
 run('test_separate');

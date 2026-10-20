@@ -602,7 +602,10 @@ window.Fibula = (function () {
   // about the fibula axis, the bone entry found by a ray from above
   function screwAt(c, f) {
     const sg = c.segs[f.seg], FR = F.c.FR, [u] = F.c.FA, n = F.c.FA[1], half = Math.max(0, sg.L / 2 - 3);
-    const s = (sg.s0 + sg.s1) / 2 + Math.max(-half, Math.min(half, f.off)), o = offAt(s);
+    // the first segment's lower end and the last one's upper end may hold a screw past the cut, on the guide's end
+    // extension over the fibula that stays in the leg (outside the graft)
+    const lo = f.seg === 0 ? -(sg.L / 2 + END_REACH) : -half, hi = f.seg === c.segs.length - 1 ? sg.L / 2 + END_REACH : half;
+    const s = (sg.s0 + sg.s1) / 2 + Math.max(lo, Math.min(hi, f.off)), o = offAt(s);
     const out = n.clone().applyAxisAngle(u, deg(f.ang)), dir = out.clone().negate();
     const t0 = toFib(s, o[0], o[1]).add(out.clone().multiplyScalar(FR + 15)); let entry = null;
     for (let t = 0; t < FR + 30; t += 0.2) { const q = t0.clone().add(dir.clone().multiplyScalar(t)); if (fibBone(q)) { entry = q; break; } }
@@ -621,6 +624,8 @@ window.Fibula = (function () {
     // the sleeve on the body: across the guide inside its width; below the top of the bone at most the wrap
     const top = screwAt(c, Object.assign({}, f, { ang: 0 })).entry;
     if (Math.abs(entry.clone().sub(st.axis).dot(v)) + f.D / 2 > body.W / 2 - 0.5) return null;
+    const sm = (c.segs[0].s0 + c.segs[c.segs.length - 1].s1) / 2 + (body.uc || 0);
+    if (Math.abs(st.s - sm) + f.D / 2 > body.L / 2 - 1) return null;
     if (top && top.clone().sub(entry).dot(n) > body.wrap - 0.5) return null;
     let inBone = 0, slotGap = Infinity, cutGap = Infinity; const q = V(), d = V();
     for (let t = -(cw + f.sleeveH); t <= f.len + 1e-9; t += 0.25) {
@@ -639,12 +644,17 @@ window.Fibula = (function () {
   // (extra ones on the longest segments); each placed on the best site that keeps the rules above, searched along the
   // segment and around the fibula axis. A segment with no such site keeps a screw at its middle, which the checks report.
   let autoKey = '', autoVal = null;
+  // how far past the outer cut an end screw may sit (the guide body is lengthened to hold it: guideAuto)
+  const END_REACH = 10;
+  const segWant = c => c.segs.map(g => (g.L >= rules().stumpMin ? 2 : 1));
+  const needsEnds = c => segWant(c).reduce((a, b) => a + b, 0) < 3;
+  // a screw past the outer cut, on the guide end (outside the graft)
+  const isEnd = (c, f) => Math.abs(f.off) > c.segs[f.seg].L / 2;
   function autoScrews(c) {
     const body = guideBody(c), pls = slotPlanes(c);
     const key = JSON.stringify([F.c.uid, rules(), body.W, body.wrap, body.wall, body.clear, pls.map(p => [p.pSlot.toArray(), p.N.toArray(), p.w].flat().map(x => Math.round(x * 100)))]);
     if (key === autoKey && autoVal) return autoVal.map(f => Object.assign({}, f));
-    const lower = c.segs, STUMP_MIN = rules().stumpMin, want = lower.map(g => (g.L >= STUMP_MIN ? 2 : 1));
-    for (let tot = want.reduce((a, b) => a + b, 0); tot < 3; tot++) { const i = lower.map((g, k) => [g.L / (want[k] + 1), k]).sort((a, b) => b[0] - a[0])[0][1]; want[i]++; }
+    const lower = c.segs, want = segWant(c);
     const out = [], segSites = [], picks = [];
     // the next screw on segment i: best score, kept sep mm from the ones already there, a little bonus for spreading out
     const next = (i, sep) => {
@@ -667,9 +677,21 @@ window.Fibula = (function () {
       segSites.push(sites); picks.push([]);
       for (let k = 0; k < want[i]; k++) if (!next(i, base.D + 3)) break;
     });
-    // fewer than three on the guide: add where a site is still free, first at the usual spacing, then sleeves 1 mm apart
+    // fewer than three on the guide: first one on each end of the guide past the outer cuts, on the fibula that stays
+    // in the leg (a graft as short as 15-20 mm takes one screw, and more holes in it cost its periosteal blood supply;
+    // two end screws hold the guide against tilting and turning about that one), then more on the segments
+    const ends = [];
+    for (const side of [-1, 1]) {
+      if (picks.reduce((a, p) => a + p.length, 0) + ends.length >= 3) break;
+      const i = side < 0 ? 0 : lower.length - 1, sg = lower[i], base = screwDefault(i); let best = null;
+      for (let x = 3; x <= END_REACH + 1e-9; x += 1) for (const ang of [0, -10, 10, -20, 20, -30, 30]) {
+        const f = Object.assign({}, base, { off: side * (sg.L / 2 + x), ang }), r = screwSite(c, f, pls, body);
+        if (r && (!best || r.score > best.score)) best = Object.assign(r, { f });
+      }
+      if (best) ends.push({ side, f: Object.assign({}, best.f, { auto: 1, end: 1 }) });
+    }
     for (const sep of [screwDefault(0).D + 3, screwDefault(0).D + 1]) {
-      let tot = picks.reduce((a, p) => a + p.length, 0);
+      let tot = picks.reduce((a, p) => a + p.length, 0) + ends.length;
       for (const i of lower.map((g, k) => k).sort((a, b) => lower[b].L / (picks[b].length + 1) - lower[a].L / (picks[a].length + 1))) {
         while (tot < 3 && next(i, sep)) tot++;
       }
@@ -687,7 +709,9 @@ window.Fibula = (function () {
         }
         if (best) out.push(Object.assign({}, best.f, { auto: 1, none: 1 }));
       }
+      if (i === 0) ends.filter(e => e.side < 0).forEach(e => out.push(e.f));
       picks[i].sort((a, b) => a.s - b.s).forEach(p => out.push(Object.assign({}, p.f, { auto: 1 })));
+      if (i === lower.length - 1) ends.filter(e => e.side > 0).forEach(e => out.push(e.f));
     });
     autoKey = key; autoVal = out;
     return out.map(f => Object.assign({}, f));
@@ -725,7 +749,7 @@ window.Fibula = (function () {
   }
   function guideAuto(c) {
     const FR = F.c.FR, sA = c.segs[0].s0, sB = c.segs[c.segs.length - 1].s1, sec = localSection(sA, sB), Rl = sec ? Math.min(FR, sec.half) : FR, dp = sec ? Math.min(FR, sec.depth) : FR;
-    return { span: sB - sA, Lm: 8, W: Math.round(2 * (Rl + 2.8) + 2), wrap: Math.max(2, Math.round(dp * 0.8 * 2) / 2), wall: 2.5, clear: S.g.clear };
+    return { span: sB - sA, Lm: needsEnds(c) ? END_REACH + 5 : 8, W: Math.round(2 * (Rl + 2.8) + 2), wrap: Math.max(2, Math.round(dp * 0.8 * 2) / 2), wall: 2.5, clear: S.g.clear };
   }
   // The body runs Lm past the outer cuts, and further where a slot is oblique: a slot tilted across the guide runs
   // diagonally over the body, (W/2 |N·v| + depth |N·n|) / |N·u| mm along it on each side of its centre. A body that
@@ -769,14 +793,24 @@ window.Fibula = (function () {
   }
   function dropGuide() {
     leg.children.filter(o => o.userData.guide).forEach(o => { leg.remove(o); o.material.dispose(); o.geometry.dispose(); });
-    S.fib.guide = null; S.fib.prod = null; guideKey = '';
+    S.fib.guide = null; S.fib.prod = null; S.fib.paired = false; guideKey = '';
+  }
+  // the first time a fibula guide and a mandible guide both stand, they are shown side by side, so the surgeon sees the
+  // pair. Either may come first: the fibula guide is built as soon as the cuts give a defect, usually before the mandible
+  // guide, and a later build with an unchanged fibula plan keeps the fibula guide it has. Once only; the view the
+  // surgeon picks after that stays.
+  function pairView() {
+    if (!S.fib || !S.fib.guide || S.fib.paired || S.restoring || !S.guideOn || !St.parts.guide) return;
+    S.fib.paired = true;
+    if (view !== 's') setView('s');
   }
   async function buildFibGuide() {
     if (building) { scheduleGuide(); return; }
     if (!active() || !last) { guideStale = false; return; }
-    const ctx = guideCtx(last); S.fib.guideFail = !ctx; if (!ctx) { dropGuide(); guideStale = false; St.updatePanels(); return; }
+    const ctx = guideCtx(last); S.fib.guideFail = !ctx; if (!ctx) { dropGuide(); guideStale = false; renderStep(); St.updatePanels(); return; }
     const key = JSON.stringify([ctx.g, ctx.pls.map(p => [p.p.toArray(), p.N.toArray(), p.w].flat().map(x => Math.round(x * 100))), ctx.scs.map(s => s.entry && s.entry.toArray().map(x => Math.round(x * 100)))]);
-    if (key === guideKey && S.fib.guide) { guideStale = false; St.updatePanels(); return; }
+    // (the approve button was greyed while the rebuild was due: render the step again, or it stays greyed)
+    if (key === guideKey && S.fib.guide) { guideStale = false; renderStep(); St.updatePanels(); pairView(); return; }
     building = true;
     St.busy(true, 'Fibula guide\'ı üretiliyor…'); await St.sleep();
     try {
@@ -797,10 +831,8 @@ window.Fibula = (function () {
       if (flip) out.result.sideFlip = true;
       leg.children.filter(o => o.userData.guide).forEach(o => { leg.remove(o); St.mat && o.material.dispose(); o.geometry.dispose(); });
       out.mesh.material = mat(FGUIDE); out.mesh.userData.guide = true; onLeg(out.mesh); St.simplifyMesh(out.mesh);
-      const first = !S.fib.guide;
       S.fib.guide = { mesh: out.mesh, result: out.result, ctx, key, grid: out.grid }; guideKey = key;
-      // the first fibula guide next to a mandible guide: both are shown side by side, so the surgeon sees the pair
-      if (first && S.guideOn && St.parts.guide && view !== 's' && !S.restoring) setView('s');
+      pairView();
     } finally { building = false; St.busy(false); if (!guideTimer || S.fib.guide && S.fib.guide.key === key) guideStale = false; }
     renderStep(); St.updatePanels(); St.render(); St.emit('fibGuide');
   }
@@ -876,7 +908,7 @@ window.Fibula = (function () {
       const nHeld = held.filter(Boolean).length;
       if (!nHeld) out.push(['crit', 'Kritik', 'Fibula guide\'ını kemiğe tutturan vida yok; vida kurallarına uyan yer bulunamadı. Kesileri fibulaya daha dik planlayın ya da vidaları elle yerleştirin.']);
       else if (nHeld < 3) out.push(['warn', 'Uyarı', `Fibula guide'ı ${nHeld} vidayla sabitleniyor; en az 3 vida önerilir (guide eğilip dönmesin).`]);
-      c.segs.forEach((g, k) => { const m = fsc.filter((f, i) => f.seg === k && held[i]).length; if (g.L >= STUMP_MIN && m < 2) out.push(['warn', 'Uyarı', `Fibula segmenti ${g.i + 1} ${fmt(g.L)} mm ve üzerinde ${m} vida var; ${STUMP_MIN} mm ve üstü segmentte 2 vida önerilir.`]); });
+      c.segs.forEach((g, k) => { const m = fsc.filter((f, i) => f.seg === k && held[i] && !isEnd(c, f)).length; if (g.L >= STUMP_MIN && m < 2) out.push(['warn', 'Uyarı', `Fibula segmenti ${g.i + 1} ${fmt(g.L)} mm ve üzerinde ${m} vida var; ${STUMP_MIN} mm ve üstü segmentte 2 vida önerilir.`]); });
       if (!P0.fsc) c.segs.map((g, k) => k).filter(k => !fsc.some(f => f.seg === k)).forEach(k => out.push(['warn', 'Uyarı', `Fibula segmenti ${k + 1} üzerinde vida kurallarına (kemikte en az ${SCREW_MIN_DEPTH} mm, yuvadan en az ${SCREW_SLOT_GAP} mm, kovan gövdede) uyan yer yok; bu segmente vida konmadı. Kesileri dikleştirin ya da vidayı elle yerleştirin.`]));
       if (fsc.some(f => f.none)) out.push(['warn', 'Uyarı', `Fibula guide'ında bazı segmentlerde vida kurallarına (kemikte en az ${SCREW_MIN_DEPTH} mm, yuvadan en az ${SCREW_SLOT_GAP} mm, kovan gövdede) uyan yer bulunamadı; vidalar yuvaya ${fmt(SCREW_TIGHT_GAP)}–${SCREW_SLOT_GAP} mm yakın en iyi yere kondu. Vidaları kontrol edin ya da elle yerleştirin.`]);
       if (R.sideFlip) out.push(['info', 'Bilgi', 'Fibula guide\'ının köprüsü diğer kenara alındı; eğik bir yuva guide\'ın bir köşesini ayırıyordu.']);
@@ -1071,7 +1103,8 @@ window.Fibula = (function () {
     let best = 0, bd = Infinity; F.cands.forEach((c, i) => { const d = c.C.distanceTo(V(...(p.cand || [0, 0, 0]))); if (d < bd) { bd = d; best = i; } });
     if (!F.c || F.c.i !== best || (!F.cands[best].tibia && p.side && F.c.FA[1].x * (p.side === 'L' ? 1 : -1) < 0)) setCandidate(best, p.side);
     $('fibCand').value = best;
-    S.fib = { plan: St.clone(p), guide: S.fib && S.fib.plan && F.c ? S.fib.guide : null };
+    // (a reopened plan with a mandible guide keeps the view it opens in: the pair is shown side by side only once per plan)
+    S.fib = { plan: St.clone(p), guide: S.fib && S.fib.plan && F.c ? S.fib.guide : null, paired: !!S.guideOn || !!(S.fib && S.fib.paired) };
     // a stored plan keeps its segment count and cuts as saved; an automatic count is chosen again only when the defect changes
     const D0 = defect(); S.fib.choice = D0 ? { L: D0.L, n: S.fib.plan.n, reason: 'stored', table: [] } : null;
     $('sceneSeg').hidden = false; $('fibBody').hidden = false;
@@ -1111,14 +1144,14 @@ window.Fibula = (function () {
     if (!active() || !S.fib.guide || !last) return null;
     const fg = S.fib.guide, R = fg.result, g = fg.ctx.g, scs = guideScrews(last), P = S.fib.prod && S.fib.prod.key === fg.key ? S.fib.prod : null;
     return { stale: guideStale, L: g.L, W: g.W, wrap: g.wrap, wall: g.wall, clear: g.clear, contact: R.contact, volume: R.volume, pieces: R.pieces,
-      screws: scs.map((sc, i) => { const si = R.screwInfo && R.screwInfo[i]; return { no: i + 1, seg: sc.seg + 1, d: sc.d, D: sc.D, len: sc.len, inBone: si && si.ok ? si.inBone : null }; }),
+      screws: scs.map((sc, i) => { const si = R.screwInfo && R.screwInfo[i]; return { no: i + 1, seg: sc.seg + 1, end: isEnd(last, sc), d: sc.d, D: sc.D, len: sc.len, inBone: si && si.ok ? si.inBone : null }; }),
       prod: P ? { watertight: P.watertight, bodies: P.bodies, volume: P.volume, resolution: P.resolution || null, ok: P.productionOk !== false } : null };
   }
   function guideReportHTML(esc) {
     const r = guideReport(); if (!r) return '';
     const row = (k, v) => `<tr><td>${xl(k)}</td><td>${v}</td></tr>`;
     return `<h3>${xl("Fibula guide'ı")}</h3>${r.stale ? `<p><b>${xl("Fibula guide'ı güncelleniyor; rapor son üretilen guide'ı gösteriyor.")}</b></p>` : ''}<table>${row('Uzunluk', fmt(r.L) + ' mm')}${row('Genişlik', fmt(r.W) + ' mm')}${row('Sarma derinliği', fmt(r.wrap) + ' mm')}${row('Duvar', fmt(r.wall) + ' mm')}${row('Kemik boşluğu', fmt(r.clear) + ' mm')}${row('Temas alanı', fmt(r.contact, 0) + ' mm²')}${row('Hacim', fmt(r.volume / 1000, 2) + ' cm³')}</table>
-<table><tr><th>${xl('Vida')}</th><th>${xl('Segment')}</th><th>${xl('Matkap / kovan')}</th><th>${xl('Boy')}</th><th>${xl('Kemik içinde')}</th></tr>${r.screws.map(s => `<tr><td>${s.no}</td><td>${s.seg}</td><td>${fmt(s.d)} / ${fmt(s.D)} mm</td><td>${fmt(s.len, 0)} mm</td><td>${s.inBone != null ? fmt(s.inBone) + ' mm' : '–'}</td></tr>`).join('')}</table>
+<table><tr><th>${xl('Vida')}</th><th>${xl('Segment')}</th><th>${xl('Matkap / kovan')}</th><th>${xl('Boy')}</th><th>${xl('Kemik içinde')}</th></tr>${r.screws.map(s => `<tr><td>${s.no}</td><td>${s.end ? xl('guide ucu (greft dışı)') : s.seg}</td><td>${fmt(s.d)} / ${fmt(s.D)} mm</td><td>${fmt(s.len, 0)} mm</td><td>${s.inBone != null ? fmt(s.inBone) + ' mm' : '–'}</td></tr>`).join('')}</table>
 <p>${r.prod ? `${xl("Fibula guide'ının üretim STL'i sunucuda yüzey tabanlı boolean ile üretildi:")} ${xl(r.prod.watertight ? 'su geçirmez' : 'su geçirmez değil')}, ${xl(`${r.prod.bodies} parça`)}, ${fmt(r.prod.volume / 1000, 2)} cm³${r.prod.resolution ? xl(`, ızgara ${fmt(r.prod.resolution, 2)} mm`) : ''} (fibula_guide_uretim.stl).${r.prod.ok ? '' : ` <b>${xl("Sunucu bu STL'i basılabilir bulmadı.")}</b>`}` : xl("Fibula guide'ının üretim STL'i alınmadı; fibula_guide.stl 0,4 mm voksel önizlemesidir.")}</p>`;
   }
   function reportHTML() {

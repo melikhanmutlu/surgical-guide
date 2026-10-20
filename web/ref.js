@@ -38,6 +38,20 @@ window.Ref = (function () {
       return hit / P.length;
     };
   }
+  // the share of the bone surface whose mirror image lands within FIT_TOL mm of bone. The plane search scores exact voxel
+  // hits, which a whole real mandible meets only about half the time (thin cortex, a few mm of natural asymmetry: 54 %
+  // on the anonymous CT); within 2 mm a whole mandible maps 82 %, one with a ramus left on the skull clearly less.
+  const FIT_TOL = 2, FIT_WARN = 0.75;
+  function mirrorFit(n, d) {
+    const r = S.red, m = S.mask, sp = r.sp, P = surfacePoints(12000), rr = sp.map(s => Math.floor(FIT_TOL / s)), offs = [];
+    for (let c = -rr[2]; c <= rr[2]; c++) for (let b = -rr[1]; b <= rr[1]; b++) for (let a = -rr[0]; a <= rr[0]; a++) if ((a * sp[0]) ** 2 + (b * sp[1]) ** 2 + (c * sp[2]) ** 2 <= FIT_TOL * FIT_TOL + 1e-9) offs.push([a, b, c]);
+    let hit = 0;
+    for (const p of P) {
+      const s = 2 * (n[0] * p[0] + n[1] * p[1] + n[2] * p[2] - d), q = G.indexOf(r, [p[0] - s * n[0], p[1] - s * n[1], p[2] - s * n[2]]).map(Math.round);
+      for (const [a, b, c] of offs) { const x = q[0] + a, y = q[1] + b, z = q[2] + c; if (x >= 0 && y >= 0 && z >= 0 && x < r.nx && y < r.ny && z < r.nz && m[x + r.nx * (y + r.ny * z)]) { hit++; break; } }
+    }
+    return P.length ? hit / P.length : 0;
+  }
   const nOf = (yaw, roll) => { const a = yaw * Math.PI / 180, b = roll * Math.PI / 180; return [Math.cos(a) * Math.cos(b), Math.sin(a) * Math.cos(b), Math.sin(b)]; };
   // coarse-to-fine search around the patient's left-right axis (LPS x) through the centroid
   function findPlane() {
@@ -98,7 +112,7 @@ window.Ref = (function () {
     const before = S.lesion && S.lesion.condyle && ref && ref.cond[S.lesion.condyle];
     try {
       const pl = findPlane(), cond = findCondyles(pl), man = keepManual && ref && ref.manual || {};
-      ref = { n: pl.n.map(x => +x.toFixed(5)), d: +pl.d.toFixed(2), score: +pl.score.toFixed(3), cond: Object.assign(cond, man), manual: man };
+      ref = { n: pl.n.map(x => +x.toFixed(5)), d: +pl.d.toFixed(2), score: +pl.score.toFixed(3), fit: +mirrorFit(pl.n, pl.d).toFixed(3), cond: Object.assign(cond, man), manual: man };
     } finally { St.busy(false); }
     update(); St.emit('changed'); condMoved(before);
   }
@@ -185,7 +199,7 @@ window.Ref = (function () {
   // ---------- metrics ----------
   function metrics() {
     if (!ref) return null;
-    const n = V(...ref.n), { R, L } = ref.cond, out = { tilt: THREE.MathUtils.radToDeg(Math.acos(Math.min(1, Math.abs(n.x)))), score: ref.score };
+    const n = V(...ref.n), { R, L } = ref.cond, out = { tilt: THREE.MathUtils.radToDeg(Math.acos(Math.min(1, Math.abs(n.x)))), score: ref.score, fit: ref.fit };
     if (R && L) {
       const a = V(...R), b = V(...L), dR = Math.abs(a.dot(n) - ref.d), dL = Math.abs(b.dot(n) - ref.d);
       // mirror the left condyle onto the right side: what is left is the asymmetry
@@ -202,7 +216,7 @@ window.Ref = (function () {
     const M = metrics();
     $('refBox').innerHTML = `<h3 class="sub">Referans ve simetri</h3>
       ${ref ? `<dl class="kv">
-        <dt>Orta sagittal düzlem</dt><dd>${fmt(M.tilt, 1)}° eğik · ayna uyumu %${fmt(M.score * 100, 0)}</dd>
+        <dt>Orta sagittal düzlem</dt><dd>${fmt(M.tilt, 1)}° eğik · ayna uyumu %${fmt((Number.isFinite(M.fit) ? M.fit : M.score) * 100, 0)}</dd>
         ${M.inter !== undefined ? `<dt>Kondiller arası</dt><dd>${fmt(M.inter)} mm</dd>
         <dt>Orta düzleme uzaklık</dt><dd>sağ ${fmt(M.dR)} · sol ${fmt(M.dL)} mm</dd>
         <dt>Kondil asimetrisi</dt><dd>${fmt(M.asym)} mm (dikey ${fmt(M.dz)}, ön-arka ${fmt(M.dy)})</dd>` : '<dt>Kondiller</dt><dd>bulunamadı; elle seçin</dd>'}
@@ -234,12 +248,13 @@ window.Ref = (function () {
     set(x) {
       // stored plan = untrusted input: numbers only
       const v3 = a => Array.isArray(a) && a.length === 3 && a.every(Number.isFinite) ? a.slice() : null, pts = o => { const r = {}; ['R', 'L'].forEach(k => { const p = o && v3(o[k]); if (p) r[k] = p; }); return r; };
-      ref = x && v3(x.n) && Number.isFinite(x.d) ? { n: v3(x.n), d: x.d, score: Number.isFinite(x.score) ? x.score : 0, cond: pts(x.cond), manual: pts(x.manual) } : null;
+      ref = x && v3(x.n) && Number.isFinite(x.d) ? Object.assign({ n: v3(x.n), d: x.d, score: Number.isFinite(x.score) ? x.score : 0 }, Number.isFinite(x.fit) ? { fit: x.fit } : {}, { cond: pts(x.cond), manual: pts(x.manual) }) : null;
       built = null; update();
     },
   };
   let lastBone = null, auto = false;
-  bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring)) { ref = null; auto = true; built = null; } update(); });
+  // the bone model is built before 'volume' fires: compute now rather than wait for the next 'parts' (an anchor click)
+  bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring)) { ref = null; auto = true; built = null; } update(); if (auto && St.parts.bone && !S.restoring) { auto = false; compute(false); } });
   bus.addEventListener('parts', () => {
     const b = St.parts.bone; if (!b) return;
     if (auto && !S.restoring) { auto = false; compute(false); return; }
@@ -249,7 +264,9 @@ window.Ref = (function () {
     const M = metrics(), out = [];
     // a mandible split off the skull automatically can miss a ramus (left fused to the skull) or keep a maxilla piece:
     // then the bone does not map onto its own mirror image
-    if (M && M.score < 0.6) out.push(['warn', 'Uyarı', xl(`Mandibula kendi ayna görüntüsüyle yalnız %${fmt(M.score * 100, 0)} örtüşüyor: otomatik ayrılan kemik eksik olabilir (bir ramus ya da kondil kafatasına bağlı kalmış) ya da fazladan parça içerebilir. Kemik modelini kontrol edin; gerekirse "Bitişik kemikleri ayır" ile düzeltin.`), 'anat']);
+    // (a plan stored before the 2 mm fit was kept: the exact-hit score and its old limit)
+    const low = M && (Number.isFinite(M.fit) ? M.fit < FIT_WARN : M.score < 0.6), pct = M && (Number.isFinite(M.fit) ? M.fit : M.score);
+    if (low) out.push(['warn', 'Uyarı', xl(`Mandibula kendi ayna görüntüsüyle yalnız %${fmt(pct * 100, 0)} örtüşüyor: otomatik ayrılan kemik eksik olabilir (bir ramus ya da kondil kafatasına bağlı kalmış) ya da fazladan parça içerebilir. Kemik modelini kontrol edin; gerekirse "Bitişik kemikleri ayır" ile düzeltin.`), 'anat']);
     if (M && M.asym !== undefined && M.asym > 4) out.push(['info', 'Bilgi', xl(`Kondiller ${fmt(M.asym)} mm asimetrik; ayna görüntüsünü hedef alırken bunu hesaba katın.`), 'anat']);
     const E = M && ref && St.resEnds();
     if (E && !E.condyle) {

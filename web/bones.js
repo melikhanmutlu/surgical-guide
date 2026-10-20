@@ -69,12 +69,121 @@ window.Bones = (function () {
         .filter(x => lower(x.c) && mandibleLike(x.v, [x.e[0], x.e[1], x.e[2] <= LIM.height * 1.25 ? trimmedHeight(labels, red, x.c) : x.e[2]]))
         .sort((a, b) => (touchesZ(a.c.box, nz) - touchesZ(b.c.box, nz)) || b.v - a.v)[0];
       if (!fit) continue;
+      const rec = mirrorRecover(red, labels, fit.c.label, pieces);
       const rest = comps.slice(1).concat(pieces).sort((a, b) => b.size - a.size);
-      return Object.assign(res, { comps: rest, picked: fit.c.label, status: 'split', ratio, vol: fit.v, ext: fit.e, box: fit.c.box, before: { vol, ext } });
+      return Object.assign(res, { comps: rest, picked: fit.c.label, status: 'split', ratio, vol: fit.c.size * vox, ext: extMm(fit.c.box, sp), box: fit.c.box, before: { vol, ext }, recovered: rec });
     }
     sepr.restore(top.label);
     res.status = 'failed'; res.before = { vol, ext };
     return res;
+  }
+
+  // ---------- one side of the mandible left on the neighbour bone ----------
+  // The cut at the thin necks can hand a whole ramus with its condyle to the skull piece (on a real CT the right ramus
+  // above the angle went with the skull: the mandible matched its mirror image 46 %, the condyle was found at the cut
+  // end, a body resection near it was planned as a ramus case). The healthy side says what is missing: the mandible's
+  // midsagittal plane is found as Ref finds it (the plane that maps the bone surface best onto itself); when the surface
+  // maps poorly onto its mirror image (under MIRROR_FIT_OK within MIRROR_TOL mm), every piece touching the mandible is cut finer (MIRROR_RATIO) and a sub-piece is given to the mandible when
+  // it touches it and MIRROR_FIT of its voxels mirror onto mandible bone (within MIRROR_TOL mm), repeated while pieces
+  // are added (the condylar head after the ramus). A piece of the skull base, the maxilla or a vertebra mirrors onto no
+  // mandible and stays. The result must still be built like a mandible, else nothing is changed.
+  const MIRROR_FIT_OK = 0.8, MIRROR_RATIO = 0.65, MIRROR_FIT = 0.6, MIRROR_TOL = 2, MIRROR_TOUCH = 20, MIRROR_ADD_MAX = 25;
+  function surfaceOf(red, labels, label, max) {
+    const { nx, ny, nz } = red, nxy = nx * ny, out = [];
+    for (let k = 1; k < nz - 1; k++) for (let j = 1; j < ny - 1; j++) for (let i = 1, v = 1 + nx * (j + ny * k); i < nx - 1; i++, v++) {
+      if (labels[v] !== label) continue;
+      if (labels[v - 1] === label && labels[v + 1] === label && labels[v - nx] === label && labels[v + nx] === label && labels[v - nxy] === label && labels[v + nxy] === label) continue;
+      out.push([i, j, k]);
+    }
+    const step = Math.max(1, Math.floor(out.length / max)), P = [];
+    for (let t = 0; t < out.length; t += step) P.push(out[t]);
+    return P;
+  }
+  // world <-> index for a grid with optional axes/origin (G.worldOf / G.indexOf when the grid has them)
+  const toW = (red, i, j, k) => (red.axes && window.G ? G.worldOf(red, i, j, k) : [i * red.sp[0], j * red.sp[1], k * red.sp[2]]);
+  const toI = (red, w) => (red.axes && window.G ? G.indexOf(red, w) : [w[0] / red.sp[0], w[1] / red.sp[1], w[2] / red.sp[2]]);
+  function midPlane(red, labels, label) {
+    const P = surfaceOf(red, labels, label, 5000).map(([i, j, k]) => toW(red, i, j, k)), { nx, ny, nz } = red;
+    if (P.length < 50) return null;
+    const c = P.reduce((s, p) => [s[0] + p[0], s[1] + p[1], s[2] + p[2]], [0, 0, 0]).map(x => x / P.length);
+    const f = (n, d) => {
+      let hit = 0;
+      for (const p of P) {
+        const s = 2 * (n[0] * p[0] + n[1] * p[1] + n[2] * p[2] - d), ix = toI(red, [p[0] - s * n[0], p[1] - s * n[1], p[2] - s * n[2]]);
+        const i = Math.round(ix[0]), j = Math.round(ix[1]), k = Math.round(ix[2]);
+        if (i >= 0 && j >= 0 && k >= 0 && i < nx && j < ny && k < nz && labels[i + nx * (j + ny * k)] === label) hit++;
+      }
+      return hit / P.length;
+    };
+    const nOf = (yaw, roll) => { const a = yaw * Math.PI / 180, b = roll * Math.PI / 180; return [Math.cos(a) * Math.cos(b), Math.sin(a) * Math.cos(b), Math.sin(b)]; };
+    let best = { yaw: 0, roll: 0, off: 0, s: -1 };
+    const search = (yr, ys, or, os, at) => {
+      for (let yaw = at.yaw - yr; yaw <= at.yaw + yr + 1e-6; yaw += ys) for (let roll = at.roll - yr; roll <= at.roll + yr + 1e-6; roll += ys) {
+        const n = nOf(yaw, roll), d0 = n[0] * c[0] + n[1] * c[1] + n[2] * c[2];
+        for (let off = at.off - or; off <= at.off + or + 1e-6; off += os) { const s = f(n, d0 + off); if (s > best.s) best = { yaw, roll, off, s }; }
+      }
+    };
+    search(12, 3, 12, 2, best); search(3, 1, 2, 0.5, Object.assign({}, best)); search(1, 0.25, 0.5, 0.25, Object.assign({}, best));
+    const n = nOf(best.yaw, best.roll);
+    return { n, d: n[0] * c[0] + n[1] * c[1] + n[2] * c[2] + best.off, score: best.s };
+  }
+  function mirrorRecover(red, labels, picked, pieces, opt = {}) {
+    const { nx, ny, nz, sp } = red, nxy = nx * ny, vox = cm3(sp);
+    const pl = midPlane(red, labels, picked); if (!pl) return null;
+    // the mandible as it stands, and the voxel offsets within MIRROR_TOL mm (the mirrored point may miss by that much)
+    const M = new Uint8Array(labels.length); for (let v = 0; v < M.length; v++) if (labels[v] === picked) M[v] = 1;
+    const rr = [0, 1, 2].map(a => Math.floor(MIRROR_TOL / sp[a])), offs = [];
+    for (let c = -rr[2]; c <= rr[2]; c++) for (let b = -rr[1]; b <= rr[1]; b++) for (let a = -rr[0]; a <= rr[0]; a++) if ((a * sp[0]) ** 2 + (b * sp[1]) ** 2 + (c * sp[2]) ** 2 <= MIRROR_TOL * MIRROR_TOL + 1e-9) offs.push([a, b, c]);
+    const n = pl.n, d = pl.d;
+    const mirrorsAt = (i, j, k) => {
+      const p = toW(red, i, j, k), s = 2 * (n[0] * p[0] + n[1] * p[1] + n[2] * p[2] - d);
+      const q = toI(red, [p[0] - s * n[0], p[1] - s * n[1], p[2] - s * n[2]]), qi = Math.round(q[0]), qj = Math.round(q[1]), qk = Math.round(q[2]);
+      for (const [a, b, c] of offs) { const x = qi + a, y = qj + b, z = qk + c; if (x >= 0 && y >= 0 && z >= 0 && x < nx && y < ny && z < nz && M[x + nx * (y + ny * z)]) return true; }
+      return false;
+    };
+    const mirrors = v => mirrorsAt(v % nx, ((v / nx) | 0) % ny, (v / nxy) | 0);
+    // only a mandible that maps poorly onto its mirror image (within MIRROR_TOL) is searched (cutting the neighbours
+    // finer costs seconds on a head CT): a whole real mandible maps about 82 %
+    const S0 = surfaceOf(red, labels, picked, 8000), fit = S0.length ? S0.filter(([i, j, k]) => mirrorsAt(i, j, k)).length / S0.length : 1;
+    if (fit >= (opt.fit || MIRROR_FIT_OK)) return { score: pl.score, fit, added: 0 };
+    // the pieces touching the mandible
+    const touch = new Set();
+    for (let v = nxy; v < labels.length - nxy; v++) {
+      if (!M[v]) continue;
+      for (const w of [v - 1, v + 1, v - nx, v + nx, v - nxy, v + nxy]) { const l = labels[w]; if (l && l !== picked) touch.add(l); }
+    }
+    const subs = [];
+    for (const l of touch) {
+      const sepr = G.separator(labels, nx, ny, nz, sp, { label: l }); if (sepr.empty) continue;
+      const lab = new Int32Array(labels.length), parts = sepr.run({ ratio: MIRROR_RATIO, out: lab, minSize: 1 }), byL = new Map();
+      parts.forEach(c => byL.set(c.label, { from: l, vs: [], fit: null }));
+      for (let v = 0; v < lab.length; v++) if (lab[v]) byL.get(lab[v]).vs.push(v);
+      byL.forEach(x => subs.push(x));
+    }
+    let added = 0, changed = true;
+    while (changed) {
+      changed = false;
+      for (const x of subs) {
+        if (x.done || x.vs.length * vox > MIRROR_ADD_MAX - added) continue;
+        let t = 0; for (const v of x.vs) if (M[v - 1] || M[v + 1] || M[v - nx] || M[v + nx] || M[v - nxy] || M[v + nxy]) { if (++t >= MIRROR_TOUCH) break; }
+        if (t < MIRROR_TOUCH) continue;
+        if (x.fit === null) { let h = 0; for (const v of x.vs) if (mirrors(v)) h++; x.fit = h / x.vs.length; }
+        if (x.fit < MIRROR_FIT) continue;
+        x.done = true; changed = true; added += x.vs.length * vox;
+        for (const v of x.vs) M[v] = 1;
+      }
+    }
+    if (!added) return { score: pl.score, fit, added: 0 };
+    // still a mandible? (volume and extents of the grown piece)
+    const b = [nx, ny, nz, -1, -1, -1]; let cnt = 0;
+    for (let k = 0, v = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++, v++) if (M[v]) { cnt++; if (i < b[0]) b[0] = i; if (j < b[1]) b[1] = j; if (k < b[2]) b[2] = k; if (i > b[3]) b[3] = i; if (j > b[4]) b[4] = j; if (k > b[5]) b[5] = k; }
+    const e = extMm(b, sp);
+    if (!mandibleLike(cnt * vox, [e[0], e[1], e[2] <= LIM.height * 1.25 ? Math.min(e[2], LIM.height) : e[2]])) return { score: pl.score, fit, added: 0, refused: true };
+    // hand the voxels over; the pieces' sizes follow
+    const gained = new Map();
+    for (const x of subs) if (x.done) { for (const v of x.vs) labels[v] = picked; gained.set(x.from, (gained.get(x.from) || 0) + x.vs.length); }
+    pieces.forEach(c => { if (c.label === picked) { c.size = cnt; c.box = b; } else if (gained.has(c.label)) c.size -= gained.get(c.label); });
+    return { score: pl.score, fit, added: Math.round(added * 10) / 10 };
   }
 
   // checks of the CHOSEN planning bone (any selection, also a hand-picked or layer one); [] when plausible
@@ -90,5 +199,5 @@ window.Bones = (function () {
     if (b[5] >= nz - 1 || b[2] <= 0) out.push({ code: 'edge', vol, ext });   // cut off by the scan range: skull / spine, not a mandible
     return out;
   }
-  return { LIM, RATIOS, assess, pickMandible, boneWarnings, mandibleLike, tooBig, extMm, boxOf };
+  return { LIM, RATIOS, assess, pickMandible, boneWarnings, mandibleLike, tooBig, extMm, boxOf, midPlane, mirrorRecover };
 })();

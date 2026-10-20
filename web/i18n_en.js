@@ -478,6 +478,7 @@ window.I18N_EN = {
 "Kemik eşiği": "Bone threshold",
 "Kemik eşiği (HU)": "Bone threshold (HU)",
 "Kemik içinde": "Inside bone",
+"guide ucu (greft dışı)": "guide end (outside the graft)",
 "Kemik kalınlığı": "Bone thickness",
 "Kemik modeli": "Bone model",
 "Kemik modeli yenileniyor…": "Refreshing bone model…",

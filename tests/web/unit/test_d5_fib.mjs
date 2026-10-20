@@ -162,4 +162,37 @@ test('F10/F11: condylar resection, reversed order: the junction checked is the r
   S.lesion.condyle = null; S.planes = [{ off: -30, yaw: 0, pitch: 0, w: 1.2 }, { off: 30, yaw: 0, pitch: 0, w: 1.2 }];
 });
 
+test('Main flow: a fibula guide rebuild that finds the plan unchanged re-enables approval; the pair opens side by side once the mandible guide stands too', async () => {
+  await start(); await cuts(-20, 20); await St.rebuildResection(); St.emit('parts');
+  await until(() => S.fib.guide && !W.Fibula.pending()); await sleep(600);
+  // the mandible guide not shown yet: the fibula guide alone does not switch the view
+  W.Fibula.setView('m'); S.fib.paired = false; const on = S.guideOn; S.guideOn = false;
+  // two updates in a row: the second renders while the first rebuild is due (approval greyed), and the rebuild then
+  // finds the same plan (real CT: "Tüm öğeleri onayla" left the fibula plan open)
+  St.emit('parts'); St.emit('parts');
+  await sleep(100); await until(() => !W.Fibula.pending()); await sleep(600);
+  assert.equal($('fibApprove').disabled, false, 'fibula approval enabled after an unchanged rebuild');
+  assert.equal(W.Fibula.view(), 'm', 'no mandible guide yet: view kept');
+  S.guideOn = on; St.emit('parts');
+  await sleep(100); await until(() => !W.Fibula.pending()); await sleep(600);
+  assert.equal(W.Fibula.view(), 's', 'both guides stand: side by side');
+  assert.equal(S.fib.paired, true);
+  W.Fibula.setView('m'); St.emit('parts'); await sleep(100); await until(() => !W.Fibula.pending()); await sleep(600);
+  assert.equal(W.Fibula.view(), 'm', 'once only: the view the surgeon picks afterwards stays');
+});
+
+test('Fibula guide screws: a single short graft takes one screw, the guide ends past the cuts take two more (outside the graft)', async () => {
+  await start(); await cuts(-10, 10); await St.rebuildResection(); St.emit('parts');
+  await sleep(100); await until(() => S.fib.guide && !W.Fibula.pending()); await sleep(600);
+  const st = W.Fibula.state().last; assert.equal(st.segs.length, 1, 'one segment');
+  const r = W.Fibula.guideReport(), ends = r.screws.filter(x => x.end), on = r.screws.filter(x => !x.end);
+  assert.ok(st.segs[0].L < W.Fibula.rules().stumpMin, `short graft (${st.segs[0].L} mm)`);
+  assert.equal(on.length, 1, 'one screw on the graft');
+  assert.equal(ends.length, 2, 'one screw on each guide end');
+  assert.ok(r.screws.every(x => x.inBone >= W.Fibula.rules().screwMinDepth), 'every screw in bone');
+  assert.ok(!W.Fibula.checks().some(c => /en az 3 vida/.test(c[2])), 'no "at least 3 screws" warning');
+  assert.equal(r.pieces, 1, 'guide in one piece');
+  await cuts(-30, 30);
+});
+
 await run('d5_fib');
