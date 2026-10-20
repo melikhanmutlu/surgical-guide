@@ -11,6 +11,9 @@ window.Audit = (function () {
   const ROLE = { eng: 'Mühendis', sur: 'Cerrah' }, ACT = { onay: 'onay verdi', geri: 'onayı geri çekti', not: 'not ekledi' };
   const LABEL = { eng: 'Mühendis teknik onayı', sur: 'Cerrah klinik onayı' };
   let log = [], chain = { ok: true, bad: -1 }, engName = '', note = '';
+  // the engineer's name is kept on this computer, so it is typed once (the approval itself is still given per plan)
+  try { engName = localStorage.getItem('yolmed.engName') || ''; } catch (e) { /* private window */ }
+  const keepEng = n => { engName = n; try { localStorage.setItem('yolmed.engName', n); } catch (e) { /* private window */ } };
   // W21: roles whose approval was already stale when the plan was opened. The plan hash covers every field of planOf(),
   // so a plan approved in an older version (before a setting was added) or changed outside the app no longer matches.
   // Nothing is migrated: which fields were added cannot be told apart from an edit, so the approval is never carried
@@ -49,8 +52,10 @@ window.Audit = (function () {
     if (p.anchor) ['n', 'axis'].forEach(k => { if (p.anchor[k]) p.anchor[k] = p.anchor[k].map(x => Math.round(x * 1000) / 1000); });
     if (p.anchor && p.anchor.base && p.anchor.base.n) p.anchor.base.n = p.anchor.base.n.map(x => Math.round(x * 1000) / 1000);
     delete p.surgeon; delete p.measures; delete p.software; if (p.ext) { delete p.ext.audit; delete p.ext.names; }   // (a new software version or a layer renamed does not undo an approval)
-    return sha256(canon(p));
+    const t = canon(p); if (t !== hashMemo.t) hashMemo = { t, h: sha256(t) };   // (asked many times per edit for the same plan)
+    return hashMemo.h;
   }
+  let hashMemo = { t: null, h: null };
   const entryHash = e => sha256([e.prev, e.n, e.at, e.role, e.name, e.action, e.comment, e.plan].join('|'));
   function verify() {
     chain = { ok: true, bad: -1 };
@@ -124,7 +129,7 @@ window.Audit = (function () {
         <ol class="aulog">${log.slice().reverse().map(e => `<li>${esc(when(e.at))} · ${esc(ROLE[e.role] || '')} ${esc(e.name)} ${esc(ACT[e.action] || '')}${e.comment ? `: “${esc(e.comment)}”` : ''}<small>#${Number(e.n) || 0} ${esc(String(e.hash || '').slice(0, 12))} · plan ${esc(String(e.plan || '').slice(0, 8))}</small></li>`).join('') || '<li>Kayıt yok.</li>'}</ol>
       </details>`;
     box.querySelectorAll('[data-a]').forEach(b => b.addEventListener('click', () => act(b.dataset.r, b.dataset.a)));
-    $('au_eng_n').addEventListener('input', e => { engName = e.target.value; });
+    $('au_eng_n').addEventListener('input', e => keepEng(e.target.value));
   }
   function act(role, action) {
     const nameEl = role === 'sur' ? $('surgeon') : $('au_eng_n'), name = nameEl.value.trim(), comment = $(`au_${role}_c`).value.trim(), msg = t => { note = t; $('auMsg').textContent = t; };
@@ -133,7 +138,7 @@ window.Audit = (function () {
     if (!chain.ok) { msg('Kayıt zinciri bozuk; yeni onay eklenemez. Planın kayıtlı bir sürümünü açın.'); return; }
     if (action === 'onay') { const why = can(role); if (why) { msg(why); return; } }
     if (action === 'not' && !comment) { msg('Not için yorum yazın.'); return; }
-    if (role === 'eng') engName = name;
+    if (role === 'eng') keepEng(name);
     if (action !== 'not') staleOnOpen.delete(role);
     append(role, action, name, comment);
     // withdrawing the technical approval withdraws the clinical one that rested on it

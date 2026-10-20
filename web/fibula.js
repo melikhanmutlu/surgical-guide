@@ -286,7 +286,9 @@ window.Fibula = (function () {
     // occlusal direction: patient superior (LPS +z) across the defect line; crest = highest resected bone per bin
     const vup = V(0, 0, 1).sub(dir.clone().multiplyScalar(dir.z)).normalize(), crest = new Float64Array(nb).fill(-Infinity);
     const add = (x, q) => { x[0] += q.x; x[1] += q.y; x[2] += q.z; x[3]++; };
-    for (let k = 0; k < r.nz; k++) for (let j = 0; j < r.ny; j++) for (let i = 0; i < r.nx; i++) {
+    // (only the resected piece's box holds resected voxels: the same voxels, in the same order, as a scan of the volume)
+    const pc = St.resPiece && St.resPiece(), bx = pc && pc.mask === S.resMask ? pc.box : [0, 0, 0, r.nx - 1, r.ny - 1, r.nz - 1];
+    for (let k = bx[2]; k <= bx[5]; k++) for (let j = bx[1]; j <= bx[4]; j++) for (let i = bx[0]; i <= bx[3]; i++) {
       if (!S.resMask[i + r.nx * (j + r.ny * k)]) continue;
       const q = V(...G.worldOf(r, i, j, k)), dA = q.clone().sub(A.p).dot(NA), dB = -q.clone().sub(B.p).dot(NB);
       // the slabs follow the cut planes, blended from A's to B's (Denetim 5 R1): slabs square to the A-B chord are clipped by an
@@ -1104,11 +1106,26 @@ window.Fibula = (function () {
     const upv = V(0, 0, 1).sub(g.x.clone().multiplyScalar(g.x.z)).normalize(), bl = g.ped.dot(g.out), ud = g.ped.dot(upv);
     return Math.abs(bl) >= Math.abs(ud) ? (bl > 0 ? 'bukkal' : 'lingual') : (ud > 0 ? 'üst (kret)' : 'alt');
   }
+  // the fibula guide as built (body, screws, contact) and its production STL, for the reports
+  function guideReport() {
+    if (!active() || !S.fib.guide || !last) return null;
+    const fg = S.fib.guide, R = fg.result, g = fg.ctx.g, scs = guideScrews(last), P = S.fib.prod && S.fib.prod.key === fg.key ? S.fib.prod : null;
+    return { stale: guideStale, L: g.L, W: g.W, wrap: g.wrap, wall: g.wall, clear: g.clear, contact: R.contact, volume: R.volume, pieces: R.pieces,
+      screws: scs.map((sc, i) => { const si = R.screwInfo && R.screwInfo[i]; return { no: i + 1, seg: sc.seg + 1, d: sc.d, D: sc.D, len: sc.len, inBone: si && si.ok ? si.inBone : null }; }),
+      prod: P ? { watertight: P.watertight, bodies: P.bodies, volume: P.volume, resolution: P.resolution || null, ok: P.productionOk !== false } : null };
+  }
+  function guideReportHTML(esc) {
+    const r = guideReport(); if (!r) return '';
+    const row = (k, v) => `<tr><td>${xl(k)}</td><td>${v}</td></tr>`;
+    return `<h3>${xl("Fibula guide'ı")}</h3>${r.stale ? `<p><b>${xl("Fibula guide'ı güncelleniyor; rapor son üretilen guide'ı gösteriyor.")}</b></p>` : ''}<table>${row('Uzunluk', fmt(r.L) + ' mm')}${row('Genişlik', fmt(r.W) + ' mm')}${row('Sarma derinliği', fmt(r.wrap) + ' mm')}${row('Duvar', fmt(r.wall) + ' mm')}${row('Kemik boşluğu', fmt(r.clear) + ' mm')}${row('Temas alanı', fmt(r.contact, 0) + ' mm²')}${row('Hacim', fmt(r.volume / 1000, 2) + ' cm³')}</table>
+<table><tr><th>${xl('Vida')}</th><th>${xl('Segment')}</th><th>${xl('Matkap / kovan')}</th><th>${xl('Boy')}</th><th>${xl('Kemik içinde')}</th></tr>${r.screws.map(s => `<tr><td>${s.no}</td><td>${s.seg}</td><td>${fmt(s.d)} / ${fmt(s.D)} mm</td><td>${fmt(s.len, 0)} mm</td><td>${s.inBone != null ? fmt(s.inBone) + ' mm' : '–'}</td></tr>`).join('')}</table>
+<p>${r.prod ? `${xl("Fibula guide'ının üretim STL'i sunucuda yüzey tabanlı boolean ile üretildi:")} ${xl(r.prod.watertight ? 'su geçirmez' : 'su geçirmez değil')}, ${xl(`${r.prod.bodies} parça`)}, ${fmt(r.prod.volume / 1000, 2)} cm³${r.prod.resolution ? xl(`, ızgara ${fmt(r.prod.resolution, 2)} mm`) : ''} (fibula_guide_uretim.stl).${r.prod.ok ? '' : ` <b>${xl("Sunucu bu STL'i basılabilir bulmadı.")}</b>`}` : xl("Fibula guide'ının üretim STL'i alınmadı; fibula_guide.stl 0,4 mm voksel önizlemesidir.")}</p>`;
+  }
   function reportHTML() {
     if (!active()) return '';
     const s = summary(), esc = t => String(t).replace(/[&<>]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[ch]);
     return `<h2>Fibula rekonstrüksiyonu</h2><p>${esc(F.label)} · ${xl(s.bacak_tarafi + ' bacak')} (${xl(s.bacak_tarafi_kaynagi)}) · ${xl(`${s.segment_sayisi} segment · testere payı ${fmt(s.testere_payi_mm)} mm · distal korunan ${fmt(s.distal_korunan_mm, 0)} mm · proksimalde kalan ${s.proksimalde_kalan_mm ?? '–'} mm`)} · ${approved() ? `${xl('onaylı')} (${esc(plan().by || '')})` : xl('onay bekliyor')}</p>
-<table><tr><th>Segment</th><th>Boy</th><th>Distal uçtan</th><th>Uç açıları</th><th>Rotasyon</th><th>Pedikül</th></tr>${s.segmentler.map(g => `<tr><td>${g.no}</td><td>${fmt(g.boy_mm)} mm</td><td>${fmt(g.distal_uctan_mm)} mm</td><td>${fmt(g.kesi_acilari_deg[0])}° / ${fmt(g.kesi_acilari_deg[1])}°</td><td>${g.rotasyon_deg}°</td><td>${g.pedikul_yonu ? xl(g.pedikul_yonu) : '–'}</td></tr>`).join('')}</table>`;
+<table><tr><th>Segment</th><th>Boy</th><th>Distal uçtan</th><th>Uç açıları</th><th>Rotasyon</th><th>Pedikül</th></tr>${s.segmentler.map(g => `<tr><td>${g.no}</td><td>${fmt(g.boy_mm)} mm</td><td>${fmt(g.distal_uctan_mm)} mm</td><td>${fmt(g.kesi_acilari_deg[0])}° / ${fmt(g.kesi_acilari_deg[1])}°</td><td>${g.rotasyon_deg}°</td><td>${g.pedikul_yonu ? xl(g.pedikul_yonu) : '–'}</td></tr>`).join('')}</table>${guideReportHTML(esc)}`;
   }
   async function production(signal) {
     if (!active() || !S.fib.guide || guideStale) return;
@@ -1334,6 +1351,6 @@ window.Fibula = (function () {
   // fibula guide edits from the guide panel: drop the cached key so the guide is rebuilt
   function guideEdited() { guideKey = ''; scheduleGuide(); renderStep(); St.emit('changed'); }
   const guideInfo = () => (active() && last ? { auto: guideAuto(last), body: guideBody(last), screws: guideScrews(last), segs: last.segs, FR: F.c.FR } : null);
-  return { pending: () => !!(active() && guideStale), setActive, activePane: () => activePane, summary: () => (active() ? summary() : null), view: () => view, active, approved, checks, apply, exportFiles, reportHTML, production, setView, state: () => ({ F, last, view }),
+  return { pending: () => !!(active() && guideStale), setActive, activePane: () => activePane, summary: () => (active() ? summary() : null), view: () => view, active, approved, checks, apply, exportFiles, reportHTML, guideReport, production, setView, state: () => ({ F, last, view }),
     graftBone, fibBone: q => (F && F.c ? fibBone(q) : false), guideInfo, guideEdited, plan: () => (active() ? plan() : null), rules, RULES, legSide: () => (F && F.c ? legSide() : null), building: () => building, segmentChoice, lensOk, choice: () => (S.fib && S.fib.choice) || null, defect, MIN_LEN, MAX_N, DEV_WARN, SEG_ERR, STUMP_MIN, DEV_TIE, slotOf: () => (active() ? slotOf(plan()) : null) };
 })();

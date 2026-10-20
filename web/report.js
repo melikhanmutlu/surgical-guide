@@ -186,6 +186,11 @@ window.Report = (function () {
     return out;
   }
 
+  // production STL state in one sentence (made on the server and sound, or only the 0.4 mm voxel preview)
+  function prodLine(p, file) {
+    if (!p) return `${xl("Üretim STL'i alınmadı; pakette yalnız 0,4 mm voksel önizleme var:")} ${file}.stl.`;
+    return `${xl("Üretim STL'i sunucuda yüzey tabanlı boolean ile üretildi")} (${file}_uretim.stl): ${xl(p.watertight ? 'su geçirmez' : 'su geçirmez değil')}, ${xl(`${p.bodies} parça`)}, ${fmt(p.volume / 1000, 2)} cm³${p.resolution ? xl(`, ızgara ${fmt(p.resolution, 2)} mm`) : ''}.${p.ok ? '' : ' ' + xl("Sunucu bu STL'i basılabilir bulmadı.")}`;
+  }
   async function build() {
     const name = (window.CaseStore && CaseStore.caseName()) || ($('caseInfo').querySelector('dd') || {}).textContent || 'Vaka';
     const version = window.CaseStore ? CaseStore.versionLabel() : 'Taslak', when = window.DateFmt ? DateFmt.dateTime(Date.now()) : new Date().toLocaleString('tr-TR');   // dates.js: EN spells the month
@@ -227,6 +232,8 @@ window.Report = (function () {
     const sorted = S.planes.slice().sort((a, b) => a.off - b.off);
     d.table(['Kesi', 'Konum (eksen)', 'Yatay açı', 'Dikey açı', 'Yuva', 'Onay'], S.planes.map((p, i) => [`Kesi ${i + 1}`, `${fmt(p.off)} mm`, `${fmt(p.yaw)}°`, `${fmt(p.pitch)}°`, `${fmt(p.w)} mm`, p.ok ? (p.by || 'onaylı') : 'bekliyor']), [0.16, 0.2, 0.15, 0.15, 0.12, 0.22]);
     d.text(`${xl(`Rezeksiyon: lezyon ${fmt(S.lesion.from)} – ${fmt(S.lesion.to)} mm, güvenlik payı ${fmt(S.lesion.margin)} mm`)}${S.lesion.condyle ? xl(`, kondil dahil (${S.lesion.condyle === 'R' ? 'sağ' : 'sol'}) rezeksiyon`) : ''}${S.g.split ? xl(', iki ayrı guide') : ''}${!S.lesion.condyle && sorted.length >= 2 ? xl(`, kesiler arası ${fmt(sorted.at(-1).off - sorted[0].off)} mm`) : ''}${S.resectedVolume ? xl(`, rezeke hacim ${fmt(S.resectedVolume / 1000, 2)} cm³`) : ''}.`, { size: 22 });
+    const P = S.prod && St.prodKey && S.prod.key === St.prodKey() ? S.prod : null;
+    d.text(prodLine(P && { watertight: P.watertight, bodies: P.bodies, volume: P.volume, resolution: P.resolution || null, ok: P.productionOk !== false }, 'guide'), { size: 21, color: P && P.watertight && P.productionOk !== false ? C.ink : C.warn });
     if (S.screws.length) {
       d.h2('Vidalar');
       d.table(['Vida', 'Konum (eksen, yanal)', 'Eğim', 'Matkap / kovan', 'Boy', 'Kemikte'], S.screws.map((s, i) => { const si = S.result && S.result.screwInfo[i]; return [`Vida ${i + 1}`, `${fmt(s.u)}, ${fmt(s.v)} mm`, `${fmt(s.tiltU, 0)}°, ${fmt(s.tiltV, 0)}°`, `${fmt(s.d)} / ${fmt(s.D)} mm`, `${fmt(s.len, 0)} mm`, si && si.ok ? `${fmt(si.inBone)} mm` : '–']; }), [0.13, 0.24, 0.16, 0.19, 0.12, 0.16]);
@@ -236,6 +243,14 @@ window.Report = (function () {
       d.h2('Fibula segmentleri');
       d.table(['Segment', 'Boy', 'Distal uçtan', 'Uç açıları', 'Rotasyon'], fib.segmentler.map(g => [`Segment ${g.no}`, `${fmt(g.boy_mm)} mm`, `${fmt(g.distal_uctan_mm)} mm`, `${fmt(g.kesi_acilari_deg[0])}° / ${fmt(g.kesi_acilari_deg[1])}°`, `${g.rotasyon_deg}°`]), [0.2, 0.18, 0.2, 0.24, 0.18]);
       d.text(`${fib.fibula_serisi} · ${xl(`testere payı ${fmt(fib.testere_payi_mm)} mm · distal korunan ${fmt(fib.distal_korunan_mm, 0)} mm · proksimalde kalan ${fib.proksimalde_kalan_mm ?? '–'} mm · hattan sapma ${fmt(fib.sapma_mm, 2)} mm`)}`, { size: 21 });
+      const fgr = Fibula.guideReport ? Fibula.guideReport() : null;
+      if (fgr) {
+        d.h2("Fibula guide'ı");
+        if (fgr.stale) d.text("Fibula guide'ı güncelleniyor; rapor son üretilen guide'ı gösteriyor.", { size: 21, color: C.warn });
+        d.table(['Uzunluk', 'Genişlik', 'Sarma', 'Duvar', 'Kemik boşluğu', 'Temas', 'Hacim'], [[`${fmt(fgr.L)} mm`, `${fmt(fgr.W)} mm`, `${fmt(fgr.wrap)} mm`, `${fmt(fgr.wall)} mm`, `${fmt(fgr.clear)} mm`, `${fmt(fgr.contact, 0)} mm²`, `${fmt(fgr.volume / 1000, 2)} cm³`]], [0.14, 0.14, 0.13, 0.13, 0.16, 0.15, 0.15]);
+        if (fgr.screws.length) d.table(['Vida', 'Segment', 'Matkap / kovan', 'Boy', 'Kemikte'], fgr.screws.map(x => [`Vida ${x.no}`, `${x.seg}`, `${fmt(x.d)} / ${fmt(x.D)} mm`, `${fmt(x.len, 0)} mm`, x.inBone != null ? `${fmt(x.inBone)} mm` : '–']), [0.18, 0.16, 0.26, 0.18, 0.22]);
+        d.text(prodLine(fgr.prod, 'fibula_guide'), { size: 21, color: fgr.prod && fgr.prod.watertight && fgr.prod.ok ? C.ink : C.warn });
+      }
     }
     (window.ReportSections || []).forEach(f => { try { f(d, C); } catch (e) { /* optional section */ } });
     d.h2('Montaj sırası');
@@ -245,7 +260,11 @@ window.Report = (function () {
     if (!ck.length) d.text('Tüm kontroller geçti.', { size: 22, color: C.ok });
     ck.forEach(([c, t, m]) => d.text(`${xl(t)}: ${xt(m)}`, { size: 21, color: c === 'crit' ? C.crit : c === 'warn' ? C.warn : C.ink }));
     d.keep(330); d.h2('Onay');
-    d.signature([{ role: 'Cerrah', name: surgeon ? `${xl('Ad Soyad:')} ${surgeon}` : '' }, { role: 'Biyomedikal mühendis' }]);
+    // names and dates from the plan approvals (Audit): the engineer who gave the technical approval is printed, not left blank
+    const ap = r => { const s = window.Audit && Audit.status ? Audit.status(r) : null; return s && s.ok ? s.e : null; }, eng = ap('eng'), sur = ap('sur');
+    const day = iso => (window.DateFmt ? DateFmt.dateTime(iso) : new Date(iso).toLocaleString('tr-TR'));
+    d.signature([{ role: 'Cerrah', name: surgeon ? `${xl('Ad Soyad:')} ${surgeon}` : '', date: sur ? `${xl('Klinik onay:')} ${day(sur.at)}` : '' },
+      { role: 'Biyomedikal mühendis', name: eng ? `${xl('Ad Soyad:')} ${eng.name}` : '', date: eng ? `${xl('Teknik onay:')} ${day(eng.at)}` : '' }]);
     d.footer();
     const blob = pdfOf(d.pages.map(jpegOf));
     St.busy(false);

@@ -12,10 +12,19 @@ window.Lesion = (function () {
 
   const n = () => S.red ? S.red.nx * S.red.ny * S.red.nz : 0;
   const ensure = () => { const N = n(); if (!mask || mask.length !== N) mask = new Uint8Array(N); };
-  const count = () => { let c = 0; if (mask) for (let i = 0; i < mask.length; i++) c += mask[i]; return c; };
+  // the painted voxels as a list, kept until the mask changes (a stroke, an undo, a new mask): the checks, the plan hash
+  // and the status read it on every edit, and a scan of the whole working grid costs about a second on a CT
+  let ver = 0, memo = null;
+  function painted() {
+    if (memo && memo.mask === mask && memo.ver === ver) return memo;
+    const list = [];
+    if (mask) for (let v = 0; v < mask.length; v++) if (mask[v]) list.push(v);
+    return (memo = { mask, ver, list: Int32Array.from(list), rle: null });
+  }
+  const count = () => painted().list.length;
   function points() {
-    const out = [], r = S.red; if (!mask || !r) return out;
-    for (let v = 0; v < mask.length; v++) if (mask[v]) out.push(V(...G.worldOf(r, v % r.nx, ((v / r.nx) | 0) % r.ny, (v / (r.nx * r.ny)) | 0)));
+    const out = [], r = S.red, L = painted().list; if (!mask || !r) return out;
+    for (const v of L) out.push(V(...G.worldOf(r, v % r.nx, ((v / r.nx) | 0) % r.ny, (v / (r.nx * r.ny)) | 0)));
     return out;
   }
 
@@ -32,6 +41,7 @@ window.Lesion = (function () {
       const v = i + r.nx * (j + r.ny * k);
       if (erase ? mask[v] : !mask[v]) { mask[v] = erase ? 0 : 1; changed++; }
     }
+    if (changed) ver++;
     return changed;
   }
   function paint(world, axis, first) {
@@ -51,14 +61,14 @@ window.Lesion = (function () {
   function build() {
     const r = S.red;
     if (!r || !count()) { St.setPart('lesionPaint', null, null); return; }
-    let b = [Infinity, Infinity, Infinity, -1, -1, -1];
-    const f = new Float32Array(mask.length);
-    for (let v = 0; v < mask.length; v++) if (mask[v]) {
-      f[v] = 1; const i = v % r.nx, j = ((v / r.nx) | 0) % r.ny, k = (v / (r.nx * r.ny)) | 0;
-      b = [Math.min(b[0], i), Math.min(b[1], j), Math.min(b[2], k), Math.max(b[3], i), Math.max(b[4], j), Math.max(b[5], k)];
-    }
+    const L = painted().list, b = [Infinity, Infinity, Infinity, -1, -1, -1];
+    for (const v of L) { const i = v % r.nx, j = ((v / r.nx) | 0) % r.ny, k = (v / (r.nx * r.ny)) | 0; if (i < b[0]) b[0] = i; if (j < b[1]) b[1] = j; if (k < b[2]) b[2] = k; if (i > b[3]) b[3] = i; if (j > b[4]) b[4] = j; if (k > b[5]) b[5] = k; }
+    // the surface is taken on the painted box (plus 2 voxels) only, not on the whole working grid
     const bb = [b[0] - 2, b[1] - 2, b[2] - 2, b[3] + 2, b[4] + 2, b[5] + 2].map((x, a) => Math.max(0, Math.min([r.nx, r.ny, r.nz][a % 3] - 1, x)));
-    const m = St.meshFromNets(G.surfaceNets(f, r.nx, r.ny, r.nz, 0.5, bb), St.toWorldRed, new THREE.MeshStandardMaterial({ color: COLOR, roughness: 0.7, transparent: true, opacity: 0.55, depthWrite: false }));
+    const sx = bb[3] - bb[0] + 1, sy = bb[4] - bb[1] + 1, sz = bb[5] - bb[2] + 1, f = new Float32Array(sx * sy * sz);
+    for (const v of L) { const i = v % r.nx, j = ((v / r.nx) | 0) % r.ny, k = (v / (r.nx * r.ny)) | 0; f[(i - bb[0]) + sx * ((j - bb[1]) + sy * (k - bb[2]))] = 1; }
+    const toW = (i, j, k) => St.toWorldRed(i + bb[0], j + bb[1], k + bb[2]);
+    const m = St.meshFromNets(G.surfaceNets(f, sx, sy, sz, 0.5), toW, new THREE.MeshStandardMaterial({ color: COLOR, roughness: 0.7, transparent: true, opacity: 0.55, depthWrite: false }));
     m.renderOrder = 4;
     St.setPart('lesionPaint', 'Lezyon (boyanan)', m, COLOR);
   }
@@ -181,7 +191,7 @@ window.Lesion = (function () {
   function unrle(s, N) { const a = new Uint8Array(N); let p = 0, cur = 0; String(s).split(',').forEach(t => { const r = parseInt(t, 36) || 0; if (cur) a.fill(1, p, Math.min(N, p + r)); p += r; cur ^= 1; }); return a; }
   (window.PlanExt = window.PlanExt || {}).lesionPaint = {
     label: 'Boyanan lezyon',
-    get: () => (count() ? { dims: [S.red.nx, S.red.ny, S.red.nz], m: rle(mask) } : null),
+    get: () => { const P = painted(); if (!P.list.length) return null; if (P.rle === null) P.rle = rle(mask); return { dims: [S.red.nx, S.red.ny, S.red.nz], m: P.rle }; },
     set(x) {
       mask = x && S.red && Array.isArray(x.dims) && x.dims.join() === [S.red.nx, S.red.ny, S.red.nz].join() && typeof x.m === 'string' ? unrle(x.m, n()) : null;
       planMsg = ''; build(); status(); if (window.MPR) MPR.redraw();

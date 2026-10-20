@@ -98,7 +98,7 @@ export function studio(opts = {}) {
   g.YOLMED_SERVER = opts.server || '';
   if (opts.dicom) vm.runInContext(fs.readFileSync(path.join(VENDOR, 'dicomParser.min.js'), 'utf8'), P.ctx, { filename: 'dicomParser.min.js' });
   (opts.pre || []).forEach(f => P.load(f));
-  P.load('geom.js'); P.load('seat.js');
+  P.load('geom.js'); P.load('seat.js'); P.load('gkernel.js');
   P.load('app.js');
   (opts.post || []).forEach(f => P.load(f));
   return P;

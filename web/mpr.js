@@ -63,22 +63,47 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
     const idx = g.index ? g.index.array : null, r = { sig, P: out, I: idx };
     st.cache.set(key, r); return r;
   }
-  function contour(v, pt, T, ctx) {
-    const { P, I } = idxVerts(pt), a = v.axis, s = st.cur[a], n = I ? I.length : P.length / 3;
-    const vtx = t => I ? I[t] : t;
-    ctx.beginPath();
-    const pts = [];
-    for (let t = 0; t < n; t += 3) {
+  // triangles per slice along one axis (built once per mesh and axis): a slice visits only the triangles that reach it
+  // instead of the whole mesh (a CT bone model has a million or more), so painting and scrolling stay fluid
+  function buckets(r, a) {
+    r.bk = r.bk || [];
+    if (r.bk[a]) return r.bk[a];
+    const { P, I } = r, D = dims()[a], n = I ? I.length : P.length / 3, cnt = new Int32Array(D + 1);
+    const vtx = t => I ? I[t] : t, span = t => { const A = P[vtx(t) * 3 + a], B = P[vtx(t + 1) * 3 + a], C = P[vtx(t + 2) * 3 + a]; return [Math.max(0, Math.floor(Math.min(A, B, C))), Math.min(D - 1, Math.floor(Math.max(A, B, C)))]; };
+    for (let t = 0; t < n; t += 3) { const [lo, hi] = span(t); for (let k = lo; k <= hi; k++) cnt[k + 1]++; }
+    for (let k = 0; k < D; k++) cnt[k + 1] += cnt[k];
+    const list = new Int32Array(cnt[D]), fill = cnt.slice(0, D);
+    for (let t = 0; t < n; t += 3) { const [lo, hi] = span(t); for (let k = lo; k <= hi; k++) list[fill[k]++] = t; }
+    return (r.bk[a] = { start: cnt, list });
+  }
+  // the contour of a mesh on a slice as line segments in image coordinates; the last slice per axis is kept, so a
+  // redraw that does not change the slice (painting, dragging a cut, zoom) only strokes it
+  function segments(v, r) {
+    const a = v.axis, s = st.cur[a];
+    r.segs = r.segs || [];
+    const c = r.segs[a]; if (c && c.s === s && c.ix === v.ix && c.flip === v.flipY) return c.xy;
+    const { P, I } = r, vtx = t => I ? I[t] : t, H = dims()[v.iy], out = [], pts = [];
+    const visit = t => {
       const A = vtx(t) * 3, B = vtx(t + 1) * 3, C = vtx(t + 2) * 3;
       const da = P[A + a] - s, db = P[B + a] - s, dc = P[C + a] - s;
-      if ((da > 0 && db > 0 && dc > 0) || (da < 0 && db < 0 && dc < 0)) continue;
+      if ((da > 0 && db > 0 && dc > 0) || (da < 0 && db < 0 && dc < 0)) return;
       pts.length = 0;
-      const edge = (X, Y, dx, dy) => { if ((dx > 0) !== (dy > 0)) { const u = dx / (dx - dy); pts.push([P[X + v.ix] + u * (P[Y + v.ix] - P[X + v.ix]), P[X + v.iy] + u * (P[Y + v.iy] - P[X + v.iy])]); } };
+      const edge = (X, Y, dx, dy) => { if ((dx > 0) !== (dy > 0)) { const u = dx / (dx - dy); pts.push(P[X + v.ix] + u * (P[Y + v.ix] - P[X + v.ix]), P[X + v.iy] + u * (P[Y + v.iy] - P[X + v.iy])); } };
       edge(A, B, da, db); edge(B, C, db, dc); edge(C, A, dc, da);
-      if (pts.length < 2) continue;
-      const H = dims()[v.iy], y0 = v.flipY ? H - 1 - pts[0][1] : pts[0][1], y1 = v.flipY ? H - 1 - pts[1][1] : pts[1][1];
-      ctx.moveTo(T.fx(pts[0][0]), T.fy(y0)); ctx.lineTo(T.fx(pts[1][0]), T.fy(y1));
-    }
+      if (pts.length < 4) return;
+      out.push(pts[0], v.flipY ? H - 1 - pts[1] : pts[1], pts[2], v.flipY ? H - 1 - pts[3] : pts[3]);
+    };
+    // (a triangle reaching s is listed under floor(s): its own span runs from floor(min) to floor(max))
+    if (s >= 0 && s < dims()[a]) { const b = buckets(r, a), k = Math.floor(s); for (let q = b.start[k]; q < b.start[k + 1]; q++) visit(b.list[q]); }
+    else { const n = I ? I.length : P.length / 3; for (let t = 0; t < n; t += 3) visit(t); }
+    const xy = new Float32Array(out);
+    r.segs[a] = { s, ix: v.ix, flip: v.flipY, xy };
+    return xy;
+  }
+  function contour(v, pt, T, ctx) {
+    const xy = segments(v, idxVerts(pt));
+    ctx.beginPath();
+    for (let q = 0; q < xy.length; q += 4) { ctx.moveTo(T.fx(xy[q]), T.fy(xy[q + 1])); ctx.lineTo(T.fx(xy[q + 2]), T.fy(xy[q + 3])); }
     ctx.stroke();
   }
   // a world-space plane through p with normal N, as a line on this slice (clipped to the image)
