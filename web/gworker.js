@@ -9,6 +9,7 @@ self.onmessage = e => {
   try {
     if (m.op === 'guide') { const out = GKernel.run(m.K); self.postMessage({ id: m.id, out }, GKernel.transfer(out)); return; }
     if (m.op === 'nets') { const out = G.surfaceNets(m.field, m.nx, m.ny, m.nz, m.level, m.box || undefined); self.postMessage({ id: m.id, out }, [out.positions.buffer, out.indices.buffer]); return; }
+    if (m.op === 'blurNets') { const f = G.blur(m.mask, m.nx, m.ny, m.nz), out = G.surfaceNets(f, m.nx, m.ny, m.nz); self.postMessage({ id: m.id, out }, [out.positions.buffer, out.indices.buffer]); return; }
     if (m.op === 'lite') {
       const it = G.decimateGen({ positions: m.positions, indices: m.indices }, m.tol); let r;
       do r = it.next(); while (!r.done);

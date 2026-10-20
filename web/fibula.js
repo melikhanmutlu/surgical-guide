@@ -118,7 +118,10 @@ window.Fibula = (function () {
       St.busy(false); msg('Fibula BT\'si açılamadı: ' + e.message); return false;
     }
     St.busy(true, 'Fibula ayrıştırılıyor…'); await St.sleep();
-    const red = G.reduce(vol, 0.8), { labels, comps, count } = G.components(G.threshold(red, THR), red.nx, red.ny, red.nz, 200);
+    // (a yield between the stages: each is 0.5-1.5 s on a real leg CT, together they held the page for several seconds)
+    const red = G.reduce(vol, 0.8); await St.sleep();
+    const thr = G.threshold(red, THR); await St.sleep();
+    const { labels, comps, count } = G.components(thr, red.nx, red.ny, red.nz, 200); await St.sleep();
     const top = comps.slice(0, 6), longOf = st => st.filter(c => c.len >= 80 && c.elong >= 3);
     let stats = boneStats(red, labels, top), long = longOf(stats), strict = fibulaCands(long);
     if (!long.length) { St.busy(false); msg('Bu seride uzun kemik (fibula) bulunamadı. Alt bacak BT\'si yükleyin.'); return false; }
@@ -128,7 +131,7 @@ window.Fibula = (function () {
     const thickAll = long.filter(c => c.rad > FIB_R[1] && c.len >= 150), first = strict, thick = thickAll.length > first.length ? thickAll : [];   // a clean leg CT has as many fibulas as thick pieces
     if (thick.length) {
       St.busy(true, 'Tibia ve fibula ayrılıyor…'); await St.sleep();
-      const seps = thick.map(c => ({ c, sepr: G.separator(labels, red.nx, red.ny, red.nz, red.sp, { label: c.label }) }));
+      const seps = []; for (const c of thick) { seps.push({ c, sepr: G.separator(labels, red.nx, red.ny, red.nz, red.sp, { label: c.label }) }); await St.sleep(); }
       const rest = top.filter(c => !thick.some(t => t.label === c.label));
       const cutAt = ratio => {
         let base = count; const pieces = [];
@@ -222,12 +225,18 @@ window.Fibula = (function () {
     rads.sort((x, y) => x - y);
     const FR = rads[Math.floor(rads.length * 0.9)] + Math.min(...red.sp) / 2, FRm = Math.max(FR, rads[Math.floor(rads.length * 0.99)] + Math.min(...red.sp) / 2);
     const Fm = G.blur(mask, nx, ny, nz), toW = (x, y, z) => G.worldOf(red, x, y, z);
-    const geo = St.meshFromNets(G.surfaceNets(Fm, nx, ny, nz), toW, mat(BONE)).geometry;
-    let tgeo = null;
-    if (c.tibia) { const tm = new Uint8Array(n); for (let v = 0; v < n; v++) if (F.labels[v] === c.tibia.label) tm[v] = 1; tgeo = St.meshFromNets(G.surfaceNets(G.blur(tm, nx, ny, nz), nx, ny, nz), toW, mat(BONE)).geometry; }
+    // the fibula and tibia surfaces are meshed in the background (on the real CT 4-5 s of surface nets and blur held
+    // the page): the geometries start empty, the scenes use them at once and they fill in when the meshes arrive. The
+    // plan only needs the field (Fm).
+    const geo = new THREE.BufferGeometry(), tgeo = c.tibia ? new THREE.BufferGeometry() : null, uid = ++candSeq;
     // uid: caches keyed on the candidate (screw sites, cross-sections) are tied to this exact frame and bone; an index
     // is not enough (a split renumbers the list, a donor-side change turns e2 of the same candidate)
-    F.c = { i, uid: ++candSeq, FC: c.C.clone(), FA: [a, e2, e3], smin, smax, FR, FRm, off, mask, Fm, geo, tgeo, centroid: [c.C.x, c.C.y, c.C.z] };
+    F.c = { i, uid, FC: c.C.clone(), FA: [a, e2, e3], smin, smax, FR, FRm, off, mask, Fm, geo, tgeo, centroid: [c.C.x, c.C.y, c.C.z] };
+    const fill = (g, net) => { if (!F.c || F.c.uid !== uid) return; const m = St.meshFromNets(net, toW, null); g.copy(m.geometry); m.geometry.dispose(); g.computeBoundingSphere(); g.computeBoundingBox(); St.render(); St.emit('fibMesh'); };
+    F.c.meshReady = Promise.all([
+      St.netsOf(Fm.slice(), nx, ny, nz).then(net => fill(geo, net)),
+      tgeo ? (() => { const tm = new Uint8Array(n); for (let v = 0; v < n; v++) if (F.labels[v] === c.tibia.label) tm[v] = 1; return St.blurNetsOf(tm, nx, ny, nz).then(net => fill(tgeo, net)); })() : null,
+    ]).catch(() => { /* a view without the leg model; the plan is unaffected */ });
     buildScenes();
   }
   const offAt = s => { const o = F.c.off; return o[Math.min(o.length - 1, Math.max(0, Math.round(s - F.c.smin)))]; };
@@ -273,6 +282,7 @@ window.Fibula = (function () {
   }
 
   // ---------- defect between the first and last mandible cut ----------
+  const FACE_R = 25;   // stump face: bone within this distance of the cut point
   function defect() {
     const E = S.resMask && St.resEnds(); if (!E) return null;
     const { A, B } = E, r = S.red;
@@ -296,12 +306,15 @@ window.Fibula = (function () {
       const t = dA + dB > 1e-6 ? len * Math.min(1, Math.max(0, dA / (dA + dB))) : q.clone().sub(A.p).dot(dir), b = Math.min(nb - 1, Math.max(0, Math.floor(t / bw)));
       add(acc[b], q); const hq = q.dot(vup); if (hq > crest[b]) crest[b] = hq;
       const da = q.clone().sub(A.p).dot(NA) - A.w / 2, db = -(q.clone().sub(B.p).dot(NB)) - B.w / 2;
-      BANDS.forEach((w, n) => { if (da < w) add(ea[n], q); if (db < w) add(eb[n], q); });
+      // (only bone near the cut point: an oblique plane can also cross the ramus or coronoid 30-60 mm away, which pulled the
+      // face centre up and seated the graft above the stump, Denetim 5)
+      const nA = q.distanceTo(A.p) < FACE_R, nB = q.distanceTo(B.p) < FACE_R;
+      BANDS.forEach((w, n) => { if (da < w && nA) add(ea[n], q); if (db < w && nB) add(eb[n], q); });
     }
     const cen = x => V(x[0] / x[3], x[1] / x[3], x[2] / x[3]);
     const firstBand = e => e.find(x => x[3] >= 6) || null;
     // kept bone within `w` mm of the plane around the cut point (the stump face itself), when the resected side has none
-    const keptFace = (p, N, w = 3, R = 25) => {
+    const keptFace = (p, N, w = 3, R = FACE_R) => {
       const c = G.indexOf(r, p.toArray()), rad = r.sp.map(x => Math.ceil(R / x)), x = [0, 0, 0, 0];
       for (let k = Math.max(0, Math.round(c[2]) - rad[2]); k <= Math.min(r.nz - 1, Math.round(c[2]) + rad[2]); k++) for (let j = Math.max(0, Math.round(c[1]) - rad[1]); j <= Math.min(r.ny - 1, Math.round(c[1]) + rad[1]); j++) for (let i = Math.max(0, Math.round(c[0]) - rad[0]); i <= Math.min(r.nx - 1, Math.round(c[0]) + rad[0]); i++) {
         if (!S.mask[i + r.nx * (j + r.ny * k)]) continue;
@@ -548,6 +561,8 @@ window.Fibula = (function () {
   function fitLeg(cam, ctl) {
     const box = new THREE.Box3(); leg.children.filter(o => o.userData.disc || o.userData.guide).forEach(o => box.expandByObject(o));
     if (box.isEmpty()) box.setFromObject(leg);
+    // (the leg mesh may still be on its way from the background: the bone's own extent)
+    if (box.isEmpty()) box.setFromPoints([toFib(F.c.smin), toFib(F.c.smax)]).expandByScalar(F.c.FR);
     const ctr = box.getCenter(V()), r = Math.max(60, box.getSize(V()).length() / 2);   // at least 120 mm across: the leg stays recognisable around a short guide
     const dir = F.c.FA[1].clone().add(F.c.FA[2].clone().multiplyScalar(0.4)).normalize();
     ctl.target.copy(ctr); cam.position.copy(ctr).add(dir.multiplyScalar(r / Math.sin(deg(cam.fov) / 2) * 1.1)); ctl.update();
@@ -650,6 +665,16 @@ window.Fibula = (function () {
   const needsEnds = c => segWant(c).reduce((a, b) => a + b, 0) < 3;
   // a screw past the outer cut, on the guide end (outside the graft)
   const isEnd = (c, f) => Math.abs(f.off) > c.segs[f.seg].L / 2;
+  // An automatic fibula guide screw ends 0.5 mm inside the far cortex (bicortical, no tip out of the bone): the
+  // peroneal vessels of the pedicle run along the posteromedial fibula, and a tip that stands out of the far side can
+  // reach them. The hole crosses the medullary canal, so the far end is the last bone along the drill, not the first gap.
+  function fitLen(c, f) {
+    const st = screwAt(c, f); if (!st.entry) return;
+    let lastBone = 0;
+    for (let t = 0; t <= f.len + 1e-9; t += 0.25) if (fibBone(st.entry.clone().addScaledVector(st.dir, t))) lastBone = t;
+    const L = Math.floor(lastBone - 0.5);
+    if (L >= 6 && L < f.len) f.len = L;
+  }
   function autoScrews(c) {
     const body = guideBody(c), pls = slotPlanes(c);
     const key = JSON.stringify([F.c.uid, rules(), body.W, body.wrap, body.wall, body.clear, pls.map(p => [p.pSlot.toArray(), p.N.toArray(), p.w].flat().map(x => Math.round(x * 100)))]);
@@ -713,6 +738,7 @@ window.Fibula = (function () {
       picks[i].sort((a, b) => a.s - b.s).forEach(p => out.push(Object.assign({}, p.f, { auto: 1 })));
       if (i === lower.length - 1) ends.filter(e => e.side > 0).forEach(e => out.push(e.f));
     });
+    out.forEach(f => fitLen(c, f));
     autoKey = key; autoVal = out;
     return out.map(f => Object.assign({}, f));
   }
@@ -1045,7 +1071,7 @@ window.Fibula = (function () {
   // ---------- plan persistence ----------
   async function start(kind, files) {
     if (!(await load(kind, files))) return;
-    setCandidate(0);
+    await St.sleep(); setCandidate(0);
     const P0 = defaultPlan(); P0.source = Object.assign({}, F.source); P0.cand = F.c.centroid.map(x => Math.round(x * 10) / 10);
     S.fib = { plan: P0, guide: null };
     overSample = !S.source || S.source.type === 'sample';
