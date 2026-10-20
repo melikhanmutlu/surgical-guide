@@ -3,3 +3,5 @@ __pycache__
 *.sqlite
 outputs
 research
+.claude
+.caveman.json
