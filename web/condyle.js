@@ -73,7 +73,7 @@ window.Condyle = (function () {
   function involved() {
     if (S.lesion.condyle) return true;
     const ref = cond(), E = St.resEnds(); if (!ref || !E || !S.anchor) return false;
-    if (Math.abs(St.frameAxes().u.z) > 0.6) return true;
+    if (St.ramusAxis && St.ramusAxis()) return true;
     return ['R', 'L'].some(k => ref.cond[k] && [E.A.p, E.B.p].some(p => p.distanceTo(V(...ref.cond[k])) < 50));
   }
   function position() {

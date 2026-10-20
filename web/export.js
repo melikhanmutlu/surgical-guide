@@ -189,6 +189,8 @@ window.Exports = (function () {
   async function save(name, data, type) { await St.offer(name, new Blob([data], { type })); }
   $('x3mf').addEventListener('click', async () => {
     if (!St.parts.guide) { msg('Önce guide üretilmeli.'); return; }
+    // printable guides leave only through the same gate as the package (approvals, surgeon, no critical check)
+    if ($('expZip').disabled) { msg('Guide 3MF dosyası paketle aynı koşulla alınır: onaylar tamam, cerrah adı girili, kritik kontrol yok.'); return; }
     St.busy(true, '3MF hazırlanıyor…'); await St.sleep();
     try { await save('guideler.3mf', guides3MF(), 'model/3mf'); await save('modeller.3mf', models3MF(), 'model/3mf'); msg('guideler.3mf ve modeller.3mf hazır.'); } catch (e) { msg('3MF oluşturulamadı: ' + e.message); }
     St.busy(false);

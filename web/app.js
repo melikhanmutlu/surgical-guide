@@ -727,7 +727,7 @@
     if (pts.length) { await Lesion.plan(); }
     else if (!S.anchor) {
       const pr = S.presetRay, hit = pr && new THREE.Raycaster(pr.from, pr.dirv).intersectObject(parts.bone.obj, false)[0];
-      if (!hit) { S.autoAfter = true; setMode('anchor'); alertMsg('Modelde rezeksiyon bölgesine bir kez tıklayın; gerisi otomatik yapılacak.'); return; }
+      if (!hit) { S.autoAfter = true; setMode('anchor'); alertMsg('Modelde ya da kesitlerde rezeksiyon bölgesine bir kez tıklayın; gerisi otomatik yapılacak.'); return; }
       setAnchor(hit.point.clone(), pr.dirv.clone().negate()); suggest();
     }
     if (!S.planes.length) suggest();
@@ -741,6 +741,7 @@
   async function resetPlan() {
     if (S.anchor && !confirm('Plan sıfırlansın mı? Kesiler, guide ve vidalar silinir; onaylar da düşer.')) return;
     S.anchor = null; S.planes = []; S.screws = []; S.sel = null; S.result = null; S.grid = null; S.guideOn = false; S.resRemoved = false;
+    S.lesion.from = -6; S.lesion.to = 6; syncLesion();   // the next centre starts from the default range, not the old one
     Object.assign(S.gAuto, AUTO_DEFAULT); S.g.wrapU = null; S.g.vc = 0; S.fitLog = []; S.autoSize = null;
     unapproveAll(); $('guideStat').textContent = '';
     if (window.Lesion && Lesion.clear) Lesion.clear();
@@ -756,8 +757,9 @@
     m.position.copy(S.anchor.p); setPart('anchor', 'Guide merkezi', m, COLORS.anchor);
   }
   function setAnchor(p, nGuess) {
+    unapproveAll();      // a new centre moves the guide frame: every approved cut and screw (hand-set ones too) is checked again
     S.anchor = frameAt(p, nGuess);
-    S.g.roll = 0; S.g.vc = 0;
+    S.g.roll = 0; S.g.vc = 0; S.g.rot = 0;   // a new centre starts on the bone axis (a turn kept from the last plan would tilt the new one)
     showAnchor();
   }
   // local bone frame at a surface point: seating normal n (surface normal blended with the direction away from the local
@@ -1238,10 +1240,16 @@
   }
   function suggest() {
     if (!S.anchor) return;
+    // a painted lesion decides the range: a new centre or "propose cuts" plans from the paint again (from/to were
+    // written relative to the old centre and would put the cuts beside the lesion)
+    const painted = window.Lesion && Lesion.points ? Lesion.points() : [];
+    if (painted.length) { planFromLesion(painted); return; }
     const L = S.lesion, a = Math.min(L.from, L.to) - L.margin, b = Math.max(L.from, L.to) + L.margin;
     // a short resection keeps straight cuts: the bone barely turns between them, and two cuts turned towards each other
     // would shorten the defect below the planned length (and the fibula segment below its 20 mm minimum)
     S.planes = b - a >= CUT_TURN_SPAN ? [cutAlongBone(a), cutAlongBone(b)] : [];
+    // a turned cut must still lie past its end of the range (where it crosses the guide axis): else it is kept straight
+    if (S.planes.length) S.planes = S.planes.map((p, k) => (p.pv !== undefined && (k === 0 ? p.off > a : p.off < b) ? { off: k === 0 ? a : b, yaw: 0, pitch: 0, w: 1.2, ok: false } : p));
     const straight = [{ off: a, yaw: 0, pitch: 0, w: 1.2, ok: false }, { off: b, yaw: 0, pitch: 0, w: 1.2, ok: false }];
     if (!S.planes.length || S.planes[0].off >= S.planes[1].off) S.planes = straight;
     // a cut turned with the bone near the angle can swing up past the sigmoid notch and leave a condyle in the
@@ -1252,6 +1260,23 @@
       const turned = S.planes.slice();
       for (const k of [0, 1]) if (turned[k].pv !== undefined) { S.planes = turned.map((p, i) => i === k ? straight[i] : p); if (!takesCondyle()) break; S.planes = turned; }
       if (takesCondyle()) S.planes = straight;
+    }
+    // a cut turned with the bone is placed at the range end measured along the bone; on a curved jaw its lingual
+    // side can then cross into the range: moved outwards until the range clears it by the margin
+    if (S.planes.some(p => p.pv !== undefined)) {
+      const pts = lesionPts(), { u } = frameAxes(), pw = planesWorld();
+      pw.forEach((p, k) => {
+        if (p.pl.pv === undefined || !pts.length) return;
+        const side = k === 0 ? 1 : -1, N = p.N.dot(u) < 0 ? p.N.clone().negate() : p.N, nu = N.dot(u);
+        let d = Infinity; for (const q of pts) { const x = side * q.clone().sub(p.p).dot(N); if (x < d) d = x; }
+        const lack = L.margin - (d + stumpGap(p));
+        if (lack > 0 && nu > 0.2) p.pl.off = Math.round((p.pl.off - side * lack / nu) * 10 - side * 0.5) / 10;
+      });
+      // the range has to lie between the two cuts; when the turned pair does not hold it (a wedge that misses the
+      // bone), the cuts stay square to the guide axis
+      const pw2 = planesWorld(), sideOf = (p, k, q) => (k === 0 ? 1 : -1) * q.clone().sub(p.p).dot(p.N.dot(u) < 0 ? p.N.clone().negate() : p.N);
+      let inside = 0; for (const q of pts) if (sideOf(pw2[0], 0, q) > 0 && sideOf(pw2[1], 1, q) > 0) inside++;
+      if (pts.length && inside < 0.95 * pts.length) S.planes = straight;
     }
     if (S.guideOn) placeScrews(); else S.screws = [];
     unapprove(S.lesion); S.sel = null;
@@ -1391,7 +1416,8 @@
     // with a centred slot it lies w/2 behind the plane
     const { u, v, n } = frameAxes(), A0 = S.anchor.p, L = S.lesion, w = 1.2, clear = L.margin + (S.g.kerfSide ? 0 : w / 2);
     const rel = pts.map(q => q.clone().sub(A0)), offs = rel.map(q => q.dot(u));
-    const lo = Math.min(...offs), hi = Math.max(...offs), mid = (lo + hi) / 2;
+    let lo = Infinity, hi = -Infinity; for (const o of offs) { if (o < lo) lo = o; if (o > hi) hi = o; }
+    const mid = (lo + hi) / 2;
     L.from = Math.round(lo * 2) / 2; L.to = Math.round(hi * 2) / 2;
     // bone near the lesion, every other voxel (enough to compare candidate cuts)
     const r = S.red, c = A0.clone().add(u.clone().multiplyScalar(mid)), R = (hi - lo) / 2 + L.margin + 40, bone = [];
@@ -1414,7 +1440,7 @@
         const d0 = off * un; let cnt = 0;
         for (const b of bone) { const s = b.dot(N) - d0, along = b.dot(u); if (side < 0 ? s > 0 && along < mid : s < 0 && along > mid) cnt++; }
         const ang = Math.abs(yaw) + Math.abs(pitch);
-        out.push({ pl: { off: Math.round(off * 10) / 10, yaw, pitch, w, ok: false }, N, d0, cost: cnt * (1 + 0.006 * ang) + 3 * ang });
+        out.push({ pl: { off: (side < 0 ? Math.floor(off * 10 + 1e-6) : Math.ceil(off * 10 - 1e-6)) / 10, yaw, pitch, w, ok: false }, N, d0, cost: cnt * (1 + 0.006 * ang) + 3 * ang });
       }
       return out.sort((a, b) => a.cost - b.cost);
     }
@@ -1448,8 +1474,16 @@
     if (ramusAxis()) return { len, why: 'ramus' };
     const off = axisOffBone(); return off ? { len, why: 'axis', at: off.off } : null;
   }
-  // the guide axis runs up the ramus (more vertical than not)
-  function ramusAxis() { return !!S.anchor && Math.abs(frameAxes().u.z) > 0.6; }
+  // the guide axis runs up the ramus. With the condyles known: the centre lies within 55 mm of one and the axis points at
+  // it (the scanner's z says little: a jaw scanned tilted 35-50° has a body axis as steep as 0.6-0.8 in z). Without
+  // them, an axis that is nearly vertical in the scan.
+  function ramusAxis() {
+    if (!S.anchor) return false;
+    const u = frameAxes().u, ref = window.Ref && Ref.get && Ref.get(), conds = ref && ref.cond ? ['R', 'L'].map(k => ref.cond[k]).filter(Boolean).map(p => V(...p)) : [];
+    if (!conds.length) return Math.abs(u.z) > 0.85;
+    const c = conds.reduce((a, b) => (b.distanceTo(S.anchor.p) < a.distanceTo(S.anchor.p) ? b : a)), d = c.clone().sub(S.anchor.p), L = d.length();
+    return L < 55 && Math.abs(u.dot(d) / (L || 1)) > 0.7;
+  }
   // the straight guide axis between the outer cuts: the first position where no bone lies within AXIS_DROP mm below the
   // guide plane across the body width (a single straight guide cannot follow the bone there), or null
   function axisOffBone() {
@@ -1582,9 +1616,11 @@
     const hit = rc.intersectObjects(targets, false)[0]; if (!hit) return false;
     const nrm = hit.face.normal.clone().transformDirection(hit.object.matrixWorld); if (nrm.dot(out) < 0) nrm.negate();
     setAnchor(hit.point.clone(), nrm);
-    // the guide axis follows the painted lesion when the stroke has a direction (6 mm or more across the seating
-    // normal): on the chin or up the ramus the local bone PCA is ambiguous (the bone is as tall as it is long within
-    // 16 mm), and the surgeon's stroke says which way the resection runs
+    // the guide axis runs along the bone. Candidates: the local bone PCA, the arch tangent and the painted stroke's
+    // direction (6 mm or more across the seating normal). On the chin or up the ramus the 16 mm PCA is ambiguous, and a
+    // lesion as tall as it is long gives a stroke that runs across the bone; so the candidate along which the bone runs
+    // furthest under the guide wins, the stroke being kept when it runs at least 70 % as far (it says which way the resection goes)
+    let stroke = null;
     const nA = S.anchor.n, flat = pts.map(q => q.clone().sub(c).addScaledVector(nA, -q.clone().sub(c).dot(nA)));
     if (flat.length >= 2) {
       const C = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
@@ -1592,10 +1628,33 @@
       let e = flat.reduce((a, b) => (b.lengthSq() > a.lengthSq() ? b : a), flat[0]).clone(); if (e.lengthSq() < 1e-6) e = S.anchor.axis.clone();
       for (let it = 0; it < 30; it++) e = V(C[0][0] * e.x + C[0][1] * e.y + C[0][2] * e.z, C[1][0] * e.x + C[1][1] * e.y + C[1][2] * e.z, C[2][0] * e.x + C[2][1] * e.y + C[2][2] * e.z).normalize();
       const span = Math.max(...flat.map(d => d.dot(e))) - Math.min(...flat.map(d => d.dot(e)));
-      if (span >= 6 && e.lengthSq() > 0.5) { if (e.dot(S.anchor.axis) < 0) e.negate(); S.anchor.axis = e; S.anchor.axisFrom = 'lesion'; }
+      if (span >= 6 && e.lengthSq() > 0.5) { if (e.dot(S.anchor.axis) < 0) e.negate(); stroke = e; }
     }
+    const cands = [{ d: S.anchor.axis.clone(), from: 'pca' }, { d: V().crossVectors(nA, S.anchor.axis), from: 'pca90' }], ar = archAt(S.anchor.p, S.anchor.axis);
+    if (ar) cands.push({ d: ar.t.clone(), from: 'arch' });
+    if (stroke) cands.push({ d: stroke, from: 'lesion' });
+    cands.forEach(k => { k.d.addScaledVector(nA, -k.d.dot(nA)).normalize(); k.run = k.d.lengthSq() > 0.5 ? boneRun(S.anchor.p, nA, k.d) : 0; });
+    S.axisRuns = cands.map(k => ({ from: k.from, run: k.run, d: k.d.toArray().map(x => Math.round(x * 100) / 100) }));   // (for the record: what each direction measured)
+    const best = cands.reduce((a, b) => (b.run > a.run ? b : a)), pick = stroke && cands[cands.length - 1].run >= 0.7 * best.run ? cands[cands.length - 1] : best;
+    if (pick.d.dot(S.anchor.axis) < 0) pick.d.negate();
+    S.anchor.axis = pick.d; S.anchor.axisFrom = pick.from;
     refineAxis();
     return true;
+  }
+  // how far the bone runs under a guide seated at p (normal n) along direction d: from p both ways, 1 mm steps, while
+  // bone lies within 12 mm under the surface (a gap of more than 3 mm ends the run); mm, both sides added
+  function boneRun(p, n, d) {
+    let tot = 0;
+    for (const sg of [1, -1]) {
+      let last = 0;
+      for (let s = 1; s <= 45; s++) {
+        const q = p.clone().addScaledVector(d, sg * s); let hit = false;
+        for (let dn = 0.5; dn <= 12 && !hit; dn += 1.5) hit = boneAt(q.clone().addScaledVector(n, -dn));
+        if (hit) last = s; else if (s - last > 3) break;
+      }
+      tot += last;
+    }
+    return tot;
   }
   // the guide axis at the scale of the guide: PCA of the bone in the outer-cortex slab under the guide footprint
   // (12 mm deep, 30 mm each way along the first guess, 20 mm across). A stroke painted at a slant, or the 16 mm PCA
@@ -1631,6 +1690,8 @@
     $('lesStatus').textContent = !S.anchor ? '' : S.lesion.ok ? `${xl('Sınır onaylandı')}${S.lesion.by ? ' · ' + S.lesion.by : ''}.` : 'Sınır onayı bekliyor (7. adım).';
   }
   lFields.forEach(([k]) => $('l_' + k).addEventListener('input', e => { S.lesion[k] = +e.target.value; unapprove(S.lesion); syncLesion(); updateLesionPart(); renderAppr(); render(); emit('parts'); emit('changed'); }));
+  // a new range or margin (slider released) proposes the cuts again, so the cuts never lag behind the stated margin
+  lFields.forEach(([k]) => $('l_' + k).addEventListener('change', () => { if (S.anchor && !planBlocked()) suggest(); }));
   syncLesion();
 
   // ---------- guide generation (voxel CSG on a grid aligned with the guide frame) ----------
@@ -2504,7 +2565,7 @@
     box.innerHTML = `<h3 class="sub">${isP ? 'Kesi' : 'Vida'} ${i + 1}</h3>` + fields.map(([k, t, mn, mx, st, unit]) => `<div class="ctl"><div class="ctl-row"><label for="f_${k}">${t}</label><output id="o_${k}">${fmt(o[k], st < 1 ? 1 : 0)} ${unit}</output></div><input type="range" id="f_${k}" min="${mn}" max="${mx}" step="${st}" value="${o[k]}"></div>`).join('') +
       `<p class="hint">${apprText(o)}</p><p class="hint more">3B görünümde kesiyi ya da vidayı tutup sürükleyebilir, tutamaçla da taşıyabilirsiniz (W taşı, E döndür).</p>` +
       `<div class="btns end"><button id="delEl" class="sm"><svg class="i"><use href="#i-trash"/></svg>${isP ? 'Kesiyi sil' : 'Vidayı sil'}</button></div>`;
-    fields.forEach(([k, , , , st, unit]) => $('f_' + k).addEventListener('input', e => { o[k] = +e.target.value; if (!isP && /^(u|v|tilt)/.test(k)) o.hand = 1; unapprove(o); $('o_' + k).textContent = `${fmt(o[k], st < 1 ? 1 : 0)} ${unit}`; schedule(isP, true); }));
+    fields.forEach(([k, , , , st, unit]) => $('f_' + k).addEventListener('input', e => { const c0 = isP && /yaw|pitch/.test(k) ? planesWorld()[i].p : null; o[k] = +e.target.value; if (c0) { pivotCut(o, c0); syncSliders(o); } if (!isP && /^(u|v|tilt)/.test(k)) o.hand = 1; unapprove(o); $('o_' + k).textContent = `${fmt(o[k], st < 1 ? 1 : 0)} ${unit}`; schedule(isP, true); }));
     $('delEl').addEventListener('click', () => { (isP ? S.planes : S.screws).splice(i, 1); S.sel = null; unapproveAll(); schedule(isP); });
   }
   function renderMeasures() {
@@ -2521,6 +2582,45 @@
       ${R.seat && R.seat.ok ? '<h3 class="sub">Takma ve stabilite</h3>' : ''}
       ${R.seat && R.seat.ok ? `<dl class="kv"><dt>Takma yönü</dt><dd>${R.seat.free ? (R.seat.best.tilt ? fmt(R.seat.best.tilt, 0) + '° eğik' : 'dik') : 'yok'}</dd><dt>Uygun yönler</dt><dd>${R.seat.free}/${R.seat.dirs.length}</dd><dt>Kayma direnci (en zayıf)</dt><dd>%${fmt(R.seat.worstSlide.r * 100, 0)}</dd><dt>Dönme direnci (en zayıf)</dt><dd>%${fmt(R.seat.worstRot.r * 100, 0)} · ${({ u: 'eksen', v: 'yanal', n: 'oturma' })[R.seat.worstRot.axis]}</dd></dl>` : ''}
       <p class="hint" style="color:var(--faint)">Hesaplama süresi ${fmt(R.ms / 1000, 1)} sn</p>`;
+  }
+  // the lesion as points: the painted lesion, or with nothing painted the bone of the lesion range (every voxel
+  // within 30 mm of the guide axis whose position along the axis is between from and to)
+  function lesionPts() {
+    const painted = window.Lesion && Lesion.points ? Lesion.points() : [];
+    if (painted.length || !S.anchor || !S.red || !S.mask) return painted;
+    const { u } = frameAxes(), A0 = S.anchor.p, pts = [];
+    const r = S.red, lo = Math.min(S.lesion.from, S.lesion.to), hi = Math.max(S.lesion.from, S.lesion.to), c = A0.clone().addScaledVector(u, (lo + hi) / 2), R = (hi - lo) / 2 + 30;
+    const ci = G.indexOf(r, [c.x, c.y, c.z]), rad = r.sp.map(sp => Math.ceil(R / sp));
+    for (let k = Math.max(0, Math.round(ci[2] - rad[2])); k <= Math.min(r.nz - 1, ci[2] + rad[2]); k++)
+      for (let j = Math.max(0, Math.round(ci[1] - rad[1])); j <= Math.min(r.ny - 1, ci[1] + rad[1]); j++)
+        for (let i = Math.max(0, Math.round(ci[0] - rad[0])); i <= Math.min(r.nx - 1, ci[0] + rad[0]); i++) {
+          if (!S.mask[i + r.nx * (j + r.ny * k)]) continue;
+          const q = V(...G.worldOf(r, i, j, k)), d = q.clone().sub(A0), a = d.dot(u);
+          if (a >= lo && a <= hi && d.addScaledVector(u, -a).length() <= 30) pts.push(q);
+        }
+    return pts;
+  }
+  // clearance of the lesion from the kept bone at each outer cut (mm, measured to the stump face): the painted lesion's
+  // points, or with nothing painted the bone within the lesion range along the guide axis. [{i: cut index, d}]
+  let lmCache = { key: null, out: [] };
+  function lesionMargins() {
+    if (!S.anchor || S.planes.length < 2 || !S.red || !S.mask) return [];
+    const painted = window.Lesion && Lesion.points ? Lesion.points() : [];
+    const key = JSON.stringify([cutsKey(), S.lesion.from, S.lesion.to, S.lesion.condyle, painted.length, painted.length ? [painted[0].toArray(), painted[painted.length - 1].toArray()] : 0, S.mask.length, parts.bone && parts.bone.obj.geometry.uuid]);
+    if (key === lmCache.key) return lmCache.out;
+    const pts = lesionPts(), { u } = frameAxes();
+    const out = [];
+    if (pts.length) {
+      const pw = planesWorld(), bc = bonelessCut(), srt = pw.slice().sort((a, b) => a.off - b.off);
+      [[srt[0], 1], [srt[srt.length - 1], -1]].forEach(([p, side]) => {
+        const i = pw.indexOf(p); if (i === bc) return;
+        const N = p.N.dot(u) < 0 ? p.N.clone().negate() : p.N;
+        let d = Infinity; for (const q of pts) { const x = side * q.clone().sub(p.p).dot(N); if (x < d) d = x; }
+        out.push({ i, d: d + stumpGap(p) });
+      });
+    }
+    lmCache = { key, out };
+    return out;
   }
   function renderChecks() {
     const R = S.result, out = [];
@@ -2565,6 +2665,10 @@
           if (a > CUT_ALONG_DEG) out.push(['warn', 'Uyarı', `Kesi ${S.planes.indexOf(cut.pl) + 1} kemik boyunca uzanıyor (kemiğin yönüne ${fmt(a, 0)}° eğik); güdükte vida için kemik kalmaz. Kesiyi kemiğe dik çevirin ("Kesileri aralık + güvenlik payına göre koy" kesileri kemiğe dik önerir).`, 'p' + S.planes.indexOf(cut.pl)]);
         });
       }
+      // two cuts that take out no bone (a wedge between them that misses the jaw)
+      if (S.planes.length >= 2 && S.resectedVolume != null && S.resectedVolume < 200) out.push(['crit', 'Kritik', `Rezeksiyon parçası boş ya da çok küçük (${fmt(S.resectedVolume / 1000, 2)} cm³): kesiler arasında çıkarılacak kemik yok. Kesileri yeniden önerin ya da elle düzeltin.`, 'p0']);
+      // the stump faces have to clear the lesion by the safety margin (painted lesion, else the lesion range on the axis)
+      lesionMargins().forEach(m => { if (m.d < S.lesion.margin - 0.5) out.push(['crit', 'Kritik', `Kesi ${m.i + 1} lezyona ${fmt(m.d, 1)} mm uzakta, güvenlik payı ${fmt(S.lesion.margin, 1)} mm; kesiyi lezyondan uzaklaştırın ya da kesileri yeniden önerin.`, 'p' + m.i]); });
       // graft-to-stump gap at each end: the half slot the saw takes from the stump (0 when the kerf lies on the resected side)
       const E = resEnds();
       if (E) {
@@ -2715,6 +2819,7 @@
     S.planes.forEach((o, i) => { if (!o.ok) p.push(`Kesi ${i + 1}`); });
     S.screws.forEach((o, i) => { if (!o.ok) p.push(`Vida ${i + 1}`); });
     if (window.Fibula && Fibula.active() && !Fibula.approved()) p.push('Fibula planı');
+    if (window.Fibula && Fibula.pending && Fibula.pending()) p.push('Fibula guide\'ı güncelleniyor');
     (window.PendingHooks || []).forEach(f => { try { f().forEach(x => p.push(x)); } catch (e) { /* optional gate */ } });
     return p;
   }
@@ -2834,6 +2939,12 @@
     S.liveScrews = info;
     rebuildElementParts(pls, info); applyExplode(); emit('preview'); render();
   }
+  // a screw (on the guide frame) between the outer cuts or within 2 mm of a slot
+  function screwsInCuts() {
+    if (S.planes.length < 2 || S.g.split === 2) return false;
+    const { u, v } = frameAxes(), pls = planesWorld().sort((x, y) => x.off - y.off), cross = (pw, vv) => pw.off - vv * pw.N.dot(v) / Math.max(0.2, pw.N.dot(u));
+    return S.screws.some(sc => !sc.part && sc.u > cross(pls[0], sc.v) - pls[0].w / 2 - 2 && sc.u < cross(pls[pls.length - 1], sc.v) + pls[pls.length - 1].w / 2 + 2);
+  }
   function schedule(planesChanged, liveEdit) {
     live.ver++;
     if (planesChanged) live.planes = live.resDirty = true;
@@ -2845,7 +2956,14 @@
     // rebuild ends seconds later (the download itself also waits for the rebuild)
     if (!$('expZip').disabled && pending().length) renderAppr();
     timer = setTimeout(() => exclusive(async () => { if (timer !== t) return; live.jobs = (live.jobs || 0) + 1; try {
-      if (live.resDirty) { live.planes = live.resDirty = false; busy(true, 'Rezeksiyon güncelleniyor…'); await sleep(); await rebuildResection(); }
+      if (live.resDirty) {
+        live.planes = live.resDirty = false;
+        // a cut moved: the screws' bone purchase and their distance to the slots changed with it, so they are reviewed again
+        S.screws.forEach(unapprove);
+        // a cut moved over the screws (3D drag, slice drag, sliders alike): the screws (and the guide length) go back outside the cuts
+        if (S.guideOn && S.anchor && screwsInCuts()) { placeScrews(); S.sel = S.sel && S.sel[0] === 's' ? null : S.sel; renderElements(); }
+        busy(true, 'Rezeksiyon güncelleniyor…'); await sleep(); await rebuildResection();
+      }
       if (S.screwRefit) { S.screwRefit = false; if (S.guideOn && S.anchor) { placeScrews(); S.sel = null; renderElements(); } }
       await regenerate();
       // after a re-fit the message says what the final guide does, not what the trial builds did
@@ -2917,11 +3035,22 @@
     const h = centreHit();
     if (h) pickHit(h); else alertMsg('Görünümün ortasında kemik ya da guide yok; görünümü ok tuşlarıyla çevirip yeniden deneyin.');
   });
-  function pickHit(hit) {
+  // a click on a slice in "pick the region" mode: the outer bone surface at that level, seen from outside the jaw
+  // (as for a painted lesion), becomes the guide centre
+  function anchorFromSlice(w) {
+    if (S.mode !== 'anchor' || !parts.bone) return false;
+    const q = V(...w), box = new THREE.Box3().setFromObject(parts.bone.obj), bc = box.getCenter(V());
+    const out = q.clone().sub(bc); out.z = 0; if (out.lengthSq() < 1) out.set(0, -1, 0); out.normalize();
+    const hit = new THREE.Raycaster(q.clone().addScaledVector(out, 120), out.clone().negate()).intersectObject(parts.bone.obj, false)[0];
+    if (!hit || hit.point.distanceTo(q) > 25) { alertMsg('Bu noktanın yakınında kemik yüzeyi bulunamadı; kemiğin üzerine tıklayın.'); return true; }
+    pickHit(hit, out.clone().negate());
+    return true;
+  }
+  function pickHit(hit, rayDir) {
     if (S.mode === 'anchor') {
       const nrm = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
-      if (nrm.dot(ray.ray.direction) > 0) nrm.negate();
-      setAnchor(hit.point.clone(), nrm);
+      if (nrm.dot(rayDir || ray.ray.direction) > 0) nrm.negate();
+      setAnchor(hit.point.clone(), nrm); $('caseMsg').hidden = true;   // the "click the region" prompt is answered
       setMode('orbit'); suggest();
       if (S.autoAfter) { S.autoAfter = false; autoPrep(); }
     } else if (S.mode === 'screw' && S.anchor) {
@@ -2986,14 +3115,26 @@
     if (S.guideSel) { const { u, v } = frameAxes(); return { guide: true, q0: proxy.quaternion.clone(), rot0: S.g.rot, u0: u, v0: v, key: String(S.g.rot) }; }
     const so = selObj(); if (!so) return null;
     const o = so.o, st = { so, p0: proxy.position.clone(), q0: proxy.quaternion.clone(), o0: Object.assign({}, o), key: [o.off, o.yaw, o.pitch, o.u, o.v, o.tiltU, o.tiltV].join() };
-    if (so.isP) st.N0 = planesWorld()[so.i].N.clone(); else st.d0 = screwWorld(so.o).dir.clone();
+    if (so.isP) { const pw = planesWorld()[so.i]; st.N0 = pw.N.clone(); st.c0 = pw.p.clone(); } else st.d0 = screwWorld(so.o).dir.clone();
     return st;
   }
   const clampR = (x, a, b, st) => Math.max(a, Math.min(b, Math.round(x / st) * st));
   const wrap180 = r => { r = Math.round(((r + 180) % 360 + 360) % 360 - 180); return r === -180 ? 180 : r; };
   // the cuts stay where they are in the jaw while the guide turns or moves around the bone: they are written again
   // in the new guide frame. A cut almost parallel to the new guide axis cannot be written that way and turns with it.
+  // A change that would turn a cut is undone (returns false): the cuts are the resection and must not move because
+  // the guide did; the message says which cut stood in the way.
   function keepCuts(change) {
+    const snap = { planes: clone(S.planes), anchor: S.anchor && { p: S.anchor.p.clone(), n: S.anchor.n.clone(), axis: S.anchor.axis.clone(), base: S.anchor.base, axisFrom: S.anchor.axisFrom }, rot: S.g.roll, grot: S.g.rot, from: S.lesion.from, to: S.lesion.to };
+    const turned = keepCutsRaw(change);
+    if (!turned) return true;
+    S.planes.forEach((pl, i) => Object.assign(pl, snap.planes[i]));
+    Object.assign(S.anchor, snap.anchor); if (!snap.anchor.base) delete S.anchor.base;
+    S.g.roll = snap.rot; S.g.rot = snap.grot; S.lesion.from = snap.from; S.lesion.to = snap.to; S.cutsTurned = 0;
+    alertMsg('Guide bu konuma döndürülemez: bir kesi yeni guide eksenine neredeyse paralel kalıyor ve kesiler yerinde tutulamıyor. Daha küçük bir açı deneyin ya da kesileri yeniden önerin.');
+    return false;
+  }
+  function keepCutsRaw(change) {
     const before = planesWorld().map(w => ({ p: w.p.clone(), N: w.N.clone() })), p0 = S.anchor.p.clone(), u0 = frameAxes().u;
     change();
     const { u, v, n } = frameAxes(); let turned = 0;
@@ -3034,7 +3175,7 @@
   }
   function setGuideRot(r) {
     r = wrap180(r); if (r === S.g.rot || !S.anchor) return false;
-    keepCuts(() => { S.g.rot = r; }); afterGuideMove(); return true;
+    if (!keepCuts(() => { S.g.rot = r; })) { syncGuideInputs(); return false; } afterGuideMove(); return true;
   }
   // move the guide around the bone (buccal face towards the lower border or the crest): the anchor turns about the bone
   // axis through the centre of the bone cross-section and lands on the surface in that direction
@@ -3059,7 +3200,7 @@
     let p1 = null; const q = V();
     for (let t = 30; t > 0; t -= 0.25) { q.copy(base.c).addScaledVector(n1, t); if (boneAt(q)) { p1 = q.clone().addScaledVector(n1, 0.25); break; } }
     if (!p1) { if ($('guideStat')) $('guideStat').textContent = 'Bu yönde kemik yüzeyi bulunamadı; guide yerinde bırakıldı.'; return false; }
-    keepCuts(() => { an.base = base; an.p = p1; an.n = n1; an.axis = a; S.g.roll = r; });
+    if (!keepCuts(() => { an.base = base; an.p = p1; an.n = n1; an.axis = a; S.g.roll = r; })) { syncGuideInputs(); return false; }
     showAnchor(); afterGuideMove(); return true;
   }
   function gizmoApply() {
@@ -3076,6 +3217,7 @@
         const N = gz.start.N0.clone().applyQuaternion(dq);
         o.yaw = clampR(THREE.MathUtils.radToDeg(Math.atan2(N.dot(v), N.dot(u))), -89, 89, 0.5);
         o.pitch = clampR(THREE.MathUtils.radToDeg(-Math.asin(Math.max(-1, Math.min(1, N.dot(n))))), -89, 89, 0.5);
+        pivotCut(o, gz.start.c0);
       }
     } else {
       if (gz.mode === 'translate') { o.u = clampR(o0.u + d.dot(u), -80, 80, 0.5); o.v = clampR(o0.v + d.dot(v), -40, 40, 0.5); }
@@ -3090,6 +3232,15 @@
     gz.start.key = key; gz.start.moved = true;
     if (!so.isP) o.hand = 1;                                       // a screw the surgeon moved stays where it is
     unapprove(o); syncSliders(o); schedule(so.isP, true);
+  }
+  // a turned cut keeps its point on the bone (where its handle is): off is written again so the plane still passes
+  // through c0, else the cut would swing about a point on the guide axis and slide along the bone
+  function pivotCut(o, c0) {
+    if (!c0 || !S.anchor) return;
+    const { u, v, n } = frameAxes(), N = u.clone().applyAxisAngle(n, deg(o.yaw));
+    N.applyAxisAngle(V().crossVectors(n, N).normalize(), deg(o.pitch)).normalize();
+    const nu = N.dot(u); if (Math.abs(nu) < 0.05) return;
+    o.off = Math.max(-CUT_OFF_MAX, Math.min(CUT_OFF_MAX, Math.round(N.dot(c0.clone().sub(S.anchor.p)) / nu * 10) / 10));
   }
   function syncSliders(o) {
     ['off', 'yaw', 'pitch', 'u', 'v', 'tiltU', 'tiltV'].forEach(k => { const el = $('f_' + k); if (el && o[k] !== undefined) { el.value = o[k]; const out = $('o_' + k); if (out) out.textContent = `${fmt(o[k], +el.step < 1 ? 1 : 0)} ${/yaw|pitch|tilt/.test(k) ? '°' : 'mm'}`; } });
@@ -3199,11 +3350,6 @@
     const { isP } = dd.on, moved = dd.moved; dd.on = null; controls.enabled = true;
     try { renderer.domElement.releasePointerCapture(e.pointerId); } catch (x) {}
     if (!moved) return;
-    // a cut dragged over the screws: put the screws (and the guide length) back outside the cuts
-    if (isP && S.planes.length > 1) {
-      const { u, v } = frameAxes(), pls = planesWorld().sort((x, y) => x.off - y.off), cross = (pw, vv) => pw.off - vv * pw.N.dot(v) / Math.max(0.2, pw.N.dot(u));
-      if (S.screws.some(sc => sc.u > cross(pls[0], sc.v) - pls[0].w / 2 - 2 && sc.u < cross(pls[pls.length - 1], sc.v) + pls[pls.length - 1].w / 2 + 2)) placeScrews();
-    }
     schedule(isP, false);
   };
   renderer.domElement.addEventListener('pointerup', ddEnd);
@@ -3224,7 +3370,7 @@
     if (m !== 'orbit') mandibleView();
     S.mode = m;
     $('modeBadge').hidden = m === 'orbit';
-    $('modeBadge').textContent = m === 'anchor' ? 'Rezeksiyon bölgesinin ortasında kemik yüzeyine tıklayın (guide buraya oturur) · Klavye: 3B görünümde ok tuşlarıyla çevirin, Enter ortadaki noktayı seçer'
+    $('modeBadge').textContent = m === 'anchor' ? 'Rezeksiyon bölgesinin ortasında kemik yüzeyine tıklayın, 3B modelde ya da kesitlerde (guide buraya oturur) · Klavye: 3B görünümde ok tuşlarıyla çevirin, Enter ortadaki noktayı seçer'
       : m === 'screw' ? 'Vida yeri için guide üzerine tıklayın · Klavye: 3B görünümde ok tuşlarıyla çevirin, Enter ortadaki noktaya vida koyar' : $('modeBadge').textContent;
     if (m === 'anchor' || m === 'screw') $('stage').setAttribute('data-kbpick', S.split ? 'half' : ''); else $('stage').removeAttribute('data-kbpick');   // the ring in the middle of the view (keyboard pick)
   }
@@ -3569,8 +3715,9 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
       $('prodMsg').textContent = `${xl("Üretim STL'i hazır:")} ${r.watertight ? xl('su geçirmez') : xl('SU GEÇİRMEZ DEĞİL')}, ${xl(`${r.bodies} parça`)}${r.bodies > (S.g.split ? 2 : 1) ? ' ' + xl("(BEKLENENDEN FAZLA PARÇA, guide'ı kontrol edin)") : ''}, ${fmt(r.volume / 1000, 2)} cm³, ${xl(`${r.faces} üçgen`)}. ${xl('Pakete guide_uretim.stl olarak eklenir.')}`;
       const pw = prodWhy(r); if (pw) $('prodMsg').textContent += ' ' + pw;
       if (r.bar) $('prodMsg').textContent += ` ${xl("Köprü STL'i:")} ${r.bar.watertight ? xl('su geçirmez') : xl('SU GEÇİRMEZ DEĞİL')}${r.bar.clear != null ? ', ' + xl(`kemiğe en yakın ${fmt(r.bar.clear)} mm`) : ''}. ${xl('Pakete kopru_uretim.stl olarak eklenir.')}`;
-      if (S.fib && S.fib.guide && window.Fibula && !ac.signal.aborted) try { stage('Sunucuda fibula guide\'ı hazırlanıyor…'); await Fibula.production(ac.signal); } catch (e) { $('prodMsg').textContent += ` Fibula guide'ı: ${e.message}`; }
     } catch (e) { S.prod = null; $('prodMsg').textContent = e.message; }
+    // the fibula guide on its own call: a mandible failure does not keep it from being made (and the reverse)
+    if (S.fib && S.fib.guide && window.Fibula && !ac.signal.aborted) try { stage('Sunucuda fibula guide\'ı hazırlanıyor…'); await Fibula.production(ac.signal); } catch (e) { S.fib.prod = null; $('prodMsg').textContent += ` Fibula guide'ı: ${e.message}`; }
     busy(false);
     renderChecks(); renderAppr();
   }
@@ -3590,11 +3737,21 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   async function exportPackage() {
     if (!parts.guide || $('expZip').disabled) return;   // (the button's own gate: approvals, critical checks, surgeon)
     // an edit was made moments ago and the guide / resection is still being rebuilt: the files would not match the approved plan
-    if (rebuildPending) {
+    const fibBusy = () => !!(window.Fibula && Fibula.pending && Fibula.pending());
+    if (rebuildPending || fibBusy()) {
       busy(true, 'Guide güncelleniyor…');
-      for (let i = 0; i < 1200 && rebuildPending; i++) await new Promise(r => setTimeout(r, 50));
+      for (let i = 0; i < 2400 && (rebuildPending || fibBusy()); i++) await new Promise(r => setTimeout(r, 50));
       busy(false);
-      if (rebuildPending || $('expZip').disabled) { alertMsg('Plan yeni değişti; guide güncellenip onaylar yenilenmeden paket alınamaz.'); return; }
+      if (rebuildPending || fibBusy() || $('expZip').disabled) { alertMsg('Plan yeni değişti; guide güncellenip onaylar yenilenmeden paket alınamaz.'); return; }
+    }
+    // the package carries the production STLs (server, 0.2 mm) of every guide: missing or out of date, they are made
+    // now; a package of previews only goes out when no production server is set up (local preview)
+    const fibNeeds = () => !!(window.Fibula && Fibula.active() && S.fib && S.fib.guide);
+    const prodCurrent = () => !!(S.prod && S.prod.key === prodKey()) && (!fibNeeds() || !!(S.fib.prod && S.fib.prod.key === S.fib.guide.key));
+    if (!prodCurrent() && serverUrl()) {
+      await productionSTL();
+      if (!prodCurrent()) { alertMsg("Üretim STL'i alınamadı; paket verilmedi. Nedeni Teslim adımındaki üretim mesajında; sunucu düzelince yeniden deneyin."); return; }
+      if ($('expZip').disabled) { alertMsg("Üretim STL'i kontrolleri geçmedi (Kontroller sekmesi); paket verilmedi."); return; }
     }
     // the plate is planned but has no computed path (a stale state): recompute once, and warn if the plate files are still missing
     if (window.Plate && Plate.missing()) { try { await Plate.update(); } catch (e) { /* warned below */ } }
@@ -3765,7 +3922,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   function serverUrl() { return ($('aiUrl').value || '').trim().replace(/\/+$/, ''); }
   function select(sel) { if (sel) S.guideSel = false; S.sel = sel; emit('select', sel); renderElements(); rebuildElementParts(S.result ? S.result.pls : planesWorld(), S.result ? S.result.screwInfo : []); applyExplode(); render(); }
   window.Studio = { renamePart, partName, guideBuilds: () => guideBuilds, mandibleView, endModes, onEndModes, startLoad, loadStopped, loadBusy: () => committing, LOAD_CANCELLED, renderComps, setGuideRot, setGuideRoll, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, resEnds, splitGap, cutMisses, evalScrew, resectedAt, resectedNear, resPiece, boneTrack, cutAlongBone, bestScrew,
-    boneSections, sizeBody, autoBody, buildGuideSet, cutsAngle, cutFrame, pieceFrames, pieceBody, screwBodyOn, pieceWrapTop, frameAt, stumpGap, mergeStl, mergeMeshes, AUTO_DEFAULT, G_DEFAULT, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume, boneField, simplifyMesh, BAR, barPlan, barSdf, buildBarMesh, placeLug, longCase, axisOffBone, ramusAxis, stopSides, LONG_MM, CUT_OFF_MAX, prodKey, serverBar, guideField, lockState: () => lock, bonelessCut, reframe, exclusive, settled, makeGuide, prodReply, prodWhy, gateChecks, swInfo, swLine, sfetch, reportHTML };
+    boneSections, sizeBody, autoBody, buildGuideSet, cutsAngle, cutFrame, pieceFrames, pieceBody, screwBodyOn, pieceWrapTop, frameAt, stumpGap, mergeStl, mergeMeshes, AUTO_DEFAULT, G_DEFAULT, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume, boneField, simplifyMesh, BAR, barPlan, barSdf, buildBarMesh, placeLug, longCase, axisOffBone, ramusAxis, stopSides, LONG_MM, CUT_OFF_MAX, prodKey, serverBar, guideField, lockState: () => lock, bonelessCut, reframe, exclusive, settled, makeGuide, prodReply, prodWhy, gateChecks, swInfo, swLine, sfetch, reportHTML, lesionMargins, anchorFromSlice, ramusAxis };
   bus.addEventListener('planeDragged', () => { renderElements(); schedule(true, true); });
   // messages assembled at run time are written in the language that was active: write them again when it changes
   if (window.addEventListener) window.addEventListener('langchange', () => { try { renderChecks(); renderAppr(); syncLesion(); } catch (e) { /* no case open yet */ } });

@@ -247,6 +247,9 @@ window.Ref = (function () {
   });
   (window.ExtraChecks = window.ExtraChecks || []).push(() => {
     const M = metrics(), out = [];
+    // a mandible split off the skull automatically can miss a ramus (left fused to the skull) or keep a maxilla piece:
+    // then the bone does not map onto its own mirror image
+    if (M && M.score < 0.6) out.push(['warn', 'Uyarı', xl(`Mandibula kendi ayna görüntüsüyle yalnız %${fmt(M.score * 100, 0)} örtüşüyor: otomatik ayrılan kemik eksik olabilir (bir ramus ya da kondil kafatasına bağlı kalmış) ya da fazladan parça içerebilir. Kemik modelini kontrol edin; gerekirse "Bitişik kemikleri ayır" ile düzeltin.`), 'anat']);
     if (M && M.asym !== undefined && M.asym > 4) out.push(['info', 'Bilgi', xl(`Kondiller ${fmt(M.asym)} mm asimetrik; ayna görüntüsünü hedef alırken bunu hesaba katın.`), 'anat']);
     const E = M && ref && St.resEnds();
     if (E && !E.condyle) {

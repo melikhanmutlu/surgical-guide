@@ -129,7 +129,7 @@ window.Lesion = (function () {
   function status() {
     const c = count(), r = S.red, vol = r ? c * r.sp[0] * r.sp[1] * r.sp[2] / 1000 : 0;
     let ext = '';
-    if (c && S.anchor) { const { u } = St.frameAxes(), o = points().map(q => q.sub(S.anchor.p).dot(u)); ext = xl(` · eksende ${fmt(Math.max(...o) - Math.min(...o))} mm`); }
+    if (c && S.anchor) { const { u } = St.frameAxes(), o = points().map(q => q.sub(S.anchor.p).dot(u)); let mn = Infinity, mx = -Infinity; for (const x of o) { if (x < mn) mn = x; if (x > mx) mx = x; } ext = xl(` · eksende ${fmt(mx - mn)} mm`); }
     $('lsStat').textContent = c ? `${xl(`Boyanan lezyon ${fmt(vol, 2)} cm³`)}${ext}.${planMsg}` : '';
     $('lsPlan').disabled = !c || planning; $('lsClear').disabled = !c;
   }

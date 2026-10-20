@@ -40,7 +40,9 @@ const fire = (id, type, value) => { const el = $(id); if (value !== undefined) e
 }
 async function cuts(a, b) { S.planes[0].off = a; S.planes[1].off = b; await St.rebuildResection(); await St.regenerate(); St.emit('parts'); await sleep(30); }
 
-async function start() { fire('fibSample', 'click'); await until(() => W.Fibula.active() && W.Fibula.state().last); await sleep(50); }
+// (waits for the new load itself: with a fibula already loaded, active() and last are true before the reload replaces
+// S.fib, and a test that went on at once had its plan replaced under it)
+async function start() { const was = S.fib; fire('fibSample', 'click'); await until(() => S.fib !== was && W.Fibula.active() && W.Fibula.state().last); await sleep(50); }
 
 test('F2: reversing the graft order puts segment 0 (distal fibula) at the other end, and the plan keeps the cut planes', async () => {
   await start(); await cuts(-30, 30);

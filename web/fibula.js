@@ -506,6 +506,8 @@ window.Fibula = (function () {
     if (legacy) return JSON.stringify(a);
     if (S.anchor && S.anchor.axis) a.push(['axis', [S.anchor.axis.x, S.anchor.axis.y, S.anchor.axis.z].map(x => Math.round(x * 1e4) / 1e4 + 0)]);
     if (S.g && S.g.kerfSide === 0) a.push(['kerfSide', 0]);
+    // the guide fit settings the fibula guide body is built with (clearance, periosteum, fit); only when not the default
+    if (S.g && ((S.g.clear ?? 0.3) !== 0.3 || (S.g.peri || 0) || (S.g.fit || 0))) a.push(['gfit', r3(S.g.clear ?? 0.3), r3(S.g.peri || 0), r3(S.g.fit || 0)]);
     return '2|' + JSON.stringify(a); };
   const sigOk = s => (typeof s === 'string' && s.startsWith('2|') ? s === sig() : s === sig(true));
 
@@ -544,7 +546,7 @@ window.Fibula = (function () {
   function fitLeg(cam, ctl) {
     const box = new THREE.Box3(); leg.children.filter(o => o.userData.disc || o.userData.guide).forEach(o => box.expandByObject(o));
     if (box.isEmpty()) box.setFromObject(leg);
-    const ctr = box.getCenter(V()), r = Math.max(30, box.getSize(V()).length() / 2);
+    const ctr = box.getCenter(V()), r = Math.max(60, box.getSize(V()).length() / 2);   // at least 120 mm across: the leg stays recognisable around a short guide
     const dir = F.c.FA[1].clone().add(F.c.FA[2].clone().multiplyScalar(0.4)).normalize();
     ctl.target.copy(ctr); cam.position.copy(ctr).add(dir.multiplyScalar(r / Math.sin(deg(cam.fov) / 2) * 1.1)); ctl.update();
   }
@@ -755,15 +757,24 @@ window.Fibula = (function () {
     const list = plan().fsc || autoScrews(c);
     return list.map(f => Object.assign(screwDefault(0), f, { seg: Math.min(c.segs.length - 1, Math.max(0, f.seg | 0)) }));
   }
+  // the fibula guide on screen is not yet the one the current plan makes (a rebuild is due or running): approval,
+  // production and the package wait for it
+  let guideStale = false;
   function scheduleGuide() {
+    guideStale = true;
     clearTimeout(guideTimer);
-    guideTimer = setTimeout(buildFibGuide, 450);
+    guideTimer = setTimeout(() => { guideTimer = null; buildFibGuide(); }, 450);
+  }
+  function dropGuide() {
+    leg.children.filter(o => o.userData.guide).forEach(o => { leg.remove(o); o.material.dispose(); o.geometry.dispose(); });
+    S.fib.guide = null; S.fib.prod = null; guideKey = '';
   }
   async function buildFibGuide() {
-    if (!active() || !last || building) { if (building) scheduleGuide(); return; }
-    const ctx = guideCtx(last); S.fib.guideFail = !ctx; if (!ctx) { S.fib.guide = null; St.updatePanels(); return; }
+    if (building) { scheduleGuide(); return; }
+    if (!active() || !last) { guideStale = false; return; }
+    const ctx = guideCtx(last); S.fib.guideFail = !ctx; if (!ctx) { dropGuide(); guideStale = false; St.updatePanels(); return; }
     const key = JSON.stringify([ctx.g, ctx.pls.map(p => [p.p.toArray(), p.N.toArray(), p.w].flat().map(x => Math.round(x * 100))), ctx.scs.map(s => s.entry && s.entry.toArray().map(x => Math.round(x * 100)))]);
-    if (key === guideKey && S.fib.guide) return;
+    if (key === guideKey && S.fib.guide) { guideStale = false; St.updatePanels(); return; }
     building = true;
     St.busy(true, 'Fibula guide\'ı üretiliyor…'); await St.sleep();
     try {
@@ -784,8 +795,11 @@ window.Fibula = (function () {
       if (flip) out.result.sideFlip = true;
       leg.children.filter(o => o.userData.guide).forEach(o => { leg.remove(o); St.mat && o.material.dispose(); o.geometry.dispose(); });
       out.mesh.material = mat(FGUIDE); out.mesh.userData.guide = true; onLeg(out.mesh); St.simplifyMesh(out.mesh);
+      const first = !S.fib.guide;
       S.fib.guide = { mesh: out.mesh, result: out.result, ctx, key, grid: out.grid }; guideKey = key;
-    } finally { building = false; St.busy(false); }
+      // the first fibula guide next to a mandible guide: both are shown side by side, so the surgeon sees the pair
+      if (first && S.guideOn && St.parts.guide && view !== 's' && !S.restoring) setView('s');
+    } finally { building = false; St.busy(false); if (!guideTimer || S.fib.guide && S.fib.guide.key === key) guideStale = false; }
     renderStep(); St.updatePanels(); St.render(); St.emit('fibGuide');
   }
 
@@ -840,7 +854,7 @@ window.Fibula = (function () {
     });
     if (c.proxLeft < PROX_KEEP) out.push(['crit', 'Kritik', xl(`Fibula yetmiyor: proksimalde ${fmt(Math.max(c.proxLeft, 0), 0)} mm kalıyor, en az ${PROX_KEEP} mm gerekli.`)]);
     const R = S.fib.guide && S.fib.guide.result;
-    if (!R && !building && S.fib.guideFail) out.push(['warn', 'Uyarı', 'Fibula guide\'ı üretilemedi; fibula yüzeyi bulunamadı.']);
+    if (!R && !building && S.fib.guideFail) out.push(['crit', 'Kritik', 'Fibula guide\'ı üretilemedi; fibula yüzeyi bulunamadı.', 'fib']);
     if (R) {
       const shortSeg = c.segs.some(g => g.L < MIN_LEN), ad = R.adapt;
       if (R.pieces > 1) out.push(['crit', 'Kritik', xl(`Fibula guide'ı ${R.pieces} parçaya bölünüyor.`) + (shortSeg ? ' ' + xl('Segment 20 mm\'den kısa: iki kesi yuvası arasında guide tutunamıyor; segmenti uzatın ya da segment sayısını azaltın.') : '')]);
@@ -934,7 +948,7 @@ window.Fibula = (function () {
     const ck = checks(); $('fibChecks').innerHTML = (ck.length ? ck : [['ok', 'Uygun', 'Fibula kontrolleri geçti.']]).map(([k, t, m]) => `<li class="${k}"><b>${t}</b><span>${m}</span></li>`).join('');
     const crit = ck.some(x => x[0] === 'crit'), ok = approved();
     $('fibApprove').textContent = ok ? 'Fibula onayını kaldır' : 'Fibula planını onayla';
-    $('fibApprove').disabled = !ok && (crit || !c || !R);
+    $('fibApprove').disabled = !ok && (crit || !c || !R || guideStale);
     $('fibStatus').textContent = ok ? xl('Fibula planı onaylandı') + (plan().by ? ' · ' + plan().by : '') + '.' : plan().ok ? xl('Plan onaydan sonra değişti; yeniden onay gerekli.') : crit ? 'Kritik kontrol varken onaylanamaz.' : 'Fibula planı cerrah onayı bekliyor.';
     const t = $('tag6'), tx = ok ? 'Onaylı' : crit ? 'Kritik' : 'Onay bekliyor'; t.hidden = ok; t.className = 'tag ' + (ok ? 'ok' : crit ? 'crit' : 'warn'); t.textContent = ''; t.title = tx; t.setAttribute('aria-label', tx);
   }
@@ -945,6 +959,8 @@ window.Fibula = (function () {
     // an automatic segment count follows the defect: a new resection length (cuts moved, condyle, first defect) is planned again
     if (D && plan().nAuto && !(S.fib.choice && Math.abs(S.fib.choice.L - D.L) < 0.5)) rechoose(D);
     last = D ? compute(D) : null;
+    // no defect any more (plan reset, cuts deleted): the old fibula guide and its production STL go with it
+    if (!last) { clearTimeout(guideTimer); guideTimer = null; guideStale = false; if (S.fib.guide) dropGuide(); }
     draw(last); renderStep(); St.updatePanels();
     if (last) scheduleGuide();
   }
@@ -998,13 +1014,17 @@ window.Fibula = (function () {
     setCandidate(0);
     const P0 = defaultPlan(); P0.source = Object.assign({}, F.source); P0.cand = F.c.centroid.map(x => Math.round(x * 10) / 10);
     S.fib = { plan: P0, guide: null };
+    overSample = !S.source || S.source.type === 'sample';
     if (pending && pending.source && pending.source.fp === F.source.fp) { const p = pending; pending = null; await apply(p); return; }
     // segment count from the defect (segmentChoice); re-chosen while the plan stays automatic and the defect changes
     const D = defect();
     if (D) chooseSegments(D);
     if (St.parts.resected) { St.parts.resected.visible = false; St.parts.resected.obj.visible = false; }
-    guideKey = ''; update(); syncUI(); setView('f'); St.emit('changed');
+    guideKey = ''; update(); syncUI(); setView(S.guideOn && St.parts.guide ? 's' : 'f'); St.emit('changed');
   }
+  // the fibula was loaded while the studio still showed its sample mandible: the patient's mandible loaded next
+  // belongs to the same case, so the fibula stays and only its plan starts again
+  let overSample = false;
   // a stored plan is untrusted input: keep every value inside the range its control allows (like applyPlan does for the guide).
   // kerf <= 0 would give a guide without saw slots, so it is also reported
   function sanitize(p) {
@@ -1065,7 +1085,7 @@ window.Fibula = (function () {
 
   // ---------- exports ----------
   function exportFiles(files) {
-    if (!active() || !S.fib.guide) return;
+    if (!active() || !S.fib.guide || guideStale) return;
     const prod = S.fib.prod && S.fib.prod.key === S.fib.guide.key ? S.fib.prod : null;
     if (prod) files.push({ name: 'fibula_guide_uretim.stl', data: prod.stl });
     files.push({ name: prod ? 'fibula_guide_onizleme.stl' : 'fibula_guide.stl', data: St.stlOf(S.fib.guide.mesh) });
@@ -1091,7 +1111,7 @@ window.Fibula = (function () {
 <table><tr><th>Segment</th><th>Boy</th><th>Distal uçtan</th><th>Uç açıları</th><th>Rotasyon</th><th>Pedikül</th></tr>${s.segmentler.map(g => `<tr><td>${g.no}</td><td>${fmt(g.boy_mm)} mm</td><td>${fmt(g.distal_uctan_mm)} mm</td><td>${fmt(g.kesi_acilari_deg[0])}° / ${fmt(g.kesi_acilari_deg[1])}°</td><td>${g.rotasyon_deg}°</td><td>${g.pedikul_yonu ? xl(g.pedikul_yonu) : '–'}</td></tr>`).join('')}</table>`;
   }
   async function production(signal) {
-    if (!active() || !S.fib.guide) return;
+    if (!active() || !S.fib.guide || guideStale) return;
     const x = S.fib.guide.ctx;
     const r = await St.serverGuide({ vol: F.vol, red: F.red, F: F.c.Fm, thr: THR, g: x.g, P: x.P, u: x.u, v: x.v, n: x.n, pls: x.pls, scs: x.scs, wrapProfile: S.fib.guide.result.wrapProfile, seatDir: S.fib.guide.result.seatDir }, signal);
     S.fib.prod = Object.assign(r, { key: S.fib.guide.key });
@@ -1299,11 +1319,21 @@ window.Fibula = (function () {
   bus.addEventListener('parts', () => { if (active() && !S.restoring) update(); });
   bus.addEventListener('livePlanes', livePlanes);
   $('fibMirror').addEventListener('change', e => { if (!active()) return; plan().mirror = e.target.checked ? 1 : 0; guideKey = ''; edited(false, true); });
-  bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring) && S.fib) unload(); });
+  bus.addEventListener('volume', e => {
+    if ((e.detail && e.detail.restoring) || !S.fib) return;
+    if (overSample && F && F.c && S.source && S.source.type !== 'sample') {
+      overSample = false; clearTimeout(guideTimer); guideTimer = null; guideStale = false; dropGuide();
+      const P0 = defaultPlan(); P0.source = Object.assign({}, F.source); P0.cand = F.c.centroid.map(x => Math.round(x * 10) / 10);
+      S.fib = { plan: P0, guide: null }; last = null; draw(null); syncUI(); renderStep();
+      msg(xl('Fibula BT\'si korundu; fibula planı yeni mandibulanın rezeksiyonuna göre yeniden kurulacak.'));
+      return;
+    }
+    unload();
+  });
 
   // fibula guide edits from the guide panel: drop the cached key so the guide is rebuilt
   function guideEdited() { guideKey = ''; scheduleGuide(); renderStep(); St.emit('changed'); }
   const guideInfo = () => (active() && last ? { auto: guideAuto(last), body: guideBody(last), screws: guideScrews(last), segs: last.segs, FR: F.c.FR } : null);
-  return { setActive, activePane: () => activePane, summary: () => (active() ? summary() : null), view: () => view, active, approved, checks, apply, exportFiles, reportHTML, production, setView, state: () => ({ F, last, view }),
+  return { pending: () => !!(active() && guideStale), setActive, activePane: () => activePane, summary: () => (active() ? summary() : null), view: () => view, active, approved, checks, apply, exportFiles, reportHTML, production, setView, state: () => ({ F, last, view }),
     graftBone, fibBone: q => (F && F.c ? fibBone(q) : false), guideInfo, guideEdited, plan: () => (active() ? plan() : null), rules, RULES, legSide: () => (F && F.c ? legSide() : null), building: () => building, segmentChoice, lensOk, choice: () => (S.fib && S.fib.choice) || null, defect, MIN_LEN, MAX_N, DEV_WARN, SEG_ERR, STUMP_MIN, DEV_TIE, slotOf: () => (active() ? slotOf(plan()) : null) };
 })();
