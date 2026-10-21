@@ -186,6 +186,15 @@
     if (p) try { return await p; } catch (e) { /* the worker failed: in the page */ }
     return G.surfaceNets(field, nx, ny, nz, level, box || undefined);
   }
+  // the mandible cut out of a head CT's one-piece bone mask (bones.js), off the page: on the real CT 9-10 s of watershed
+  // and mirror search held the page. It relabels S.labels (the worker's copy comes back in its place).
+  async function pickMandibleOf(r, labels, comps, count) {
+    const red = { nx: r.nx, ny: r.ny, nz: r.nz, sp: r.sp, origin: r.origin, axes: r.axes };
+    const p = bgCall('seg', { op: 'pickMandible', red, labels, comps, count });
+    if (p) try { const out = await p; if (S.labels === labels) S.labels = out.labels; return out.res; } catch (e) { /* the worker failed: in the page */ }
+    await sleep();
+    return Bones.pickMandible(r, labels, comps, count);
+  }
   // the surface of a 0/1 mask, smoothed first (blur + surface nets), off the page: the fibula and tibia models
   async function blurNetsOf(mask, nx, ny, nz) {
     const p = bgCall('nets', { op: 'blurNets', mask, nx, ny, nz });
@@ -550,7 +559,7 @@
     // the piece that is built like a mandible; when none is, keep the largest and say so (see segChecks)
     if (window.Bones && Bones.assess(r, labels, comps).cut) {
       busy(true, 'Bitişik kemikler ayrılıyor (kafatası, çene, omurga)… 2/4'); await sleep();
-      const res = S.segInfo = Bones.pickMandible(r, labels, comps, count);
+      const res = S.segInfo = await pickMandibleOf(r, labels, comps, count);
       if (res.status === 'split') {
         pick = res.picked; S.comps = res.comps.slice(0, 8);
         if (!S.comps.some(c => c.label === pick)) S.comps[S.comps.length - 1] = res.comps.find(c => c.label === pick);

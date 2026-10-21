@@ -288,11 +288,11 @@ window.Fibula = (function () {
     const { A, B } = E, r = S.red;
     const dir = B.p.clone().sub(A.p).normalize(), len = B.p.distanceTo(A.p);
     const NA = A.N.clone(), NB = B.N.clone(); if (NA.dot(dir) < 0) NA.negate(); if (NB.dot(dir) < 0) NB.negate();
-    const bw = 1.5, nb = Math.ceil(len / bw) + 2, acc = Array.from({ length: nb }, () => [0, 0, 0, 0]);
+    const bw = 1.5, nb = Math.ceil(len / bw) + 2, acc = Array.from({ length: nb }, () => [0, 0, 0, 0]), binPts = Array.from({ length: nb }, () => []);
     // stump face centres: resected bone within a band behind each cut, the narrowest band (3, 8, 15 mm) that holds bone;
     // a cut through thin or no bone (foramen region, a cut that leaves the bone) still gets a face from the kept bone
     // around the plane, and the condylar end of an open-ended resection is the condyle itself
-    const BANDS = [3, 8, 15], ea = BANDS.map(() => [0, 0, 0, 0]), eb = BANDS.map(() => [0, 0, 0, 0]);
+    const BANDS = [3, 8, 15], ea = BANDS.map(() => []), eb = BANDS.map(() => []);
     // occlusal direction: patient superior (LPS +z) across the defect line; crest = highest resected bone per bin
     const vup = V(0, 0, 1).sub(dir.clone().multiplyScalar(dir.z)).normalize(), crest = new Float64Array(nb).fill(-Infinity);
     const add = (x, q) => { x[0] += q.x; x[1] += q.y; x[2] += q.z; x[3]++; };
@@ -304,15 +304,26 @@ window.Fibula = (function () {
       // the slabs follow the cut planes, blended from A's to B's (Denetim 5 R1): slabs square to the A-B chord are clipped by an
       // oblique cut, and the centroid of the clipped sliver sits to one side of the bone (a hook of 4-15 mm in the defect line)
       const t = dA + dB > 1e-6 ? len * Math.min(1, Math.max(0, dA / (dA + dB))) : q.clone().sub(A.p).dot(dir), b = Math.min(nb - 1, Math.max(0, Math.floor(t / bw)));
-      add(acc[b], q); const hq = q.dot(vup); if (hq > crest[b]) crest[b] = hq;
+      binPts[b].push(q.x, q.y, q.z);
       const da = q.clone().sub(A.p).dot(NA) - A.w / 2, db = -(q.clone().sub(B.p).dot(NB)) - B.w / 2;
-      // (only bone near the cut point: an oblique plane can also cross the ramus or coronoid 30-60 mm away, which pulled the
-      // face centre up and seated the graft above the stump, Denetim 5)
-      const nA = q.distanceTo(A.p) < FACE_R, nB = q.distanceTo(B.p) < FACE_R;
-      BANDS.forEach((w, n) => { if (da < w && nA) add(ea[n], q); if (db < w && nB) add(eb[n], q); });
+      BANDS.forEach((w, n) => { if (da < w) ea[n].push(q.x, q.y, q.z); if (db < w) eb[n].push(q.x, q.y, q.z); });
     }
     const cen = x => V(x[0] / x[3], x[1] / x[3], x[2] / x[3]);
-    const firstBand = e => e.find(x => x[3] >= 6) || null;
+    // The face centre is the centre of the bone around the cut point, not of all the bone the band holds: an oblique plane
+    // can also cross the ramus or coronoid 30-60 mm away, which pulled the centre up and seated the graft above the stump
+    // (Denetim 5, contact 20 %). From the cut point, the centre of the band's bone within FACE_R, moved to that centre a
+    // few times (a mean shift: it settles on the body's section, also on a dentate body taller than FACE_R).
+    const faceOf = (P, p0) => {
+      let p = p0.clone(); const q = V();
+      for (let it = 0; it < 6; it++) {
+        const x = [0, 0, 0, 0];
+        for (let n = 0; n < P.length; n += 3) { q.set(P[n], P[n + 1], P[n + 2]); if (q.distanceTo(p) < FACE_R) add(x, q); }
+        if (x[3] < 6) return it ? p : null;
+        const c = cen(x), d = c.distanceTo(p); p = c; if (d < 0.2) break;
+      }
+      return p;
+    };
+    const firstBand = (e, p0) => { for (const P of e) { const f = faceOf(P, p0); if (f) return f; } return null; };
     // kept bone within `w` mm of the plane around the cut point (the stump face itself), when the resected side has none
     const keptFace = (p, N, w = 3, R = FACE_R) => {
       const c = G.indexOf(r, p.toArray()), rad = r.sp.map(x => Math.ceil(R / x)), x = [0, 0, 0, 0];
@@ -323,10 +334,32 @@ window.Fibula = (function () {
       }
       return x[3] >= 6 ? cen(x) : null;
     };
-    const fa = firstBand(ea), fb = firstBand(eb);
-    const PA = fa ? cen(fa) : keptFace(A.p, NA), PB = fb ? cen(fb) : B.virtual ? B.p.clone() : keptFace(B.p, NB);
+    const fa = firstBand(ea, A.p), fb = firstBand(eb, B.p);
+    const PA = fa || keptFace(A.p, NA), PB = fb || (B.virtual ? B.p.clone() : keptFace(B.p, NB));
     if (!PA || !PB) return null;
     PA.sub(NA.clone().multiplyScalar(PA.clone().sub(A.p).dot(NA))); PB.sub(NB.clone().multiplyScalar(PB.clone().sub(B.p).dot(NB)));
+    // the bone centre and crest of each slab follow the body: only the slab's bone within FACE_R of the centre found one
+    // slab before, not a ramus or coronoid strip the slab also crosses higher up (Denetim 5: the line bowed 12 mm up and
+    // the grafts were flagged off the defect line). The walk runs from each stump face and the two are blended along the
+    // defect, so the line meets both faces (a dentate body is taller than FACE_R and a walk from one end alone met the
+    // other face 10 mm off).
+    const walk = (P0, order) => {
+      const c = Array.from({ length: nb }, () => [0, 0, 0, 0]), cr = new Float64Array(nb).fill(-Infinity), ref = P0.clone(), q = V();
+      for (const b of order) {
+        const P = binPts[b];
+        for (let n = 0; n < P.length; n += 3) { q.set(P[n], P[n + 1], P[n + 2]); if (q.distanceTo(ref) >= FACE_R) continue; add(c[b], q); const hq = q.dot(vup); if (hq > cr[b]) cr[b] = hq; }
+        if (c[b][3] > 4) ref.set(c[b][0] / c[b][3], c[b][1] / c[b][3], c[b][2] / c[b][3]);
+      }
+      return { c, cr };
+    };
+    const ord = [...Array(nb).keys()], wa = walk(PA, ord), wb = walk(PB, ord.slice().reverse());
+    for (let b = 0; b < nb; b++) {
+      const x = wa.c[b], y = wb.c[b], w = nb > 1 ? b / (nb - 1) : 0.5;
+      if (x[3] > 4 && y[3] > 4) for (let n = 0; n < 3; n++) acc[b][n] = ((1 - w) * x[n] / x[3] + w * y[n] / y[3]) * 5;
+      else { const z = x[3] > 4 ? x : y; for (let n = 0; n < 3; n++) acc[b][n] = z[3] ? z[n] / z[3] * 5 : 0; }
+      acc[b][3] = x[3] > 4 || y[3] > 4 ? 5 : 0;
+      crest[b] = w < 0.5 ? (wa.cr[b] > -Infinity ? wa.cr[b] : wb.cr[b]) : (wb.cr[b] > -Infinity ? wb.cr[b] : wa.cr[b]);
+    }
     let mid = acc.filter(x => x[3] > 4).map(cen).filter(q => q.clone().sub(PA).dot(NA) > 3 && q.clone().sub(PB).dot(NB) < -3);
     mid = mid.map((q, i) => (i > 0 && i < mid.length - 1 ? q.clone().add(mid[i - 1]).add(mid[i + 1]).multiplyScalar(1 / 3) : q));
     // target shape from the healthy side: each point of the defect line is replaced by the mirror image of the bone

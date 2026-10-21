@@ -1,7 +1,10 @@
 // Bones that a threshold joins: G.edt (anisotropic), G.separator / G.separate (watershed with neck / core merging) and
 // Bones.pickMandible / Bones.boneWarnings, on synthetic volumes only.   Run: node tests/test_separate.mjs
 import { test, run, assert, near } from './lib/t.mjs';
-import { plain } from './lib/load.mjs';
+import { plain, REPO } from './lib/load.mjs';
+import vm from 'node:vm';
+import fs from 'node:fs';
+import path from 'node:path';
 const P = plain('geom.js', 'bones.js'), G = P.eval('G'), B = P.eval('Bones');
 
 // ---- tiny volume builder: 1 mm voxels unless sp is given; shapes are added with fill(shapeFn) ----
@@ -118,6 +121,23 @@ test('pickMandible: a skull + mandible + spine component is cut and the mandible
     let vault = 0; for (let k = 130; k < g.nz; k++) for (let j = 0; j < g.ny; j++) for (let i = 0; i < g.nx; i++) if (labels[i + g.nx * (j + g.ny * k)] === res.picked) vault++;
     assert.equal(vault, 0);
   }
+});
+
+test('pickMandible runs in the background thread (gworker.js) with the same result as in the page', () => {
+  // the worker script in a bare context: importScripts loads the web/ files, postMessage is captured
+  const out = [], g = { console, performance, setTimeout, clearTimeout, postMessage: (m, tr) => out.push(m) };
+  g.self = g; g.globalThis = g; const ctx = vm.createContext(g);
+  g.importScripts = (...fs_) => fs_.forEach(f => vm.runInContext(fs.readFileSync(path.join(REPO, 'web', f), 'utf8'), ctx, { filename: f }));
+  vm.runInContext(fs.readFileSync(path.join(REPO, 'web', 'gworker.js'), 'utf8'), ctx, { filename: 'gworker.js' });
+  const h = head(), red = { nx: h.nx, ny: h.ny, nz: h.nz, sp: h.sp };
+  const a = G.components(h.m, h.nx, h.ny, h.nz, 200), b = G.components(h.m, h.nx, h.ny, h.nz, 200);
+  const res = B.pickMandible(red, a.labels, a.comps, a.count);
+  g.onmessage({ data: { id: 7, op: 'pickMandible', red, labels: b.labels, comps: b.comps, count: b.count } });
+  assert.equal(out.length, 1); assert.equal(out[0].id, 7); assert.ok(!out[0].error, out[0].error);
+  const w = out[0].out;
+  assert.equal(w.res.status, res.status); assert.equal(w.res.picked, res.picked);
+  let diff = 0; for (let v = 0; v < a.labels.length; v++) if (a.labels[v] !== w.labels[v]) diff++;
+  assert.equal(diff, 0, 'the relabelled volume comes back');
 });
 
 test('pickMandible: a mandible-sized component is left alone (status whole, labels unchanged)', () => {

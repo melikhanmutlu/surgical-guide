@@ -26,12 +26,12 @@ const fire = (id, type) => { const el = $(id); (el.listeners[type] || []).forEac
 
 // mandible bar along x (z -14..0) with a thin strip rising 70 mm from it just inside the first cut, like the ramus an
 // oblique cut near the angle crosses
-async function bar() {
+async function bar(extra = () => false) {
   const nx = 160, ny = 50, nz = 120, sp = [0.8, 0.8, 0.8], origin = [-64, -20, -24], hu = new Int16Array(nx * ny * nz).fill(-1000);
   for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
     const x = origin[0] + i * sp[0], y = origin[1] + j * sp[1], z = origin[2] + k * sp[2];
     const body = z < 0 && z > -14 && Math.abs(y) < 8 && Math.abs(x) < 60, strip = x > -19.5 && x < -17 && Math.abs(y) < 1.5 && z >= 0 && z < 70;
-    if (body || strip) hu[i + nx * (j + ny * k)] = 1200;
+    if (body || strip || extra(x, y, z)) hu[i + nx * (j + ny * k)] = 1200;
   }
   S.vol = { hu, nx, ny, nz, sp, origin, axes: [[1, 0, 0], [0, 1, 0], [0, 0, 1]], meta: { acqDate: '20260101' } };
   S.source = { type: 'dicom', name: 'synthetic', fp: 'synthetic' }; S.red = G.reduce(S.vol, 0.8); S.kind = 'dicom'; S.autoAnchor = false;
@@ -50,6 +50,21 @@ test('Stump face: bone the cut plane crosses far from the cut point (a rising st
   // the body's section centre is at z = -7; the strip pulled the old face centre to z of about +10
   assert.ok(a.z < -3 && a.z > -11, `start of the defect line at the body (z ${a.z.toFixed(1)})`);
   assert.ok(Math.abs(a.z - b.z) < 4, `both ends at the same height (${a.z.toFixed(1)}, ${b.z.toFixed(1)})`);
+});
+
+test('Defect line: a strip rising from the middle of the defect does not lift the line; a tall (dentate) stump face meets the line', async () => {
+  // a strip rising 70 mm from the middle of the resected body: the slab centres follow the body, not the strip
+  await bar((x, y, z) => x > -4 && x < -1 && Math.abs(y) < 1.5 && z >= 0 && z < 70);
+  let D = W.Fibula.defect(); assert.ok(D, 'defect');
+  const top = Math.max(...D.pts.map(p => p.z));
+  assert.ok(top < -2, `line stays in the body (highest point z ${top.toFixed(1)})`);
+  // a body 54 mm tall from x = 12 on (teeth on the bone): the stump face at B is the centre of that section (z = 13),
+  // not of the bone within reach of the cut point, and the line runs into it
+  await bar((x, y, z) => x >= 12 && x < 60 && Math.abs(y) < 8 && z >= 0 && z < 40);
+  D = W.Fibula.defect(); const b = D.pts[D.pts.length - 1], m = D.pts[D.pts.length - 2];
+  assert.ok(Math.abs(b.z - 13) < 4, `face at the section centre (z ${b.z.toFixed(1)})`);
+  assert.ok(Math.abs(b.z - m.z) < 4, `the line meets the face (${m.z.toFixed(1)} -> ${b.z.toFixed(1)})`);
+  await bar();
 });
 
 test('Fibula: the leg meshes arrive from the background; the plan does not wait for them', async () => {
