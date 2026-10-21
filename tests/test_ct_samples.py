@@ -33,5 +33,5 @@ def check(path):
 
 if __name__ == '__main__':
     files = sorted(glob.glob(os.path.join(ROOT, 'sample_*_ct.json')))
-    assert len(files) == 2, files
+    assert len(files) >= 2, files
     for f in files: check(f)
