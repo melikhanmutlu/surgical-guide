@@ -18,7 +18,7 @@ function tetraStl() {
 const calls = [];
 const fetch = async (url, o = {}) => {
   calls.push(url);
-  if (/\/guide$/.test(url)) return new Response(JSON.stringify({ stl_b64: tetraStl(), watertight: true, bodies: 1, volume_mm3: 166.7, faces: 4, ms: 1, production_ok: true, issues: [], resolution: 0.2, version: 'test' }), { status: 200 });
+  if (/\/guide(\?job=[\w-]+)?$/.test(url)) return new Response(JSON.stringify({ stl_b64: tetraStl(), watertight: true, bodies: 1, volume_mm3: 166.7, faces: 4, ms: 1, production_ok: true, issues: [], resolution: 0.2, version: 'test' }), { status: 200 });
   return new Response('{}', { status: 200 });
 };
 const saved = [];
@@ -54,7 +54,7 @@ test('setup: approved plan, package open, no production STL yet', () => {
 test('single Guide button: makes the production STL on the server and saves guide_uretim.stl (not the preview)', async () => {
   saved.length = 0; calls.length = 0;
   await St.exportOne('guide');
-  assert.ok(calls.some(u => /\/guide$/.test(u)), 'the server was asked: ' + JSON.stringify(calls));
+  assert.ok(calls.some(u => /\/guide(\?job=[\w-]+)?$/.test(u)), 'the server was asked: ' + JSON.stringify(calls));
   assert.deepEqual(saved.map(f => f.filename), ['guide_uretim.stl'], $('expMsg').textContent + ' / ' + $('oneMsg').textContent);
   assert.equal(saved[0].bytes.length, 84 + 4 * 50, 'the server STL, not the preview');
   assert.match($('oneMsg').textContent, /guide_uretim\.stl indirildi/);
@@ -70,7 +70,7 @@ test('3MF button: makes the production STL first when it is out of date', async 
   S.prod = null; saved.length = 0; calls.length = 0;
   $('x3mf').click();
   for (let i = 0; i < 400 && saved.length < 2; i++) await new Promise(r => setTimeout(r, 10));
-  assert.ok(calls.some(u => /\/guide$/.test(u)), 'the server was asked');
+  assert.ok(calls.some(u => /\/guide(\?job=[\w-]+)?$/.test(u)), 'the server was asked');
   assert.deepEqual(saved.map(f => f.filename), ['guideler.3mf', 'modeller.3mf']);
   assert.ok(new TextDecoder().decode(saved[0].bytes).includes('Mandibula guide (üretim)'));
 });

@@ -7,8 +7,10 @@
 var GKernel = (function () {
   // seat.js publishes Seat on the page's window, or on the worker's global scope
   const seatModule = () => (typeof self !== 'undefined' && self.Seat) || (typeof window !== 'undefined' && window.Seat) || null;
-  function run(K) {
-    const t0 = performance.now(), T = {};
+  // onProgress(f), optional: the share of the kernel done (0..1) at the end of each stage, by the stage times measured on
+  // the anonymised real CT sample (distance 24 %, envelope 57 %, screws 74 %, field 79 %, surface and seating 100 %)
+  function run(K, onProgress) {
+    const t0 = performance.now(), T = {}, tick = f => { if (onProgress) onProgress(f); };
     const { h, lo, nx, ny, nz, B, soft, g, sUp, stopX, stopZ, vc, uc } = K, N = nx * ny * nz, nxy = nx * ny;
     // wrap depth at a position along the guide: the hand / global value, capped by the automatic per-position profile
     // (g.wrapU = [[uu, depth], ...]) where the bone's widest level is shallower towards an end of the guide
@@ -17,7 +19,7 @@ var GKernel = (function () {
     // as the server does; the guide is the level set of a few such fields (shell band, box, slots, sleeves) combined with
     // min / max, so every plane in the design stays a plane and the mesh below can be marched on exact distances
     const O = G.exterior(B, nx, ny, nz), Bs = new Uint8Array(N); for (let i = 0; i < N; i++) Bs[i] = O[i] ? 0 : 1;
-    const D = G.edt(Bs, nx, ny, nz); T.edt = performance.now() - t0;
+    const D = G.edt(Bs, nx, ny, nz); T.edt = performance.now() - t0; tick(0.24);
     const dist = new Float32Array(N); for (let i = 0; i < N; i++) dist[i] = Bs[i] ? -h / 2 : D[i] * h - h / 2;
     // within a voxel and a half of the surface the distance comes from the density itself, (0.5 - density) / |gradient|,
     // which places the surface to a fraction of a voxel instead of the voxel the node-to-node distance lands in
@@ -117,7 +119,7 @@ var GKernel = (function () {
       if (soft) { for (let i = 0; i < N; i++) if (!E[i] || Bs[i]) { if (Math.abs(distE[i] - (Bs[i] ? -h / 2 : D[i] * h - h / 2)) < 0.5 * h) distE[i] = dist[i]; } }
       ddE = G.blur(distE, nx, ny, nz);
     }
-    T.env = performance.now() - t0;
+    T.env = performance.now() - t0; tick(0.57);
     // the saw slots and the two-guide gap as planes in guide-frame coordinates (signed distance = a*uu + b*vv + c*nn - e)
     const slots = K.slots, gp = K.gp;
     const F = new Float32Array(N).fill(h * 4);
@@ -229,7 +231,7 @@ var GKernel = (function () {
     }
     // the surface must close inside the grid
     for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) if (i === 0 || j === 0 || k === 0 || i === nx - 1 || j === ny - 1 || k === nz - 1) { const id = i + nx * (j + ny * k); if (F[id] < h) F[id] = h; }
-    T.screws = performance.now() - t0;
+    T.screws = performance.now() - t0; tick(0.74);
     // drop specks left by slots and holes (under 1 % of the main body or 1 mm³); count real pieces
     const Gm = new Uint8Array(N); for (let i = 0; i < N; i++) if (F[i] < 0) Gm[i] = 1;
     const cc = G.components(Gm, nx, ny, nz, 1), big = cc.comps.length ? cc.comps[0].size : 0, minSize = Math.max(big * 0.01, 1 / (h * h * h));
@@ -245,13 +247,13 @@ var GKernel = (function () {
         if (tTop[id] > 1.5 * h) undercutCols++;
       }
     }
-    T.field = performance.now() - t0;
+    T.field = performance.now() - t0; tick(0.79);
     const net = G.marchTets(F, nx, ny, nz, 0);
     // winding follows the grid -> world map, which is a reflection when (u, v, n) is left-handed
     if (K.mirror) { const ix = net.indices; for (let i = 0; i < ix.length; i += 3) { const t = ix[i + 1]; ix[i + 1] = ix[i + 2]; ix[i + 2] = t; } }
     const Seat = seatModule(), seat = Seat && !K.fast ? Seat.analyze({ Gm, B, D, nx, ny, nz, h, lo, clear: c }) : null;
     const wrapProfile = []; for (let i = 0; i < nx; i += Math.max(1, Math.round(1 / h))) wrapProfile.push([+(lo[0] + i * h).toFixed(2), +wrapAt[i].toFixed(2)]);
-    T.kernel = performance.now() - t0;
+    T.kernel = performance.now() - t0; tick(1);
     return { net, screws: screwOut, wrapProfile, pieces: comps.length, contact: contact * h * h, undercut: undercutCols * h * h, volume: vol * h * h * h, seat, seatDir, dropped,
       bodyW: vol ? +(bvHi - bvLo + h).toFixed(1) : 0, bodyV: vol ? [+bvLo.toFixed(1), +bvHi.toFixed(1)] : null, T, Gm, B, F, edgeV, wrapAt };
   }

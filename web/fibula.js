@@ -871,16 +871,21 @@ window.Fibula = (function () {
     // (the approve button was greyed while the rebuild was due: render the step again, or it stays greyed)
     if (key === guideKey && S.fib.guide) { guideStale = false; renderStep(); St.updatePanels(); pairView(); return; }
     building = true;
-    St.busy(true, 'Fibula guide\'ı üretiliyor…'); await St.sleep();
+    // the first build fills the bar (its own progress from the guide kernel); a guide that needs further tries (another
+    // rib side, shallower wraps: how many is not known beforehand) shows the try number and the elapsed time instead
+    const t0 = Date.now();
+    St.busy(true, 'Fibula guide\'ı üretiliyor…', { f: 0, restart: true }); await St.sleep();
     try {
-      let out = await St.buildGuide(ctx), adapt = null, flip = false;
+      let out = await St.buildGuide(Object.assign({}, ctx, { onProgress: St.busySpan(0, 1) })), adapt = null, flip = false, tries = 1;
       // a guide that splits or cannot be put on: the rib (bridge) on the other edge first (a corner cut off by an oblique
       // slot on one edge is held by a rib on that edge), then shallower wraps half a mm at a time (the section is not
       // round, the bone bends under the guide); a wrap set by hand (fg.wrap) is left alone. The best build is kept:
       // fewest pieces, then one that can be put on.
       const bad = R => R.pieces > 1 || (R.seat && R.seat.ok && !R.seat.free), w0 = ctx.g.wrap;
       const rank = R => R.pieces * 2 + (R.seat && R.seat.ok && !R.seat.free ? 1 : 0);
-      const tryG = async g => { const o2 = await St.buildGuide(Object.assign({}, ctx, { g })); if (rank(o2.result) < rank(out.result)) { out.mesh.geometry.dispose(); out = o2; ctx.g = g; return true; } o2.mesh.geometry.dispose(); return false; };
+      const tryG = async g => {
+        if (++tries === 2) St.busy(true, `Fibula guide'ı oturtuluyor · deneme ${tries}`, { bar: true, t0 }); else St.busyText(`Fibula guide'ı oturtuluyor · deneme ${tries}`);
+        const o2 = await St.buildGuide(Object.assign({}, ctx, { g })); if (rank(o2.result) < rank(out.result)) { out.mesh.geometry.dispose(); out = o2; ctx.g = g; return true; } o2.mesh.geometry.dispose(); return false; };
       if (bad(out.result)) flip = await tryG(Object.assign({}, ctx.g, { side: -ctx.g.side }));
       if (bad(out.result) && !(plan().fg && plan().fg.wrap != null)) {
         const g0 = ctx.g; let lowest = null;
@@ -1221,10 +1226,10 @@ window.Fibula = (function () {
     return `<h2>Fibula rekonstrüksiyonu</h2><p>${esc(F.label)} · ${xl(s.bacak_tarafi + ' bacak')} (${xl(s.bacak_tarafi_kaynagi)}) · ${xl(`${s.segment_sayisi} segment · testere payı ${fmt(s.testere_payi_mm)} mm · distal korunan ${fmt(s.distal_korunan_mm, 0)} mm · proksimalde kalan ${s.proksimalde_kalan_mm ?? '–'} mm`)} · ${approved() ? `${xl('onaylı')} (${esc(plan().by || '')})` : xl('onay bekliyor')}</p>
 <table><tr><th>Segment</th><th>Boy</th><th>Distal uçtan</th><th>Uç açıları</th><th>Rotasyon</th><th>Pedikül</th></tr>${s.segmentler.map(g => `<tr><td>${g.no}</td><td>${fmt(g.boy_mm)} mm</td><td>${fmt(g.distal_uctan_mm)} mm</td><td>${fmt(g.kesi_acilari_deg[0])}° / ${fmt(g.kesi_acilari_deg[1])}°</td><td>${g.rotasyon_deg}°</td><td>${g.pedikul_yonu ? xl(g.pedikul_yonu) : '–'}</td></tr>`).join('')}</table>${guideReportHTML(esc)}`;
   }
-  async function production(signal) {
+  async function production(signal, onProgress) {
     if (!active() || !S.fib.guide || guideStale) return;
     const x = S.fib.guide.ctx;
-    const r = await St.serverGuide({ vol: F.vol, red: F.red, F: F.c.Fm, thr: THR, g: x.g, P: x.P, u: x.u, v: x.v, n: x.n, pls: x.pls, scs: x.scs, wrapProfile: S.fib.guide.result.wrapProfile, seatDir: S.fib.guide.result.seatDir }, signal);
+    const r = await St.serverGuide({ vol: F.vol, red: F.red, F: F.c.Fm, thr: THR, g: x.g, P: x.P, u: x.u, v: x.v, n: x.n, pls: x.pls, scs: x.scs, wrapProfile: S.fib.guide.result.wrapProfile, seatDir: S.fib.guide.result.seatDir }, signal, onProgress);
     S.fib.prod = Object.assign(r, { key: S.fib.guide.key });
     $('prodMsg').textContent += ' ' + xl(`Fibula guide'ı: ${r.watertight ? 'su geçirmez' : 'SU GEÇİRMEZ DEĞİL'}, ${r.bodies} parça${r.bodies > 1 ? ' (BİRDEN FAZLA PARÇA)' : ''}.`);
     const why = St.prodWhy ? St.prodWhy(r) : ''; if (why) $('prodMsg').textContent += ' ' + why;   // (the server's reasons not to print it, P5/P6/E3)

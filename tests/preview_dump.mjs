@@ -22,7 +22,8 @@ const captured = [];
 const emptyStl = Buffer.alloc(84);
 const fetchStub = async (url, init) => {
   const s = String(url);
-  if (init && init.method === 'POST' && /\/guide$/.test(s)) {
+  if (/\/guide\/progress\?/.test(s)) return { ok: true, status: 200, json: async () => ({ f: null, stage: 'none' }) };
+  if (init && init.method === 'POST' && /\/guide(\?job=[\w-]+)?$/.test(s)) {
     captured.push(JSON.parse(init.body));
     return { ok: true, status: 200, json: async () => ({ stl_b64: emptyStl.toString('base64'), watertight: true, bodies: 1, volume_mm3: 0, faces: 0, ms: 0 }) };
   }

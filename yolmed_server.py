@@ -25,6 +25,9 @@ Endpoints (JSON unless noted). With YOLMED_TOKEN set every endpoint but /health 
   POST /guide {kind: "bar", bar: {path, r, pads}, crop?, mask_b64?}
        -> {stl_b64, watertight, volume_mm3, faces, bodies, bone_clear_mm, in_bone_verts, ms}
        The connecting bar between the two guides of a long resection (web/app.js barPlan), a separate part.
+  POST /guide?job=<id> ...               the same, with its progress kept under <id> (8..64 letters, digits, - or _) while it runs
+  GET  /guide/progress?job=<id>         -> {f, stage}  (f: share of the build done, 0..1; stage "queue" while it waits for
+                                           the job slot; {f: null, stage: "none"} before it arrives and once it answered)
 
 The case store holds plan JSON only, never image data.
 Research prototype. Not a medical device; every guide must be reviewed by a qualified team.
@@ -45,7 +48,7 @@ import sys
 import threading
 import time
 import traceback
-from urllib.parse import urlparse, unquote
+from urllib.parse import parse_qs, urlparse, unquote
 
 import numpy as np
 from scipy import ndimage as ndi
@@ -64,6 +67,52 @@ MAX_TEXT = 2000                       # kind, fingerprint, note
 MAX_NAME = 200                        # case name, version author (listed in every GET /cases / history)
 PREVIEW_RES = 0.4                     # mm: the browser preview's grid; a production grid coarser than this is not production
 GUIDE_SLOTS = threading.BoundedSemaphore(int(os.environ.get("YOLMED_GUIDE_JOBS", "1")))
+# progress of the running /guide jobs (POST /guide?job=<id>, polled with GET /guide/progress?job=<id>): the share of the
+# build done, by stage. GUIDE_STAGE_END: the share of the build time at the end of each stage, measured on the anonymised
+# real CT sample at 0.2 mm (fill 0.3 s, resample 2.3, distance 4.3, envelope 4, print checks 1.4, ... of 15.5 s); stages that run in a loop
+# report within themselves, so the bar moves on real work, not on a clock (the two distance transforms are single calls:
+# the bar waits on each for a few seconds)
+GUIDE_STAGES = ("fill", "resample", "edt", "env", "field", "screws", "print_checks", "speck", "mc", "export")
+GUIDE_STAGE_END = (0.02, 0.17, 0.445, 0.705, 0.73, 0.76, 0.85, 0.855, 0.90, 1.0)
+GUIDE_JOB_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+GUIDE_JOBS_MAX = 256
+GUIDE_JOBS = {}
+GUIDE_JOBS_LOCK = threading.Lock()
+
+
+def _job_set(job, f, stage):
+    if not job:
+        return
+    with GUIDE_JOBS_LOCK:
+        if job not in GUIDE_JOBS and len(GUIDE_JOBS) >= GUIDE_JOBS_MAX:
+            GUIDE_JOBS.pop(min(GUIDE_JOBS, key=lambda k: GUIDE_JOBS[k]["t"]))
+        GUIDE_JOBS[job] = {"f": round(min(1.0, max(0.0, f)), 4), "stage": stage, "t": time.time()}
+
+
+def _job_get(job):
+    with GUIDE_JOBS_LOCK:
+        j = GUIDE_JOBS.get(job)
+        return None if j is None else {"f": j["f"], "stage": j["stage"]}
+
+
+def _job_drop(job):
+    with GUIDE_JOBS_LOCK:
+        GUIDE_JOBS.pop(job, None)
+
+
+def _stage_marker(progress):
+    """mark(stage, frac): `frac` of `stage` is done (1 = the stage has ended); reported as the share of the whole build,
+    never lower than before (a grid coarsened for the cell budget resamples again inside the same share)."""
+    done = [0.0]
+
+    def mark(stage, frac=1.0):
+        if progress is None:
+            return
+        i = GUIDE_STAGES.index(stage)
+        a = GUIDE_STAGE_END[i - 1] if i else 0.0
+        done[0] = max(done[0], round(a + (GUIDE_STAGE_END[i] - a) * min(1.0, max(0.0, frac)), 4))
+        progress(done[0], stage)
+    return mark
 
 
 def now_iso():
@@ -592,13 +641,15 @@ def print_checks(inside, bone, shadow, r):
     return out
 
 
-def build_guide(req):
+def build_guide(req, progress=None):
+    """progress(f, stage), optional: called as the build goes on (f = share done, 0..1)."""
     import manifold3d as m3d
     from skimage.measure import marching_cubes
 
     if req.get("kind") == "bar":
         return build_bar(req)
     _validate_guide(req)
+    mark = _stage_marker(progress)
     t0 = time.perf_counter()
     T = {}
     crop, fr, g = req["crop"], req["frame"], req["g"]
@@ -716,6 +767,7 @@ def build_guide(req):
         occ[filled & ~mask] = 1.0
     del mask
     T["fill"] = time.perf_counter() - t0
+    mark("fill")
 
     # frame-aligned isotropic grid with the preview's extents (grid nodes shifted by an irrational fraction of a voxel
     # so no node lies exactly on a round-numbered design plane). A guide too large for the cell budget at the requested
@@ -754,6 +806,7 @@ def build_guide(req):
         for i0 in range(0, nx, step):
             i1 = min(nx, i0 + step)
             soft[i0:i1] = ndi.affine_transform(src, mat, off + mat[:, 0] * i0, output_shape=(i1 - i0, ny, nz), order=1, cval=0.0, prefilter=False)
+            mark("resample", 0.8 * i1 / nx)
         bone = ndi.binary_fill_holes(soft >= 0.5)       # solid = bone plus every void the outside cannot reach
         UU = (glo[0] + r * np.arange(nx)).astype(np.float32)
         VV = (glo[1] + r * np.arange(ny)).astype(np.float32)
@@ -800,16 +853,20 @@ def build_guide(req):
     if nz < 4:
         raise HttpError(422, "guide grid too shallow")
     T["resample"] = time.perf_counter() - t0
+    mark("resample")
 
     # signed distance to the bone surface (outside > 0; -r/2 on bone nodes); within 1.5 voxels of the surface it comes
     # from the density itself, (0.5 - density) / |gradient|, which places the surface to a fraction of a voxel
     dist = (ndi.distance_transform_edt(~bone, sampling=r) - r / 2).astype(np.float32)
     dist[bone] = -r / 2
     dist_raw = dist.copy()
+    mark("edt", 0.9)
 
     def refine(d_arr):
         near, g2, fade = 1.5 * r, 1 / (2 * r), 0.5 * r
         for i in range(1, nx - 1):
+            if i % 16 == 0:
+                mark("edt", 0.9 + 0.06 * i / nx)
             de = d_arr[i, 1:-1, 1:-1]
             s = soft[i, 1:-1, 1:-1]
             gx = (soft[i + 1, 1:-1, 1:-1] - soft[i - 1, 1:-1, 1:-1]) * g2
@@ -825,6 +882,7 @@ def build_guide(req):
     refine(dist)
     dd = _blur121(dist)
     T["edt"] = time.perf_counter() - t0
+    mark("edt")
 
     # ---- insertion direction and the seatable envelope ----
     # The guide is put on along one direction d (a cone of up to 40 deg around n). The shell is built on the envelope =
@@ -847,7 +905,9 @@ def build_guide(req):
     def vis_count(prj, tol):
         return int(np.count_nonzero(prj.top[prj.cells(si, sj, sk)] - prj.t(si, sj, sk) <= tol)) if len(si) else 0
     pick, best = None, -np.inf
-    for tilt, az in ([forced] if forced else SEAT_CANDS):
+    cands = [forced] if forced else SEAT_CANDS
+    for ci, (tilt, az) in enumerate(cands):
+        mark("env", 0.05 * ci / len(cands))
         prj = _Projection(_seat_vec(tilt, az), (nx, ny, nz), r, st)
         prj.top_of(bone)
         score = vis_count(prj, 1.5 * prj.cell) * (1 - 0.005 * tilt)
@@ -862,7 +922,10 @@ def build_guide(req):
     E = np.zeros((nx, ny, nz), np.uint8)
     J, K = np.mgrid[0:ny, 0:nz]
     J, K = J.astype(float), K.astype(float)
+    mark("env", 0.05)
     for i in range(nx):
+        if i % 16 == 0:
+            mark("env", 0.05 + 0.05 * i / nx)
         tt = prj.top[prj.cells(float(i), J, K)] - prj.t(float(i), J, K)
         E[i] = np.where(bone[i], 1, np.where(tt > 0.5 * r, 2, 0))
     n_shadow = int(np.count_nonzero(E == 2))
@@ -877,6 +940,7 @@ def build_guide(req):
         del add, sh
         dist_e = (ndi.distance_transform_edt(E == 0, sampling=r) - r / 2).astype(np.float32)
         dist_e[E > 0] = -r / 2
+        mark("env", 0.85)
         # the density refinement applies where the envelope surface is the bone surface itself (not a shadow face)
         sel = ((E == 0) | bone) & (np.abs(dist_e - dist_raw) < 0.5 * r)
         dist_e[sel] = dist[sel]
@@ -887,6 +951,7 @@ def build_guide(req):
         dde = dd
     del dist, dist_raw, soft
     T["env"] = time.perf_counter() - t0
+    mark("env")
 
     # ---- the field: F < 0 is guide (assembled slab by slab along the guide, so the memory stays at a few arrays) ----
     VV2, NN2 = VV[:, None], NN[None, :]
@@ -976,6 +1041,7 @@ def build_guide(req):
             dropped_islands = [round(float(areas[k - 1]), 1) for k in drop]
     del fp, lab, J, K
     T["field"] = time.perf_counter() - t0
+    mark("field")
 
     # ---- screw sleeves (added, clear of bone and envelope) and drill holes (removed) ----
     screw_info, axes_ = [], []
@@ -1057,6 +1123,7 @@ def build_guide(req):
     for sl in ((0,), (-1,), (slice(None), 0), (slice(None), -1), (slice(None), slice(None), 0), (slice(None), slice(None), -1)):
         F[sl] = np.maximum(F[sl], r)
     T["screws"] = time.perf_counter() - t0
+    mark("screws")
 
     # drop specks left by slots and holes (under 1 % of the main body or 1 mm3, the preview's rule); count real pieces
     lab, nlab = ndi.label(F < 0)
@@ -1073,12 +1140,14 @@ def build_guide(req):
     inside = F < 0
     pc = print_checks(inside, bone, (E == 2) if n_shadow else None, r)
     T["print_checks"] = time.perf_counter() - t0
+    mark("print_checks")
     vol_vox = int(np.count_nonzero(inside))
     contact = int(np.count_nonzero(inside & (dd > clear) & (dd <= cw) & (dd <= clear + r)))
     any_j = inside.any(axis=(0, 2))
     body_v = [round(float(VV[any_j].min()), 1), round(float(VV[any_j].max()), 1)] if any_j.any() else None
     del inside, any_j, dd, dde, E, bone
     T["speck"] = time.perf_counter() - t0
+    mark("speck")
 
     # ---- one marching cubes of the field ----
     F[np.abs(F) < 2e-3] = 2e-3                      # values exactly at the level create coincident / non-manifold verts
@@ -1102,6 +1171,7 @@ def build_guide(req):
         faces = np.asarray(mesh.tri_verts, dtype=np.int64)
         manifold = True
     T["mc"] = time.perf_counter() - t0
+    mark("mc")
 
     verts = verts @ R.T + p                          # frame -> world (LPS, mm)
     if np.linalg.det(R) < 0:
@@ -1112,6 +1182,7 @@ def build_guide(req):
     tm, watertight = _mesh_check(data)
     bodies = int(tm.body_count) if len(faces) else 0
     T["export"] = time.perf_counter() - t0
+    mark("export")
     # what keeps this STL from being printed as it is (the studio blocks the package and says why)
     issues = []
     for k, si in enumerate(screw_info):
@@ -1208,7 +1279,7 @@ class Handler(seg_server.Handler):
         path = urlparse(self.path).path
         try:
             st = self.store
-            if path.startswith("/cases") or path == "/guide":
+            if path.startswith("/cases") or path in ("/guide", "/guide/progress"):
                 self._require_auth()
             if path in ("/cases", "/cases/"):
                 if method == "GET":
@@ -1240,19 +1311,34 @@ class Handler(seg_server.Handler):
                         raise HttpError(404, "no such version")
                     return self._json(200, st.get_version(cid, int(vn)))
                 raise HttpError(405, "method not allowed")
+            if path == "/guide/progress" and method == "GET":
+                job = parse_qs(urlparse(self.path).query).get("job", [""])[0]
+                if not GUIDE_JOB_RE.match(job):
+                    raise HttpError(400, "job must be 8 to 64 letters, digits, - or _")
+                # a job not (yet / any more) running answers {stage: "none"} rather than a 404: the studio polls from the
+                # moment it starts the upload, and a 404 there would be a console error on every production STL
+                return self._json(200, _job_get(job) or {"f": None, "stage": "none"})
             if path == "/guide" and method == "POST":
+                # optional ?job=<id>: the build's progress can be polled at GET /guide/progress?job=<id> while it runs
+                job = parse_qs(urlparse(self.path).query).get("job", [""])[0]
+                if job and not GUIDE_JOB_RE.match(job):
+                    raise HttpError(400, "job must be 8 to 64 letters, digits, - or _")
                 req = self._body(MAX_BODY)
+                _job_set(job, 0.0, "queue")
                 # the job slot is taken only now, with the whole body in hand: a slow upload never holds the guide service
                 if not GUIDE_SLOTS.acquire(timeout=seg_server.JOB_WAIT_S):
+                    _job_drop(job)
                     raise HttpError(503, "guide service busy, try again")
                 try:
-                    out = build_guide(req)
+                    _job_set(job, 0.0, "start")
+                    out = build_guide(req, (lambda f, st: _job_set(job, f, st)) if job else None)
                 except GUIDE_ERRORS:
                     # a request shape the validation let through: the client sees a short, generic answer, the log the details
                     traceback.print_exc()
                     raise HttpError(400, "bad guide request (fields missing or of the wrong type)")
                 finally:
                     del req
+                    _job_drop(job)
                     GUIDE_SLOTS.release()
                 self._release_upload()
                 return self._json(200, out)
@@ -1305,7 +1391,7 @@ class Handler(seg_server.Handler):
         path = urlparse(self.path).path
         if path == "/health":
             return super().do_GET()
-        if self.web_root and not (path.startswith("/cases") or path in ("/guide", "/segment")):
+        if self.web_root and not (path.startswith("/cases") or path in ("/guide", "/guide/progress", "/segment")):
             try:
                 return self._static(path)
             except HttpError as e:

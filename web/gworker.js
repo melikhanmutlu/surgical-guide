@@ -1,13 +1,14 @@
 /* Background thread of the studio: the guide kernel (gkernel.js), the guide mesh simplification (geom.js
    decimateGen), the bone surfaces (geom.js surfaceNets), the signed distance of an ankle fracture piece (geom.js sdf) and the mandible cut-out (bones.js pickMandible), so the page stays responsive while they run. One request at a time: { id, op, ... } -> { id, out } or
-   { id, error }. Each request is answered with the buffers moved, not copied. */
+   { id, error }; a guide request with progress: true also sends { id, p } (share done, 0..1) as it goes. Each request is answered with the buffers moved, not copied. */
 'use strict';
 self.window = self;   // (seat.js publishes itself on window)
 importScripts('geom.js', 'seat.js', 'gkernel.js', 'bones.js');
 self.onmessage = e => {
   const m = e.data;
   try {
-    if (m.op === 'guide') { const out = GKernel.run(m.K); self.postMessage({ id: m.id, out }, GKernel.transfer(out)); return; }
+    // (progress: { id, p } messages while the kernel runs, the answer after them)
+    if (m.op === 'guide') { const out = GKernel.run(m.K, m.progress ? p => self.postMessage({ id: m.id, p }) : null); self.postMessage({ id: m.id, out }, GKernel.transfer(out)); return; }
     if (m.op === 'nets') { const out = G.surfaceNets(m.field, m.nx, m.ny, m.nz, m.level, m.box || undefined); self.postMessage({ id: m.id, out }, [out.positions.buffer, out.indices.buffer]); return; }
     if (m.op === 'blurNets') { const f = G.blur(m.mask, m.nx, m.ny, m.nz), out = G.surfaceNets(f, m.nx, m.ny, m.nz); self.postMessage({ id: m.id, out }, [out.positions.buffer, out.indices.buffer]); return; }
     if (m.op === 'sdf') { const out = G.sdf(m.mask, m.nx, m.ny, m.nz, m.sp); self.postMessage({ id: m.id, out }, [out.buffer]); return; }

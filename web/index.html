@@ -827,7 +827,7 @@ button.ghost.danger { color: var(--crit); }
       </div>
       <div class="markers" id="markers"></div>
       <div class="overlay modebar" id="modeBar" hidden><span class="mb-from" id="modeFrom" hidden>Adım <b id="modeStep"></b></span><span id="modeBadge" role="status" aria-live="polite" hidden></span><button class="mb-exit" id="modeExit" title="Bu modu kapat; model yeniden döndürülebilir">Bitir<kbd>Esc</kbd></button></div>
-      <div class="busy" id="busy" role="status"><span id="busyText">Yükleniyor…</span><span class="pbar" id="busyBar" hidden><i></i></span><button class="link" id="busyCancel" hidden>İptal</button></div>
+      <div class="busy" id="busy" role="status"><span id="busyText">Yükleniyor…</span><span class="pbar" id="busyBar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-label="İlerleme" hidden><i></i></span><button class="link" id="busyCancel" hidden>İptal</button></div>
       <div class="viewtools" id="viewTools">
         <canvas id="viewCube" width="96" height="96" title="Yön küpü: bir yüze tıklayın" aria-label="Yön küpü"></canvas>
         <div class="presets"><button data-view="ant" title="Önden">Ön</button><button data-view="right" title="Sağdan">Sağ</button><button data-view="left" title="Soldan">Sol</button><button data-view="sup" title="Üstten">Üst</button><button data-view="inf" title="Alttan">Alt</button></div>

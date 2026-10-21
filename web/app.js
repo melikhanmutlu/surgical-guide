@@ -19,16 +19,41 @@
     THREE.Material.prototype.keepsProgram = true;
   }
   const COLORS = { bone: 0xddd5bd, resected: 0xd67850, guide: 0x3c82dc, fguide: 0x2a9d8f, screw: 0x8c959c, plane: 0xe0533d, anchor: 0x22a06b, lesion: 0x8e6fd6 };
-  // busy indicator; long server jobs get a running bar, elapsed time and a cancel button
-  let busyTick = null, busyCancelFn = null, pipeGuide = false;   // pipeGuide: the guide build is the last stage (4/4) of a bone rebuild
+  // busy indicator. A long job shows a bar: determinate (opt.f, then busyFrac as the job reports its own progress) with
+  // the percentage and, once the rate is known, the time left; or running (opt.bar) with the elapsed time and, when
+  // given, the time limit (opt.max). A job that can be stopped gets a cancel button (opt.cancel).
+  // busyRun: the determinate run on screen (its start, the share done then, the share now and the step's text)
+  let busyTick = null, busyCancelFn = null, pipeGuide = false, busyRun = null, busyTickText = '';   // pipeGuide: the guide build is the last stage (4/4) of a bone rebuild
   const busy = (on, text, opt = {}) => {
+    const det = !!on && opt.f != null;
     $('busy').hidden = !on; $('busy').setAttribute('aria-busy', on ? 'true' : 'false'); document.body.classList.toggle('is-busy', !!on); if (text) $('busyText').textContent = text;
-    $('busyBar').hidden = !(on && opt.bar); $('busyBar').classList.remove('det'); $('busyBar').firstElementChild.style.width = ''; $('busyCancel').hidden = !(on && opt.cancel); busyCancelFn = on ? opt.cancel || null : null;
+    $('busyBar').hidden = !(on && (opt.bar || det)); $('busyBar').classList.toggle('det', det); $('busyBar').firstElementChild.style.width = det ? '0%' : ''; if (!det) $('busyBar').removeAttribute('aria-valuenow'); $('busyCancel').hidden = !(on && opt.cancel); busyCancelFn = on ? opt.cancel || null : null;
     clearInterval(busyTick);
-    if (on && opt.bar) { const t0 = Date.now(); busyTick = setInterval(() => { $('busyText').textContent = `${xl(text)} ${xl(`${Math.round((Date.now() - t0) / 1000)} sn`)}${opt.max ? ' ' + xl(`/ en çok ${opt.max} sn`) : ''}`; }, 1000); }
+    // a later step of the same job keeps its start (the time left is measured over the whole job); a new job starts afresh
+    if (!det) busyRun = null;
+    else { if (!busyRun || opt.restart || opt.f < busyRun.f) busyRun = { t0: performance.now(), f0: opt.f, f: opt.f, last: -1e9 }; busyRun.text = text || busyRun.text || ''; busyFrac(opt.f, null, true); }
+    if (on && opt.bar && !det) { const t0 = opt.t0 || Date.now(); busyTick = setInterval(() => { $('busyText').textContent = `${xl(busyTickText)} ${xl(`${Math.round((Date.now() - t0) / 1000)} sn`)}${opt.max ? ' ' + xl(`/ en çok ${opt.max} sn`) : ''}`; }, 1000); }
+    if (text) busyTickText = text;
   };
-  // determinate bar for file loading: percentage and, once the rate is known, the time left
+  // a new step text for the running bar (its clock goes on)
+  const busyText = text => { busyTickText = text; $('busyText').textContent = text; };
   const etaText = s => s < 60 ? `${Math.max(1, Math.round(s))} sn` : `${Math.floor(s / 60)} dk ${Math.round(s % 60)} sn`;
+  // the running job's share done (0..1) and, optionally, a new step text; the bar never runs backwards. Returns true when
+  // the screen was updated (at most every 120 ms, unless force).
+  function busyFrac(f, text, force) {
+    const R = busyRun; if (!R || $('busy').hidden) return false;
+    if (text) R.text = text;
+    if (Number.isFinite(f)) R.f = Math.max(R.f, Math.min(1, f));
+    const now = performance.now(); if (!force && !text && now - R.last < 120 && R.f < 1) return false; R.last = now;
+    const el = (now - R.t0) / 1000, done = R.f - R.f0, eta = done > 0.03 && el > 0.8 && R.f < 1 ? el * (1 - R.f) / done : null;
+    $('busyBar').firstElementChild.style.width = (R.f * 100).toFixed(1) + '%';
+    $('busyBar').setAttribute('aria-valuenow', String(Math.floor(R.f * 100)));
+    $('busyText').textContent = `${xl(R.text)} ${xl(`%${Math.floor(R.f * 100)}`)}${eta !== null ? ' ' + xl(`· yaklaşık ${etaText(eta)} kaldı`) : ''}`;
+    return true;
+  }
+  // a progress callback for the part [a, b] of the running job (a step of several, one piece of a two-piece guide)
+  const busySpan = (a, b, text) => { if (text) busyFrac(a, text); return f => busyFrac(a + (b - a) * Math.max(0, Math.min(1, f))); };
+  // determinate bar for file loading: percentage and, once the rate is known, the time left (busyFrac)
   // a DICOM / zip load can be cancelled (button in the busy bar) and a newer load replaces an older one: the older one stops at its next
   // progress step (LOAD_CANCELLED) and never reaches setVolume, so a stale series cannot overwrite the case
   const LOAD_CANCELLED = Object.assign(new Error('load cancelled'), { cancelled: true });
@@ -40,16 +65,11 @@
   // cleared under a running guide fit ("Otomatik planla" during the sample download threw in fitWrap): refuse with a notice
   function planBlocked() { if (!loadCtl && !committing) return false; alertMsg('Vaka yükleniyor; yükleme bitince yeniden deneyin.'); return true; }
   function progress(ctl) {
-    const t0 = performance.now(); let last = -1e9;
-    clearInterval(busyTick); $('busy').hidden = false; $('busy').setAttribute('aria-busy', 'true'); document.body.classList.add('is-busy'); $('busyBar').hidden = false; $('busyBar').classList.add('det'); $('busyCancel').hidden = !ctl;
-    busyCancelFn = ctl ? () => { ctl.cancelled = ctl.byUser = true; $('busyCancel').hidden = true; $('busyText').textContent = 'Yükleme iptal ediliyor…'; } : null;
+    busy(true, null, { f: 0, restart: true, cancel: ctl ? () => { ctl.cancelled = ctl.byUser = true; $('busyCancel').hidden = true; busyRun = null; $('busyText').textContent = 'Yükleme iptal ediliyor…'; } : null });
     return async (f, text) => {
       if (ctl && ctl.cancelled) throw LOAD_CANCELLED;
-      const now = performance.now(); if (now - last < 120 && f < 1) return; last = now;
-      f = Math.max(0, Math.min(1, f)); const el = (now - t0) / 1000, eta = f > 0.03 && el > 0.8 && f < 1 ? el * (1 - f) / f : null;
-      $('busyBar').firstElementChild.style.width = (f * 100).toFixed(1) + '%';
-      $('busyText').textContent = `${xl(text)} ${xl(`%${Math.floor(f * 100)}`)}${eta !== null ? ' ' + xl(`· yaklaşık ${etaText(eta)} kaldı`) : ''}`;
-      await sleep();
+      if (busyRun) busyRun.text = text;
+      if (busyFrac(f, null, f >= 1)) await sleep();
     };
   }
   $('busyCancel').addEventListener('click', () => { if (busyCancelFn) busyCancelFn(); });
@@ -162,23 +182,24 @@
   // that fails can be run in the page from the same data), the answers are moved. No worker (a page opened from a file,
   // the unit tests) or a worker that fails: the same code runs in the page.
   const BG = {};
-  function bgCall(slot, msg) {
+  function bgCall(slot, msg, onProgress) {
     if (BG[slot] === false || typeof Worker === 'undefined' || location.protocol === 'file:') return null;
     let w = BG[slot];
     if (!w) {
       try { w = new Worker('gworker.js'); } catch (e) { BG[slot] = false; return null; }
       w.jobs = new Map(); w.n = 0;
-      w.onmessage = e => { const j = w.jobs.get(e.data.id); if (!j) return; w.jobs.delete(e.data.id); if (e.data.error) j.reject(new Error(e.data.error)); else j.resolve(e.data.out); };
+      // ({ id, p }: the job's progress so far, the job goes on)
+      w.onmessage = e => { const j = w.jobs.get(e.data.id); if (!j) return; if (e.data.p != null) { if (j.onProgress) try { j.onProgress(e.data.p); } catch (x) { /* a bar update never fails the job */ } return; } w.jobs.delete(e.data.id); if (e.data.error) j.reject(new Error(e.data.error)); else j.resolve(e.data.out); };
       w.onerror = e => { BG[slot] = false; const err = new Error('worker: ' + ((e && e.message) || 'failed')); w.jobs.forEach(j => j.reject(err)); w.jobs.clear(); try { w.terminate(); } catch (x) { /* gone */ } };
       BG[slot] = w;
     }
     const id = ++w.n;
-    return new Promise((resolve, reject) => { w.jobs.set(id, { resolve, reject }); w.postMessage(Object.assign({ id }, msg)); });
+    return new Promise((resolve, reject) => { w.jobs.set(id, { resolve, reject, onProgress }); w.postMessage(Object.assign({ id, progress: !!onProgress }, msg)); });
   }
-  async function kernel(K) {
-    if (!K.debugFp) { const p = bgCall('guide', { op: 'guide', K }); if (p) try { return await p; } catch (e) { /* the worker failed: the same kernel in the page */ } }
+  async function kernel(K, onProgress) {
+    if (!K.debugFp) { const p = bgCall('guide', { op: 'guide', K }, onProgress); if (p) try { return await p; } catch (e) { /* the worker failed: the same kernel in the page */ } }
     await sleep();
-    return GKernel.run(K);
+    return GKernel.run(K, onProgress);
   }
   // a bone surface (surface nets) off the page: the remaining bone is meshed on every cut edit
   async function netsOf(field, nx, ny, nz, level = 0.5, box = null) {
@@ -496,10 +517,15 @@
     // a rebuild job that started before the load (guide fit, lesion plan) finishes before the case state is replaced
     try { await jobLock; return await setVolumeNow(vol, label, kind); } finally { committing = false; }
   }
+  // where each step of a bone rebuild starts on the bar: reduce 1/4, threshold 2/4, cut at the necks, surface 3/4 (with the
+  // resection when a plan exists), the guide 4/4 (its own progress from the guide kernel). Shares measured on the
+  // anonymised real CT sample (reduce 0.1 s, threshold 0.1, neck cut 1.7-2.1, surface 0.5-0.7, resection 3, guide 2.6);
+  // without a guide the surface ends the job.
+  const boneStage = k => (S.anchor && S.guideOn ? [0, 0.02, 0.04, 0.3, 0.6] : [0, 0.04, 0.08, 0.75, 1])[k];
   async function setVolumeNow(vol, label, kind) {
     $('caseMsg').hidden = true;
     S.vol = vol; S.kind = kind;
-    busy(true, 'Hacim küçültülüyor… 1/4'); await sleep();
+    busy(true, 'Hacim küçültülüyor… 1/4', { f: boneStage(0), restart: true }); await sleep();
     S.red = G.reduce(vol, 0.8);
     $('caseInfo').innerHTML = `<dt>Vaka</dt><dd>${esc(label)}</dd><dt>Boyut</dt><dd>${vol.nx}×${vol.ny}×${vol.nz}</dd><dt>Voksel</dt><dd>${vol.sp.map(s => fmt(s, 2)).join(' × ')} mm</dd><dt>Çalışma ızgarası</dt><dd>${S.red.sp.map(s => fmt(s, 2)).join(' × ')} mm</dd>`;
     S.qcBase = qualityCheck(vol); S.segWarn = []; syncQC();
@@ -560,7 +586,7 @@
 
   // ---------- segmentation ----------
   async function segment(autoSelect) {
-    busy(true, 'Kemik ayrılıyor… 2/4'); await sleep();
+    busy(true, 'Kemik ayrılıyor… 2/4', { f: boneStage(1) }); await sleep();
     const r = S.red, thr = +$('thr').value;
     const m = G.threshold(r, thr);
     const { labels, comps, count } = G.components(m, r.nx, r.ny, r.nz, 200);
@@ -570,7 +596,7 @@
     // the piece that is built like a mandible; when none is, keep the largest and say so (see segChecks)
     // (not on an ankle: there the touching bones are fracture pieces, kept apart by the threshold or by hand)
     if (window.Bones && !(window.CaseType && CaseType.get() === 'ankle') && Bones.assess(r, labels, comps).cut) {
-      busy(true, 'Bitişik kemikler ayrılıyor (kafatası, çene, omurga)… 2/4'); await sleep();
+      busy(true, 'Bitişik kemikler ayrılıyor (kafatası, çene, omurga)… 2/4', { f: boneStage(2) }); await sleep();
       const res = S.segInfo = await pickMandibleOf(r, labels, comps, count);
       if (res.status === 'split') {
         pick = res.picked; S.comps = res.comps.slice(0, 8);
@@ -616,7 +642,7 @@
     }
   }
   async function rebuildBone(frame) {
-    busy(true, 'Yüzey modeli oluşturuluyor… 3/4'); await sleep();
+    busy(true, 'Yüzey modeli oluşturuluyor… 3/4', { f: boneStage(3) }); await sleep();
     const r = S.red, m = new Uint8Array(S.labels.length);
     for (let i = 0; i < m.length; i++) m[i] = S.selected.has(S.labels[i]) ? 1 : 0;
     if (window.SegEdit) SegEdit.applyTo(m);
@@ -727,15 +753,18 @@
   }
   // a point within m mm of the resected piece (null when there is no piece to ask)
   function resectedNear(q, m = 0) { const pc = resPiece(); return pc ? resDist(q, pc) <= m : null; }
+  // opts.onProgress(f): the share done after each step (anonymised real CT sample: finding the resected piece 2.7 s of
+  // 2.8, the meshes in the worker the rest)
   async function rebuildResection(opts = {}) {
-    const r = S.red;
-    const piece = resPiece(), resMask = piece ? piece.mask : null, box = piece ? piece.box : null, best = piece;
+    const r = S.red, onP = opts.onProgress || (() => {});
+    const piece = resPiece(), resMask = piece ? piece.mask : null, box = piece ? piece.box : null, best = piece; onP(0.85);
     // the remaining bone's field differs from the full one only around the resected piece
     let field = S.maskF;
     if (resMask && !opts.live) {
       const boneMask = S.mask.slice(); for (let v = 0; v < boneMask.length; v++) if (resMask[v]) boneMask[v] = 0;
       field = S.maskF.slice(); blurInto(field, boneMask, r, box);
     }
+    onP(0.9);
     if (opts.live) {
       // while dragging: the whole bone (meshed once) with the resected piece drawn over it
       fullBoneGeo();
@@ -745,8 +774,9 @@
       if (r !== S.red) return;   // (a new volume arrived meanwhile)
       setPart('bone', 'Kemik (kalan)', meshFromNets(net, toWorldRed, mat(COLORS.bone)), COLORS.bone);
     }
+    onP(0.97);
     if (resMask) {
-      const rf = new Float32Array(resMask.length); blurInto(rf, resMask, r, box);
+      const rf = new Float32Array(resMask.length); blurInto(rf, resMask, r, box); onP(0.98);
       // meshed on its box (+2 voxels) only
       const bb = [box[0] - 2, box[1] - 2, box[2] - 2, box[3] + 2, box[4] + 2, box[5] + 2].map((x, a) => Math.max(0, Math.min([r.nx, r.ny, r.nz][a % 3] - 1, x)));
       const sx = bb[3] - bb[0] + 1, sy = bb[4] - bb[1] + 1, sz = bb[5] - bb[2] + 1, sub = new Float32Array(sx * sy * sz);
@@ -756,7 +786,7 @@
       setPart('resected', 'Rezeke edilecek parça', meshFromNets(net, (x, y, z) => G.worldOf(r, x + bb[0], y + bb[1], z + bb[2]), mat(COLORS.resected, { polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 })), COLORS.resected);
     } else setPart('resected', null, null);
     S.resMask = resMask;
-    S.resectedVolume = best ? best.size * r.sp[0] * r.sp[1] * r.sp[2] : 0;
+    S.resectedVolume = best ? best.size * r.sp[0] * r.sp[1] * r.sp[2] : 0; onP(1);
   }
 
   // the two ends of the defect: the outermost cuts, or (condylar resection) the cut farthest from the condyle and the condyle
@@ -820,9 +850,10 @@
     if (committing) return;      // queued before a load began building the new case: its anchor and cuts are gone
     if (!S.anchor || !S.planes.length) { alertMsg('Önce kesileri belirleyin.'); return; }
     S.guideOn = true; placeScrews(); S.sel = null;
-    busy(true, 'Rezeksiyon güncelleniyor… 1/2'); await sleep(); await rebuildResection();
-    busy(true, 'Guide oluşturuluyor… 2/2'); await sleep();
-    const f = await fitWrap();
+    // shares measured on the anonymised real CT sample: resection 2.8 s, guide fit 4.4 s
+    busy(true, 'Rezeksiyon güncelleniyor… 1/2', { f: 0, restart: true }); await sleep(); await rebuildResection({ onProgress: busySpan(0, 0.4) });
+    busy(true, 'Guide oluşturuluyor… 2/2', { f: 0.4 }); await sleep();
+    const f = await fitWrap({ onProgress: busySpan(0.4, 1) });
     $('guideStat').textContent = !f ? '' : !f.ok ? 'Guide bu yerleşimde takılamıyor; kesileri ya da ayarları kontrol edin.'
       : `Guide hazır · ${S.screws.length} vida` + (f.split ? (S.g.split === 2 && S.g.bar ? ' · iki guide + bağlantı köprüsü' : S.g.split === 2 ? ' · iki parça, her kesi kendi ekseninde (açı bölgesi)' : ' · iki parça (kavisli kemik)') : '') + (f.wrap < (S.kind === 'leg' ? 6 : 5) ? ` · sarma ${fmt(f.wrap, 1)} mm'ye indirildi` : '');
     syncSeq();
@@ -1639,7 +1670,10 @@
     if (f.key === fitKey() && f.field === guideField() && f.scs.length === S.screws.length && f.scs.every((c, i) => c === S.screws[i])) return f.out;
     disposeObj(f.out.mesh); return null;
   }
-  async function fitWrap() {
+  // opt.onProgress: the bar of the first rung (coarse 0.8 mm build ~30 %, then the 0.4 mm build); most cases fit on it.
+  // How many more rungs a case needs is not known beforehand, so from the second one on the bar runs with the attempt
+  // number, the elapsed time and the fit's time limit instead of a percentage.
+  async function fitWrap(opt = {}) {
     if (!S.anchor) return null;
     const auto = S.gAuto, w0 = S.g.wrap, f0 = S.g.flange, s0 = S.g.split, log = [], t0 = performance.now();
     // the rung that came closest when none fits (kept at the end): the right piece count first, then a free seating
@@ -1660,8 +1694,10 @@
       else if (real2) { const pl = planesWorld().sort((x, y) => x.off - y.off), mid = (pl[0].off + pl[pl.length - 1].off) / 2, sides = new Set(R.screwInfo.filter(si => si.ok).map(si => Math.sign(si.s.sc.u - mid))); held = sides.has(-1) && sides.has(1); }
       return bad + (held ? 0 : 1);
     };
+    let rung = 0;
+    const onP = h => rung === 1 && opt.onProgress ? (h > 0.5 ? f => opt.onProgress(0.3 * f) : f => opt.onProgress(0.3 + 0.7 * f)) : null;
     const test = async (h = 0.8) => {
-      const o = await buildGuideSet(Object.assign({ g: S.g, P: S.anchor.p, pls: planesWorld(), scs: screwsWorld(), bone: boneAt, field: guideField(), h, noBarMesh: true }, frameAxes())); const R = o.result, want = S.g.split && S.planes.length >= 2 ? 2 : 1;
+      const o = await buildGuideSet(Object.assign({ g: S.g, P: S.anchor.p, pls: planesWorld(), scs: screwsWorld(), bone: boneAt, field: guideField(), h, noBarMesh: true, onProgress: onP(h) }, frameAxes())); const R = o.result, want = S.g.split && S.planes.length >= 2 ? 2 : 1;
       const bad = screwsBad(R), scOk = !bad, piecesOk = R.pieces === want, seatFree = !R.seat || !R.seat.ok || R.seat.free > 0;
       if (!scOk) log.push({ step: 'screws', split: S.g.split, wrap: S.g.wrap, flange: S.g.flange, ok: false, screws: bad });
       const score = (piecesOk ? 1000 : 0) + (seatFree ? 100 : 0) - bad - (h > 0.5 ? 0.5 : 0);
@@ -1678,7 +1714,11 @@
     // coarse grid first, then confirm at the resolution of the final guide. A rung the coarse grid fails only on its
     // piece count (a thin bridge or flange that 0.8 mm cells break) is tried at the final resolution too: on a real CT
     // the whole ladder failed that way and kept a guide that was in fact whole
-    const okAt = async () => ((await test()) || onlyPieces) && (await test(0.4));
+    const okAt = async () => {
+      if (++rung === 2 && opt.onProgress) busy(true, `Guide kemiğe oturtuluyor · deneme ${rung}`, { bar: true, max: Math.round(FIT_BUDGET_MS / 1000), t0: Date.now() - (performance.now() - t0) });
+      else if (rung > 2 && opt.onProgress) busyText(`Guide kemiğe oturtuluyor · deneme ${rung}`);
+      return ((await test()) || onlyPieces) && (await test(0.4));
+    };
     // start from the usual depth (an earlier plan may have lowered it), never below 2 mm (the bridge needs it)
     const top = auto.wrap ? Math.max(w0, S.kind === 'leg' ? 6 : 5) : w0, wMin = auto.wrap ? 2 : w0;
     // a rung whose body sits in one piece with a free direction and fails only on its screws is not mended by a
@@ -1869,6 +1909,9 @@
       }
     }
     T.bone = performance.now() - t0;
+    // progress (ctx.onProgress, 0..1): the bone sampling above ~8 %, the kernel to 95 %, the mesh the rest (measured on the
+    // anonymised real CT sample: bone 0.2 s, kernel 2.3 s, mesh 0.1 s)
+    const onP = ctx.onProgress || null; if (onP) onP(0.08);
     // everything from here to the surface runs in the kernel (gkernel.js), in a worker when the page has one; what reads
     // the bone field or three.js objects is done here first: the saw slots and the gap as guide-frame planes, the screws
     // in grid coordinates and their drill paths through bone
@@ -1906,10 +1949,10 @@
       g: { wrap: g.wrap, wrapU: g.wrapU || null, L: g.L, W: g.W, clear: g.clear, peri: g.peri || 0, wall: g.wall, bridge: g.bridge, side: g.side, skirt: g.skirt, fit: g.fit || 0 },
       // winding follows the grid -> world map, which is a reflection when (u, v, n) is left-handed
       mirror: u.dot(new THREE.Vector3().crossVectors(v, n)) < 0, debugFp: ctx.debugFp || null };
-    const k = await kernel(K);
+    const k = await kernel(K, onP ? f => onP(0.08 + 0.87 * f) : null);
     Object.keys(k.T).forEach(key => { T[key] = T.bone + k.T[key]; });
     const mesh = meshFromNets(k.net, toWorld, mat(COLORS.guide));
-    T.mesh = performance.now() - t0;
+    T.mesh = performance.now() - t0; if (onP) onP(1);
     // screw results in the order of scs: no entry, no guide body under the sleeve, or the drill path and the sleeve's shadow
     const screwInfo = scs.map((s, i) => { const r = k.screws[i]; if (!r.ok) return Object.assign({ s }, r); const o = Object.assign({ s, ok: true }, paths[i]); if (r.shadowed != null) o.shadowed = r.shadowed; return o; });
     return { mesh, result: { wrapProfile: k.wrapProfile, pieces: k.pieces, contact: k.contact, undercut: k.undercut, volume: k.volume, screwInfo, pls, seat: k.seat, seatDir: k.seatDir, dropped: k.dropped, bodyW: k.bodyW, bodyV: k.bodyV, ms: performance.now() - t0, T },
@@ -2096,7 +2139,8 @@
       let lug = withBar ? placeLug(frame, gi, cut, myScs, E, defS, false) : null;
       if (withBar && !lug) { const w = pieceAt(reach + BAR.lugD + 1, back), l2 = placeLug(w.frame, w.gi, cut, myScs, E, defS, false); if (l2) { ({ frame, gi } = w); lug = l2; } }
       if (withBar && !lug) lug = placeLug(frame, gi, cut, myScs, E, defS, true);
-      const o = await buildGuide(Object.assign({}, ctx, frame, { g: gi, pls: myPls, scs: lug ? myScs.concat([lug]) : myScs, gap }));
+      const pk = side < 0 ? 0 : 1, onP = ctx.onProgress ? f => ctx.onProgress((pk + f) / 2) : null;
+      const o = await buildGuide(Object.assign({}, ctx, frame, { g: gi, pls: myPls, scs: lug ? myScs.concat([lug]) : myScs, gap, onProgress: onP }));
       const li = lug && o.result.screwInfo.find(i => i.s === lug);
       parts.push({ frame, g: gi, pls: myPls, scs: myScs, gap, result: o.result, grid: o.grid, wrapProfile: o.result.wrapProfile, side, lug, lugOk: !!(li && li.ok) });
       meshes.push(o.mesh); infos.push(...o.result.screwInfo);
@@ -2358,11 +2402,13 @@
       return;
     }
     const ver = live.ver;
-    busy(true, pipeGuide ? 'Guide üretiliyor… 4/4' : 'Guide üretiliyor…'); await sleep();
+    // (a step of a bone rebuild continues its bar from the 4/4 share; on its own the guide build is the whole bar)
+    const f0 = pipeGuide && busyRun ? boneStage(4) : 0;
+    busy(true, pipeGuide ? 'Guide üretiliyor… 4/4' : 'Guide üretiliyor…', { f: f0 }); await sleep();
     const pls = planesWorld(), scs = screwsWorld();
     let out = takeFit();
     if (out && out.result.bar && out.result.bar.ok && S.g.bar) out.barMesh = buildBarMesh(out.result.bar.spec, 0.4);
-    if (!out) out = await buildGuideSet(Object.assign({ g: S.g, P: S.anchor.p, pls, scs, bone: boneAt, field: guideField() }, frameAxes()));
+    if (!out) out = await buildGuideSet(Object.assign({ g: S.g, P: S.anchor.p, pls, scs, bone: boneAt, field: guideField(), onProgress: (sp => f => { if (ver === live.ver) sp(f); })(busySpan(f0, 1)) }, frameAxes()));
     if (ver < live.shown) { disposeObj(out.mesh); if (out.barMesh) disposeObj(out.barMesh); return; }
     live.shown = ver; S.liveScrews = null;
     setPart('guide', 'Guide', out.mesh, COLORS.guide);
@@ -2962,8 +3008,8 @@
         S.refit = false;
         const R = S.result, want = S.g.split && S.planes.length >= 2 ? 2 : 1;
         if (S.guideOn && R && (R.pieces !== want || (R.seat && R.seat.ok && !R.seat.free) || floatingScrews(R).length)) {
-          busy(true, 'Guide yeni açıda kemiğe oturtuluyor…'); await sleep();
-          const f = await fitWrap(); if (f) S.fitReport = f;
+          busy(true, 'Guide yeni açıda kemiğe oturtuluyor…', { f: 0, restart: true }); await sleep();
+          const f = await fitWrap({ onProgress: busySpan(0, 1) }); if (f) S.fitReport = f;
           // what the fit could not mend: a placed screw the built guide has no body under is removed and reported
           if (dropFloating()) await regenerate();
         } else if (S.guideOn && R && $('guideStat')) $('guideStat').textContent = 'Guide yeni konumda kemiğe oturuyor.';
@@ -3678,14 +3724,29 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
       seat_dir: c.seatDir ? { tilt: c.seatDir.tilt, az: c.seatDir.az } : null,
     };
   }
-  async function serverGuide(c, outer) {
+  // the server's progress of a guide build while its request runs (POST /guide?job=<id>, GET /guide/progress?job=<id>):
+  // onProgress(f, stage) about every 0.7 s. A poll that finds no job yet (the body still uploading: stage "none", f null)
+  // leaves the bar where it is. (An older server without the endpoint answers 404: polling stops.) Returns the function that stops the polling.
+  function pollGuide(url, job, onProgress) {
+    let stop = false, timer = null;
+    const tick = async () => {
+      if (stop) return;
+      try { const r = await sfetch(`${url}/guide/progress?job=${job}`); if (r.status === 404) return; if (r.ok) { const j = await r.json(); if (!stop && j && Number.isFinite(j.f)) onProgress(j.f, j.stage); } } catch (e) { /* the bar waits for the next poll */ }
+      if (!stop) timer = setTimeout(tick, 700);
+    };
+    timer = setTimeout(tick, 300);
+    return () => { stop = true; clearTimeout(timer); };
+  }
+  const jobId = () => Array.from(window.crypto && crypto.getRandomValues ? crypto.getRandomValues(new Uint8Array(9)) : Array.from({ length: 9 }, () => Math.random() * 256 | 0), b => b.toString(16).padStart(2, '0')).join('');
+  async function serverGuide(c, outer, onProgress) {
     const url = serverUrl(); if (!url) throw new Error('Bu işlem sunucu gerektirir; yayındaki sitede (sguide.up.railway.app) çalışır. Pakette önizleme STL\'i vardır.');
     const ac = new AbortController(), to = setTimeout(() => ac.abort(), 180000);
     if (outer) outer.addEventListener('abort', () => ac.abort());
+    const job = onProgress ? jobId() : null, stopPoll = job ? pollGuide(url, job, onProgress) : () => {};
     let res;
-    try { res = await sfetch(url + '/guide', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(guideRequest(c)), signal: ac.signal }); }
+    try { res = await sfetch(url + '/guide' + (job ? `?job=${job}` : ''), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(guideRequest(c)), signal: ac.signal }); }
     catch (e) { if (outer && outer.aborted) throw new Error('Üretim STL\'i iptal edildi.'); throw new Error(`Sunucuya ulaşılamadı. Pakette önizleme STL'i vardır.`); }
-    finally { clearTimeout(to); }
+    finally { clearTimeout(to); stopPoll(); }
     const js = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(`${xl('Sunucu hatası:')} ${js.error || res.status}`);
     const bin = atob(js.stl_b64), u8 = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
@@ -3721,30 +3782,36 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   async function productionSTL() {
     if (!parts.guide || !S.anchor) return;
     const ac = new AbortController();
-    const nSt = 1 + (S.result && S.result.bar && S.result.bar.ok ? 1 : 0) + (S.fib && S.fib.guide && window.Fibula ? 1 : 0), bo = { bar: true, cancel: () => ac.abort(), max: 180 };
-    let stN = 0; const stage = t => busy(true, `${t} ${++stN}/${nSt}`, bo);
+    // one bar over every server call: each guide piece and the fibula guide weigh 1 (the server reports its own build's
+    // progress), the connecting bar 0.1 (a second or two)
+    const two = !!(S.result && S.result.parts && S.result.parts.length === 2), withBar = !!(S.result && S.result.bar && S.result.bar.ok), withFib = !!(S.fib && S.fib.guide && window.Fibula);
+    const nSt = 1 + (withBar ? 1 : 0) + (withFib ? 1 : 0), W = (two ? 2 : 1) + (withBar ? 0.1 : 0) + (withFib ? 1 : 0);
+    let stN = 0, at = 0; busy(true, null, { f: 0, restart: true, cancel: () => ac.abort() });
+    const stage = t => { busyFrac(at / W, `${t} ${++stN}/${nSt}`); };
+    // the part of the bar for the next server call (weight w): its progress, and a queue notice while the server is busy
+    const call = w => { const a = at / W, b = (at += w) / W, txt = busyRun && busyRun.text; let queued = false;
+      return (f, st) => { if (st === 'queue') { if (!queued) { queued = true; busyFrac(a, 'Sunucu başka bir işi bitiriyor; sırada…'); } return; } if (queued) { queued = false; busyFrac(a, txt); } busyFrac(a + (b - a) * f); }; };
     stage('Sunucuda üretim STL\'i hazırlanıyor…'); await sleep();
     try {
       let r;
-      if (S.result && S.result.parts && S.result.parts.length === 2) {
+      if (two) {
         // a two-frame guide: one server call per piece on its own frame, the two STLs joined into one file
         const rs = [];
-        for (const pt of S.result.parts) rs.push(await serverGuide(Object.assign({ vol: S.vol, red: S.red, F: S.maskF, thr: segThr(), g: pt.g, P: pt.frame.P, pls: pt.pls, gap: pt.gap, scs: pt.lug ? pt.scs.concat([pt.lug]) : pt.scs, wrapProfile: pt.wrapProfile, seatDir: pt.result.seatDir }, pt.frame), ac.signal));
+        for (const pt of S.result.parts) rs.push(await serverGuide(Object.assign({ vol: S.vol, red: S.red, F: S.maskF, thr: segThr(), g: pt.g, P: pt.frame.P, pls: pt.pls, gap: pt.gap, scs: pt.lug ? pt.scs.concat([pt.lug]) : pt.scs, wrapProfile: pt.wrapProfile, seatDir: pt.result.seatDir }, pt.frame), ac.signal, call(1)));
         r = { stl: mergeStl(rs[0].stl, rs[1].stl), watertight: rs.every(x => x.watertight), bodies: rs.reduce((s, x) => s + x.bodies, 0), volume: rs.reduce((s, x) => s + x.volume, 0), faces: rs.reduce((s, x) => s + x.faces, 0), ms: rs.reduce((s, x) => s + x.ms, 0),
           productionOk: rs.every(x => x.productionOk), issues: rs.flatMap((x, k) => x.issues.map(i => Object.assign({ piece: k + 1 }, i))), screwsMissing: rs.reduce((s, x) => s + x.screwsMissing, 0), screwNos: rs.flatMap(x => x.screwNos),
           resolution: Math.max(...rs.map(x => x.resolution || 0)) || null, requestedResolution: rs[0].requestedResolution, version: rs[0].version,
           printChecks: rs.every(x => x.printChecks) ? ['thin_wall_mm3', 'bone_overlap_mm3', 'undercut_mm3'].reduce((o, k) => Object.assign(o, { [k]: rs.reduce((a, x) => a + (+x.printChecks[k] || 0), 0) }), { min_wall_mm: rs[0].printChecks.min_wall_mm }) : null };
-      } else r = await serverGuide(Object.assign({ vol: S.vol, red: S.red, F: S.maskF, thr: segThr(), g: S.g, P: S.anchor.p, pls: planesWorld(), scs: screwsWorld(), wrapProfile: S.result && S.result.wrapProfile, seatDir: S.result && S.result.seatDir }, frameAxes()), ac.signal);
+      } else r = await serverGuide(Object.assign({ vol: S.vol, red: S.red, F: S.maskF, thr: segThr(), g: S.g, P: S.anchor.p, pls: planesWorld(), scs: screwsWorld(), wrapProfile: S.result && S.result.wrapProfile, seatDir: S.result && S.result.seatDir }, frameAxes()), ac.signal, call(1));
       // the connecting bar: a separate part, its own server call (exact solids; the server also measures its bone clearance)
-      if (S.result && S.result.bar && S.result.bar.ok) stage('Sunucuda bağlantı köprüsü hazırlanıyor…');
-      if (S.result && S.result.bar && S.result.bar.ok) r.bar = await serverBar(S.result.bar.spec, ac.signal);
+      if (withBar) { stage('Sunucuda bağlantı köprüsü hazırlanıyor…'); const done = call(0.1); r.bar = await serverBar(S.result.bar.spec, ac.signal); done(1); }
       S.prod = Object.assign(r, { key: prodKey() });
       $('prodMsg').textContent = `${xl("Üretim STL'i hazır:")} ${r.watertight ? xl('su geçirmez') : xl('SU GEÇİRMEZ DEĞİL')}, ${xl(`${r.bodies} parça`)}${r.bodies > (S.g.split ? 2 : 1) ? ' ' + xl("(BEKLENENDEN FAZLA PARÇA, guide'ı kontrol edin)") : ''}, ${fmt(r.volume / 1000, 2)} cm³, ${xl(`${r.faces} üçgen`)}. ${xl('Pakete guide_uretim.stl olarak eklenir.')}`;
       const pw = prodWhy(r); if (pw) $('prodMsg').textContent += ' ' + pw;
       if (r.bar) $('prodMsg').textContent += ` ${xl("Köprü STL'i:")} ${r.bar.watertight ? xl('su geçirmez') : xl('SU GEÇİRMEZ DEĞİL')}${r.bar.clear != null ? ', ' + xl(`kemiğe en yakın ${fmt(r.bar.clear)} mm`) : ''}. ${xl('Pakete kopru_uretim.stl olarak eklenir.')}`;
     } catch (e) { S.prod = null; $('prodMsg').textContent = e.message; }
     // the fibula guide on its own call: a mandible failure does not keep it from being made (and the reverse)
-    if (S.fib && S.fib.guide && window.Fibula && !ac.signal.aborted) try { stage('Sunucuda fibula guide\'ı hazırlanıyor…'); await Fibula.production(ac.signal); } catch (e) { S.fib.prod = null; $('prodMsg').textContent += ` Fibula guide'ı: ${e.message}`; }
+    if (withFib && !ac.signal.aborted) try { at = W - 1; stage('Sunucuda fibula guide\'ı hazırlanıyor…'); await Fibula.production(ac.signal, call(1)); } catch (e) { S.fib.prod = null; $('prodMsg').textContent += ` Fibula guide'ı: ${e.message}`; }
     busy(false);
     renderChecks(); renderAppr();
   }
@@ -3983,7 +4050,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   function serverUrl() { return ($('aiUrl').value || '').trim().replace(/\/+$/, ''); }
   function select(sel) { if (sel) S.guideSel = false; S.sel = sel; emit('select', sel); renderElements(); rebuildElementParts(S.result ? S.result.pls : planesWorld(), S.result ? S.result.screwInfo : []); applyExplode(); render(); }
   window.Studio = { bg: bgCall, loadSample, sampleFor, SAMPLES, chooseAxis, nearestPiece, netsOf, blurNetsOf, renamePart, partName, guideBuilds: () => guideBuilds, mandibleView, endModes, onEndModes, startLoad, loadStopped, loadBusy: () => committing, LOAD_CANCELLED, renderComps, setGuideRot, setGuideRoll, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, resEnds, splitGap, cutMisses, evalScrew, resectedAt, resectedNear, resPiece, boneTrack, cutAlongBone, bestScrew,
-    boneSections, sizeBody, autoBody, buildGuideSet, cutsAngle, cutFrame, pieceFrames, pieceBody, screwBodyOn, pieceWrapTop, frameAt, stumpGap, mergeStl, mergeMeshes, AUTO_DEFAULT, G_DEFAULT, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume, boneField, simplifyMesh, BAR, barPlan, barSdf, buildBarMesh, placeLug, longCase, axisOffBone, ramusAxis, stopSides, LONG_MM, CUT_OFF_MAX, prodKey, productionSTL, exportOne, softOcc, boneDoubt, boneKey, runFix, printIssues, printLine, serverBar, guideField, lockState: () => lock, bonelessCut, reframe, exclusive, settled, makeGuide, prodReply, prodWhy, gateChecks, swInfo, swLine, sfetch, reportHTML, lesionMargins, anchorFromSlice, ramusAxis };
+    boneSections, sizeBody, autoBody, buildGuideSet, cutsAngle, cutFrame, pieceFrames, pieceBody, screwBodyOn, pieceWrapTop, frameAt, stumpGap, mergeStl, mergeMeshes, AUTO_DEFAULT, G_DEFAULT, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, busyFrac, busySpan, busyText, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume, boneField, simplifyMesh, BAR, barPlan, barSdf, buildBarMesh, placeLug, longCase, axisOffBone, ramusAxis, stopSides, LONG_MM, CUT_OFF_MAX, prodKey, productionSTL, exportOne, softOcc, boneDoubt, boneKey, runFix, printIssues, printLine, serverBar, guideField, lockState: () => lock, bonelessCut, reframe, exclusive, settled, makeGuide, prodReply, prodWhy, gateChecks, swInfo, swLine, sfetch, reportHTML, lesionMargins, anchorFromSlice, ramusAxis };
   bus.addEventListener('planeDragged', () => { renderElements(); schedule(true, 'drag'); });
   // messages assembled at run time are written in the language that was active: write them again when it changes
   if (window.addEventListener) window.addEventListener('langchange', () => { try { renderChecks(); renderAppr(); syncLesion(); } catch (e) { /* no case open yet */ } });
