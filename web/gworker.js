@@ -1,5 +1,5 @@
 /* Background thread of the studio: the guide kernel (gkernel.js), the guide mesh simplification (geom.js
-   decimateGen), the bone surfaces (geom.js surfaceNets) and the mandible cut-out (bones.js pickMandible), so the page stays responsive while they run. One request at a time: { id, op, ... } -> { id, out } or
+   decimateGen), the bone surfaces (geom.js surfaceNets), the signed distance of an ankle fracture piece (geom.js sdf) and the mandible cut-out (bones.js pickMandible), so the page stays responsive while they run. One request at a time: { id, op, ... } -> { id, out } or
    { id, error }. Each request is answered with the buffers moved, not copied. */
 'use strict';
 self.window = self;   // (seat.js publishes itself on window)
@@ -10,6 +10,7 @@ self.onmessage = e => {
     if (m.op === 'guide') { const out = GKernel.run(m.K); self.postMessage({ id: m.id, out }, GKernel.transfer(out)); return; }
     if (m.op === 'nets') { const out = G.surfaceNets(m.field, m.nx, m.ny, m.nz, m.level, m.box || undefined); self.postMessage({ id: m.id, out }, [out.positions.buffer, out.indices.buffer]); return; }
     if (m.op === 'blurNets') { const f = G.blur(m.mask, m.nx, m.ny, m.nz), out = G.surfaceNets(f, m.nx, m.ny, m.nz); self.postMessage({ id: m.id, out }, [out.positions.buffer, out.indices.buffer]); return; }
+    if (m.op === 'sdf') { const out = G.sdf(m.mask, m.nx, m.ny, m.nz, m.sp); self.postMessage({ id: m.id, out }, [out.buffer]); return; }
     if (m.op === 'pickMandible') { const res = Bones.pickMandible(m.red, m.labels, m.comps, m.count); self.postMessage({ id: m.id, out: { res, labels: m.labels } }, [m.labels.buffer]); return; }
     if (m.op === 'lite') {
       const it = G.decimateGen({ positions: m.positions, indices: m.indices }, m.tol); let r;

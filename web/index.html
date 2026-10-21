@@ -222,6 +222,10 @@ h3.sub { display: flex; justify-content: space-between; align-items: baseline; m
 .tag.crit { color: var(--crit); } .tag.ok { color: var(--ok); } .tag.warn { color: var(--warn); }
 .tag:empty { display: none; }
 .tbl { overflow-x: auto; }
+/* ankle pieces (ankle.js): colour dot in the name, the selected row */
+.tbl i.dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; margin-right: 6px; vertical-align: 0; }
+.tbl tr.on td { background: var(--accent-soft, rgba(11, 103, 130, .08)); }
+.tbl button.link { text-decoration: none; color: inherit; }
 table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 th, td { text-align: right; padding: 6px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
 th:first-child, td:first-child { text-align: left; padding-left: 0; } th:last-child, td:last-child { padding-right: 0; }
@@ -564,13 +568,16 @@ button.ghost.danger { color: var(--crit); }
           <p class="hint more">Adımlar ve paneller seçilen vaka tipine göre açılır; yeni tipler buraya eklenecek.</p>
           <select id="caseType" aria-label="Vaka tipi"></select>
           <div id="upMand" class="col">
-          <h3 class="sub">Mandibula BT'si</h3>
+          <h3 class="sub" id="hMand">Mandibula BT'si</h3>
+          <h3 class="sub" id="hAnk">Ayak bileği BT'si</h3>
           <p class="hint more">Dosyalar tarayıcıdan çıkmaz; mandibula serisini modele sürükleyip bırakabilirsiniz. Klasör, dosyalar ya da .zip seçebilirsiniz. Sıkıştırılmamış, RLE, JPEG, JPEG-LS ve JPEG 2000 BT okunur. <button class="link" id="sampleL">Bacak örneğini mandibula yerine aç</button></p>
           <div class="btns">
             <label class="filebtn"><svg class="i"><use href="#i-folder"/></svg>DICOM klasörü<input type="file" id="dicomDir" webkitdirectory multiple></label>
             <label class="filebtn" title="DICOM dosyaları ya da .zip"><svg class="i"><use href="#i-files"/></svg>Dosya / .zip<input type="file" id="dicomFiles" multiple></label>
             <button id="sampleMct" class="ghost" title="Anonim gerçek BT; kemiğe kırpıldı, yüz silindi. Araştırma amaçlı."><svg class="i"><use href="#i-flask"/></svg>Gerçek BT örneği</button>
             <button id="sampleM" class="ghost"><svg class="i"><use href="#i-flask"/></svg>Sentetik örnek</button>
+            <button id="sampleAct" class="ghost" title="Anonim gerçek ayak bileği BT'si; kemiğe kırpıldı. Araştırma amaçlı."><svg class="i"><use href="#i-flask"/></svg>Gerçek BT örneği</button>
+            <button id="sampleA" class="ghost" title="Sentetik sağ ayak bileği, trimalleoler kırık (hasta verisi değil)"><svg class="i"><use href="#i-flask"/></svg>Sentetik örnek</button>
           </div>
           <p class="err" id="caseMsg" hidden></p>
           <div class="ctl" id="serBox" hidden><label for="serSel" class="lbl2">Seri seç</label><select id="serSel"></select><p class="hint more" data-for="serSel">Bu yüklemede birden fazla seri var. Guide için ince kesitli (≤ 1 mm) kemik serisini seçin.</p></div>
@@ -601,7 +608,7 @@ button.ghost.danger { color: var(--crit); }
         <summary><span class="n">2</span>Anatomi<span class="tick" role="img" aria-label="Tamamlandı"></span><span class="tag" id="tag2"></span><svg class="chev"><use href="#i-chev"/></svg></summary>
         <div class="body">
           <h3 class="sub">Kemik modeli</h3>
-          <div class="ctl"><label for="segMode" class="lbl2">Yöntem</label><select id="segMode" data-seg><option value="thr" data-short="Eşik">Eşik (tarayıcıda)</option><option value="ai" data-short="Yapay zeka">Yapay zeka (sunucuda)</option></select></div>
+          <div class="ctl" id="segModeBox"><label for="segMode" class="lbl2">Yöntem</label><select id="segMode" data-seg><option value="thr" data-short="Eşik">Eşik (tarayıcıda)</option><option value="ai" data-short="Yapay zeka">Yapay zeka (sunucuda)</option></select></div>
           <div id="aiBox" class="col" hidden>
             <div class="ctl"><label for="aiStruct" class="lbl2">Yapı</label><select id="aiStruct"><option value="mandible">Mandibula</option><option value="fibula">Fibula</option><option value="mandible,fibula">Mandibula ve fibula</option></select></div>
             <div class="btns"><button id="aiRun"><svg class="i"><use href="#i-server"/></svg>Sunucuda segmente et</button></div>
@@ -615,6 +622,19 @@ button.ghost.danger { color: var(--crit); }
           <div id="refBox" class="col"></div>
           <div class="stepwarn" data-for="anat"></div>
           <div class="nav"><button class="primary next" data-next="st3">Rezeksiyon<svg class="i"><use href="#i-next"/></svg></button></div>
+        </div>
+      </details>
+
+      <details class="step" id="stRed" name="flow">
+        <summary><span class="n">3</span>Redüksiyon<span class="tick" role="img" aria-label="Tamamlandı"></span><span class="tag" id="tagRed"></span><svg class="chev"><use href="#i-chev"/></svg></summary>
+        <div class="body">
+          <p class="hint more">Kırık parçalarını sanal olarak yerine koyun. Her parça kendi merkezi etrafında taşınır ve döndürülür; ölçümler parçanın komşu kemiğe temasını, aralığını ve iç içe geçmesini gösterir. Redüksiyon cerrahın kararıdır, uygulama doğruluğunu değerlendirmez.</p>
+          <h3 class="sub">Vaka</h3>
+          <div id="ankCase" class="col"></div>
+          <h3 class="sub">Parçalar</h3>
+          <div id="ankBody" class="col"></div>
+          <div id="ankWarn"></div>
+          <div class="nav"><button class="primary next" data-next="st7">İnceleme ve onay<svg class="i"><use href="#i-next"/></svg></button></div>
         </div>
       </details>
 
@@ -763,11 +783,14 @@ button.ghost.danger { color: var(--crit); }
         <summary><span class="n">7</span>İnceleme ve onay<span class="tick" role="img" aria-label="Tamamlandı"></span><span class="tag" id="tag7"></span><svg class="chev"><use href="#i-chev"/></svg></summary>
         <div class="body">
           <div class="ctl"><label for="surgeon" class="lbl2">Cerrah</label><input id="surgeon" type="text" placeholder="Ad Soyad" autocomplete="off"></div>
+          <div id="itemAppr" class="col">
           <h3 class="sub">Öğe onayları</h3>
           <p class="hint more">Bir satıra tıklayınca ilgili öğe açılır ve 3B görünümde gösterilir.</p>
           <ul class="review" id="appr"></ul>
           <div class="btns"><button id="apprAll" title="Kritik kontrolü olmayan bütün öğeleri (rezeksiyon aralığı, kesiler, vidalar, fibula planı) cerrah adına tek seferde onaylar"><svg class="i"><use href="#i-check"/></svg>Tüm öğeleri onayla</button></div>
           <p class="hint" id="apprMsg"></p>
+          </div>
+          <div id="ankAppr" class="col"></div>
           <div id="auditBox" class="col"></div>
           <div class="nav"><button class="primary next" data-next="st8">Çıktılar<svg class="i"><use href="#i-next"/></svg></button></div>
         </div>
@@ -784,6 +807,12 @@ button.ghost.danger { color: var(--crit); }
             <li><div><b title="Görüntüler, kesim tablosu, montaj sırası ve imza alanı.">Cerrahi rapor</b></div><span class="btns"><button id="expPdf"><svg class="i"><use href="#i-download"/></svg>PDF</button><button id="expRep" class="ghost">HTML</button></span></li>
           </ol>
           <details class="sec" id="secPost"><summary>Ameliyat sonrası</summary><div id="postBox" class="postbox col"></div></details>
+        </div>
+      </details>
+      <details class="step" id="stAnkOut" name="flow">
+        <summary><span class="n">5</span>Çıktılar<span class="tick" role="img" aria-label="Tamamlandı"></span><svg class="chev"><use href="#i-chev"/></svg></summary>
+        <div class="body">
+          <div id="ankOut" class="col"></div>
         </div>
       </details>
       <div class="body foot"><p class="note">Araştırma prototipi · klinik kullanım için değil</p></div>
@@ -937,5 +966,6 @@ button.ghost.danger { color: var(--crit); }
 <script src="lesion.js"></script>
 <script src="layers.js"></script>
 <script src="masks.js"></script>
+<script src="ankle.js"></script>
 <script src="guiderot.js"></script>
 <script src="panel.js"></script>

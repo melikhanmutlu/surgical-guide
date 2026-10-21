@@ -140,6 +140,15 @@ const G = (() => {
     return out;
   }
 
+  // signed distance (mm) of a 0/1 mask: outside > 0, inside < 0, about 0 on the boundary between a bone voxel and the
+  // first voxel outside (each side is measured to the other side's nearest voxel centre, less half a voxel)
+  function sdf(mask, nx, ny, nz, sp = [1, 1, 1]) {
+    const N = mask.length, inv = new Uint8Array(N);
+    for (let i = 0; i < N; i++) inv[i] = mask[i] ? 0 : 1;
+    const out = edt(mask, nx, ny, nz, sp), inn = edt(inv, nx, ny, nz, sp), h = Math.min(sp[0], sp[1], sp[2]) / 2, r = new Float32Array(N);
+    for (let i = 0; i < N; i++) r[i] = mask[i] ? -(inn[i] - h) : out[i] - h;
+    return r;
+  }
   // separable [1 2 1]/4 blur of a 0/1 mask -> Float32 field
   function blur(mask, nx, ny, nz) {
     // separable [1 2 1]/4 along x, y, z (edges clamp)
@@ -534,5 +543,5 @@ const G = (() => {
     const sepr = separator(mask, nx, ny, nz, sp), labels = new Int32Array(mask.length);
     return { labels, comps: sepr.run({ ...opt, out: labels }) };
   }
-  return { worldOf, indexOf, reduce, threshold, components, separator, separate, exterior, edt, blur, surfaceNets, marchTets, decimate, decimateGen, splitSeeds };
+  return { worldOf, indexOf, reduce, threshold, components, separator, separate, exterior, edt, sdf, blur, surfaceNets, marchTets, decimate, decimateGen, splitSeeds };
 })();

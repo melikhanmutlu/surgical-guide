@@ -418,5 +418,32 @@ class TestSegmentChoiceAndKerf(unittest.TestCase):
 
 
 
+
+class TestAnklePhantom(unittest.TestCase):
+    """The synthetic trimalleolar ankle (web/sample_ankle.json is written from it): six separate bones at a bone
+    threshold, and the recorded displacement of each fragment takes it back to where the undisplaced phantom has it."""
+    @classmethod
+    def setUpClass(cls):
+        cls.vol, cls.truth = phantom.ankle_phantom()
+        cls.ref, _ = phantom.ankle_phantom(displaced=False)
+
+    def test_six_bones_at_250_hu(self):
+        lab, n = ndi.label(self.vol.array > 250)
+        self.assertEqual(n, 6)
+        lab0, n0 = ndi.label(self.ref.array > 250)
+        self.assertEqual(n0, 6)
+
+    def test_displacement_moves_each_fragment_by_its_recorded_motion(self):
+        z = self.vol.origin[2] + self.vol.spacing[2] * np.arange(self.vol.array.shape[0])
+        for t in self.truth:
+            self.assertGreater(np.linalg.norm(t["move"]) + abs(t["rot_deg"]), 2)
+        names = [t["name"] for t in self.truth]
+        self.assertEqual(names, ["Lateral malleol", "Medial malleol", "Posterior malleol"])
+        # the displaced volume differs from the reduced one only near the fragments (the main bones stay)
+        diff = (self.vol.array > 250) != (self.ref.array > 250)
+        self.assertGreater(diff.sum(), 1000)
+        top = z > 80
+        self.assertEqual(int(diff[top].sum()), 0)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

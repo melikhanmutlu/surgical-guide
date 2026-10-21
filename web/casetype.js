@@ -8,7 +8,8 @@
                 hide: ['#fibUpload'] }                                             // selectors hidden for this type
 
    Steps left out are hidden, the rest are renumbered, and every "next" button points at the following shown
-   step. The type is saved with the plan (PlanExt.caseType) and remembered as the default for new cases. */
+   step. The type is saved with the plan (PlanExt.caseType) and remembered as the default for new cases. A change of type
+   is announced on the studio bus ('caseType'). */
 'use strict';
 window.CaseType = (function () {
   const St = window.Studio, $ = id => document.getElementById(id);
@@ -18,6 +19,15 @@ window.CaseType = (function () {
       label: 'Çene rekonstrüksiyonu',
       hint: 'Mandibula rezeksiyonu, fibula grefti ile rekonstrüksiyon, kesi ve fibula guide\'ları.',
       steps: ['st1', 'st2', 'st3', 'st4', 'st5', 'st6', 'st7', 'st8'],
+      hide: ['#sampleA', '#sampleAct', '#hAnk', '#ankAppr'],
+    },
+    // malleolar fracture (ankle.js): the pieces of the fracture are reduced by hand, the reduced model is the output
+    ankle: {
+      label: 'Malleol kırığı',
+      hint: 'Ayak bileği kırığı: parçaları ayırma, sanal redüksiyon, ölçümler ve redükte model STL\'i.',
+      steps: ['st1', 'st2', 'stRed', 'st7', 'stAnkOut'],
+      titles: { st2: ['Anatomi ve parçalar', 'Anatomi'] },
+      hide: ['#upFib', '#sampleM', '#sampleMct', '#sampleL', '#hMand', '#itemAppr', '#segModeBox', '#refBox'],
     },
   };
 
@@ -28,6 +38,10 @@ window.CaseType = (function () {
   const base = {};
   steps.forEach(d => { const t = titleNode(d); base[d.id] = { title: t ? t.data.trim() : '', short: '' }; });
   steps.forEach(d => { const b = nextBtn(d); if (b && base[b.dataset.next]) base[b.dataset.next].short = [...b.childNodes].filter(n => n.nodeType === 3).map(n => n.data).join('').trim(); });
+  // the shown steps are moved in front of a fixed marker after the last step (a moving neighbour would scramble the
+  // order when the type changes more than once)
+  const parent = steps[0].parentNode, end = document.createComment('steps');
+  parent.insertBefore(end, steps[steps.length - 1].nextSibling);
   let hidden = [];
   const sel = $('caseType');
 
@@ -38,8 +52,7 @@ window.CaseType = (function () {
     const T = TYPES[cur], order = T.steps.filter(id => $(id)), titles = T.titles || {};
     hidden.forEach(el => { el.hidden = false; }); hidden = [];
     (T.hide || []).forEach(sel => document.querySelectorAll(sel).forEach(el => { if (!el.hidden) { el.hidden = true; hidden.push(el); } }));
-    const parent = steps[0].parentNode, after = steps[steps.length - 1].nextSibling;
-    order.forEach(id => parent.insertBefore($(id), after));
+    order.forEach(id => parent.insertBefore($(id), end));
     steps.forEach(d => { d.hidden = !order.includes(d.id); if (d.hidden) d.open = false; });
     order.forEach((id, i) => {
       const d = $(id), [title, short] = titles[id] || [base[id].title, base[id].short];
@@ -60,8 +73,10 @@ window.CaseType = (function () {
 
   function set(id, quiet) {
     if (!TYPES[id] || id === cur && !quiet) return;
+    const was = cur;
     cur = id; try { localStorage.setItem(KEY, id); } catch (e) { /* storage blocked */ }
     apply();
+    if (St && was !== cur) St.emit('caseType', cur);
     if (!quiet && St) St.emit('changed');
   }
 

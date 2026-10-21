@@ -25,6 +25,7 @@ suite() {   # suite <name> <command...>
 if [ "$MODE" = fast ] || [ "$MODE" = all ]; then
   suite separate.mjs        node tests/test_separate.mjs
   suite unit/runner         node tests/web/unit/test_runner.mjs
+  suite unit/ankle          node tests/web/unit/test_ankle.mjs
   suite bones               python3 tests/test_bones.py
   suite pipeline            python3 tests/test_pipeline.py
   suite server/http         python3 tests/server/test_http_security.py

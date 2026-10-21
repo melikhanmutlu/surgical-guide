@@ -253,10 +253,14 @@ window.Ref = (function () {
     },
   };
   let lastBone = null, auto = false;
+  // an ankle case (casetype.js) has no midline and no condyles: nothing is computed or shown
+  const off = () => !!(window.CaseType && CaseType.get() === 'ankle');
+  function clearOff() { ref = null; auto = false; built = null; St.setPart('mirror', null, null); update(); }
   // the bone model is built before 'volume' fires: compute now rather than wait for the next 'parts' (an anchor click)
-  bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring)) { ref = null; auto = true; built = null; } update(); if (auto && St.parts.bone && !S.restoring) { auto = false; compute(false); } });
+  bus.addEventListener('caseType', () => { if (off()) clearOff(); });
+  bus.addEventListener('volume', e => { if (off()) { clearOff(); return; } if (!(e.detail && e.detail.restoring)) { ref = null; auto = true; built = null; } update(); if (auto && St.parts.bone && !S.restoring) { auto = false; compute(false); } });
   bus.addEventListener('parts', () => {
-    const b = St.parts.bone; if (!b) return;
+    const b = St.parts.bone; if (!b || off()) return;
     if (auto && !S.restoring) { auto = false; compute(false); return; }
     if (b.obj.geometry.uuid !== lastBone) { lastBone = b.obj.geometry.uuid; buildMirror(); }
   });

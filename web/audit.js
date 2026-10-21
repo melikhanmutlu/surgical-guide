@@ -19,6 +19,8 @@ window.Audit = (function () {
   // Nothing is migrated: which fields were added cannot be told apart from an edit, so the approval is never carried
   // over; the user is told why and that both approvals must be given again.
   let staleOnOpen = new Set(), checkOnApply = false;
+  // a plan to approve: a mandible plan (its guide frame) or an ankle reduction (ankle.js)
+  const planned = () => !!S.anchor || !!(window.Ankle && Ankle.planned());
 
   // ---------- SHA-256 (synchronous, so hashing never waits on crypto.subtle) ----------
   const K = new Uint32Array([0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2]);
@@ -81,7 +83,7 @@ window.Audit = (function () {
   const others = () => St.pendingList().filter(x => x !== LABEL.eng && x !== LABEL.sur);
   const qcCrit = () => (S.qc || []).some(q => q[0] === 'crit');
   function can(role) {
-    if (!S.result) return 'Guide üretilmeden onay verilemez.';
+    if (!S.result && !(window.Ankle && Ankle.planned())) return 'Guide üretilmeden onay verilemez.';
     if (S.crit || qcCrit()) return 'Kritik kontrol varken onay verilemez.';
     if (role === 'sur') {
       if (!status('eng').ok) return 'Önce mühendis teknik onayı gerekli.';
@@ -90,7 +92,7 @@ window.Audit = (function () {
     return '';
   }
   (window.PendingHooks = window.PendingHooks || []).push(() => {
-    if (!S.anchor) return [];
+    if (!planned()) return [];
     const h = planHash(), out = [];
     if (!status('eng', h).ok) out.push(LABEL.eng);
     if (!status('sur', h).ok) out.push(LABEL.sur);
@@ -118,7 +120,7 @@ window.Audit = (function () {
   function render() {
     const box = $('auditBox'); if (!box) return;
     if (box.contains(document.activeElement) && /INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;
-    if (!S.anchor) { box.innerHTML = ''; return; }
+    if (!planned()) { box.innerHTML = ''; return; }
     const h = planHash(), lastH = log.length ? log[log.length - 1].hash : '';
     box.innerHTML = `<h3 class="sub">Plan onayı</h3>
       <p class="hint more">Önce mühendis teknik onayı, sonra cerrah klinik onayı verilir. Planda sonradan yapılan her değişiklik iki onayı da geçersiz kılar. Üretim paketi iki onay da geçerliyken alınır.</p>
@@ -148,7 +150,7 @@ window.Audit = (function () {
 
   // ---------- report, export, plan ----------
   (window.ReportSections = window.ReportSections || []).push(d => {
-    if (!S.anchor) return;
+    if (!planned()) return;
     const h = planHash();
     if (d.keep) d.keep(360); d.h2('İki aşamalı onay');
     d.table(['Aşama', 'Durum', 'Ad', 'Zaman'], ['eng', 'sur'].map(r => { const s = status(r, h); return [r === 'eng' ? 'Mühendis (teknik)' : 'Cerrah (klinik)', s.state === 'valid' ? 'Onaylı' : s.state === 'stale' ? 'Plan değişti' : s.state === 'broken' ? 'Geçersiz' : 'Bekliyor', s.e ? s.e.name : '–', s.e ? when(s.e.at) : '–']; }), [0.25, 0.2, 0.3, 0.25]);
@@ -156,7 +158,7 @@ window.Audit = (function () {
     d.text(`Plan özeti (SHA-256): ${h}`, { size: 18, mono: true, color: '#5b646e' });
     d.text(xl(`Onay kaydı: ${log.length} kayıt, zincir ${chain.ok ? 'doğrulandı' : 'BOZUK'}`) + (log.length ? `, ${xl('son özet')} ${log[log.length - 1].hash}` : ''), { size: 18, mono: true, color: '#5b646e' });
   });
-  (window.ExportHooks = window.ExportHooks || []).push(files => { if (S.anchor) files.push({ name: 'onay_kaydi.json', data: JSON.stringify({ plan_ozeti: planHash(), zincir_dogru: chain.ok, kayitlar: log }, null, 2) }); });
+  (window.ExportHooks = window.ExportHooks || []).push(files => { if (planned()) files.push({ name: 'onay_kaydi.json', data: JSON.stringify({ plan_ozeti: planHash(), zincir_dogru: chain.ok, kayitlar: log }, null, 2) }); });
   const same = (x, y) => JSON.stringify(x) === JSON.stringify(y), isPrefix = (a, b) => a.length <= b.length && a.every((e, i) => same(e, b[i]));
   (window.PlanExt = window.PlanExt || {}).audit = {
     label: 'Onay kaydı',

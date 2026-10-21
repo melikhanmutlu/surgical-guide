@@ -297,7 +297,13 @@
   }
   // built-in samples: the synthetic pair, and one anonymised real CT pair (cropped to bone, face removed; tools/make_ct_sample.py)
   const SAMPLES = { mandible: ['Örnek: mandibula (sentetik BT)', 'mandible'], leg: ['Örnek: alt bacak (sentetik BT)', 'leg'],
-    mandible_ct: ['Örnek: mandibula (anonim gerçek BT)', 'dicom'], leg_ct: ['Örnek: alt bacak (anonim gerçek BT)', 'dicom'] };
+    mandible_ct: ['Örnek: mandibula (anonim gerçek BT)', 'dicom'], leg_ct: ['Örnek: alt bacak (anonim gerçek BT)', 'dicom'],
+    ankle: ['Örnek: ayak bileği, trimalleoler kırık (sentetik BT)', 'ankle'], ankle_ct: ['Örnek: ayak bileği kırığı (anonim gerçek BT)', 'dicom'] };
+  // the default sample of a case type: the real CT, or the synthetic one with ?ornek=sentetik
+  function sampleFor(type) {
+    let synth = false; try { synth = /[?&]ornek=sentetik\b/.test(location.search); } catch (e) { synth = true; }
+    return type === 'ankle' ? (synth ? 'ankle' : 'ankle_ct') : (synth ? 'mandible' : 'mandible_ct');
+  }
   // the sample replaces whatever is being read (W6): a DICOM / zip read still running is cancelled (and says so) before
   // its volume could land over the sample; a newer load in turn replaces the sample before it is committed
   async function loadSample(name) {
@@ -558,11 +564,12 @@
     const r = S.red, thr = +$('thr').value;
     const m = G.threshold(r, thr);
     const { labels, comps, count } = G.components(m, r.nx, r.ny, r.nz, 200);
-    S.labels = labels; S.comps = comps.slice(0, 8); S.compNames = null; S.segMethod = `Eşik ${thr} HU (tarayıcı)`; S.segInfo = null;
+    S.labels = labels; S.comps = comps.slice(0, window.CaseType && CaseType.get() === 'ankle' ? 12 : 8); S.compNames = null; S.segMethod = `Eşik ${thr} HU (tarayıcı)`; S.segInfo = null;
     let pick = comps.length ? comps[0].label : null;
     // a head CT's threshold mask is one piece (skull + upper jaw + mandible + spine): cut it at its thin necks and take
     // the piece that is built like a mandible; when none is, keep the largest and say so (see segChecks)
-    if (window.Bones && Bones.assess(r, labels, comps).cut) {
+    // (not on an ankle: there the touching bones are fracture pieces, kept apart by the threshold or by hand)
+    if (window.Bones && !(window.CaseType && CaseType.get() === 'ankle') && Bones.assess(r, labels, comps).cut) {
       busy(true, 'Bitişik kemikler ayrılıyor (kafatası, çene, omurga)… 2/4'); await sleep();
       const res = S.segInfo = await pickMandibleOf(r, labels, comps, count);
       if (res.status === 'split') {
@@ -2539,6 +2546,8 @@
   }
   function renderChecks() {
     const R = S.result, out = [];
+    // an ankle case has no mandible guide: its own checks (ankle.js)
+    if (!R && window.Ankle && Ankle.on()) { Ankle.renderChecks(); return; }
     if (!R) { $('checks').innerHTML = ''; $('checksInfo').innerHTML = ''; $('chkInfo').hidden = $('chkSum').hidden = true; return; }
     const want = S.g.split && S.planes.length >= 2 ? 2 : 1;
     // every cut slot and screw sleeve has to be on the guide body, or the guide guides nothing there
@@ -2730,6 +2739,8 @@
   }
   function pending() {
     const p = [];
+    // an ankle case has none of the mandible items: its own come through PendingHooks (ankle.js)
+    if (window.Ankle && Ankle.on()) { (window.PendingHooks || []).forEach(f => { try { f().forEach(x => p.push(x)); } catch (e) { /* optional gate */ } }); return p; }
     if (!S.lesion.ok) p.push('Rezeksiyon aralığı');
     S.planes.forEach((o, i) => { if (!o.ok) p.push(`Kesi ${i + 1}`); });
     S.screws.forEach((o, i) => { if (!o.ok) p.push(`Vida ${i + 1}`); });
@@ -3479,6 +3490,8 @@
   $('sampleM').addEventListener('click', () => sampleClick('mandible'));
   $('sampleL').addEventListener('click', () => sampleClick('leg'));
   $('sampleMct').addEventListener('click', () => sampleClick('mandible_ct'));
+  if ($('sampleA')) $('sampleA').addEventListener('click', () => sampleClick('ankle'));
+  if ($('sampleAct')) $('sampleAct').addEventListener('click', () => sampleClick('ankle_ct'));
   $('dicomDir').addEventListener('change', e => { if (e.target.files.length) loadDicom([...e.target.files]); });
   $('dicomFiles').addEventListener('change', e => { if (e.target.files.length) loadDicom([...e.target.files]); });
   stage.addEventListener('dragover', e => e.preventDefault());
@@ -3869,15 +3882,15 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   function sfetch(u, o) { return window.ServerAuth ? ServerAuth.fetch(u, o) : fetch(u, o); }
   function serverUrl() { return ($('aiUrl').value || '').trim().replace(/\/+$/, ''); }
   function select(sel) { if (sel) S.guideSel = false; S.sel = sel; emit('select', sel); renderElements(); rebuildElementParts(S.result ? S.result.pls : planesWorld(), S.result ? S.result.screwInfo : []); applyExplode(); render(); }
-  window.Studio = { chooseAxis, nearestPiece, netsOf, blurNetsOf, renamePart, partName, guideBuilds: () => guideBuilds, mandibleView, endModes, onEndModes, startLoad, loadStopped, loadBusy: () => committing, LOAD_CANCELLED, renderComps, setGuideRot, setGuideRoll, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, resEnds, splitGap, cutMisses, evalScrew, resectedAt, resectedNear, resPiece, boneTrack, cutAlongBone, bestScrew,
+  window.Studio = { bg: bgCall, loadSample, sampleFor, SAMPLES, chooseAxis, nearestPiece, netsOf, blurNetsOf, renamePart, partName, guideBuilds: () => guideBuilds, mandibleView, endModes, onEndModes, startLoad, loadStopped, loadBusy: () => committing, LOAD_CANCELLED, renderComps, setGuideRot, setGuideRoll, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, resEnds, splitGap, cutMisses, evalScrew, resectedAt, resectedNear, resPiece, boneTrack, cutAlongBone, bestScrew,
     boneSections, sizeBody, autoBody, buildGuideSet, cutsAngle, cutFrame, pieceFrames, pieceBody, screwBodyOn, pieceWrapTop, frameAt, stumpGap, mergeStl, mergeMeshes, AUTO_DEFAULT, G_DEFAULT, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume, boneField, simplifyMesh, BAR, barPlan, barSdf, buildBarMesh, placeLug, longCase, axisOffBone, ramusAxis, stopSides, LONG_MM, CUT_OFF_MAX, prodKey, serverBar, guideField, lockState: () => lock, bonelessCut, reframe, exclusive, settled, makeGuide, prodReply, prodWhy, gateChecks, swInfo, swLine, sfetch, reportHTML, lesionMargins, anchorFromSlice, ramusAxis };
   bus.addEventListener('planeDragged', () => { renderElements(); schedule(true, 'drag'); });
   // messages assembled at run time are written in the language that was active: write them again when it changes
   if (window.addEventListener) window.addEventListener('langchange', () => { try { renderChecks(); renderAppr(); syncLesion(); } catch (e) { /* no case open yet */ } });
   emit('ready');
 
-  // the studio opens on the real CT sample; ?ornek=sentetik opens the synthetic one (the browser tests use it)
-  let first = 'mandible_ct';
-  try { if (/[?&]ornek=sentetik\b/.test(location.search)) first = 'mandible'; } catch (e) { first = 'mandible'; }
-  try { await loadSample(first); } catch (e) { busy(false); alertMsg('Örnek vaka açılamadı: ' + e.message); }
+  // the studio opens on the real CT sample of the case type in use (casetype.js keeps it in gs.caseType);
+  // ?ornek=sentetik opens the synthetic one (the browser tests use it)
+  let bootType = 'mandible'; try { if (localStorage.getItem('gs.caseType') === 'ankle') bootType = 'ankle'; } catch (e) { /* storage blocked */ }
+  try { await loadSample(sampleFor(bootType)); } catch (e) { busy(false); alertMsg('Örnek vaka açılamadı: ' + e.message); }
 })();

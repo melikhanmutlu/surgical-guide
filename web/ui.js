@@ -51,6 +51,9 @@ window.UI = (function () {
       st7: !$('expZip').disabled && (!St.lockState || St.lockState().ready),
       st8: exported,
     };
+    // an ankle case (ankle.js) has its own steps and its own approval state
+    const AK = window.Ankle && Ankle.on() ? Ankle.status() : null, planned = !!S.anchor || !!(AK && Ankle.planned());
+    if (AK) Object.assign(done, AK.done, { st8: false });
     tag($('tag1'), !S.vol ? '' : qcCrit ? 'crit' : qcWarn ? 'warn' : 'ok', !S.vol ? '' : qcCrit ? 'Kritik' : qcWarn ? 'Uyarı' : 'Uygun');
     tag($('tag2'), S.selected && S.selected.size ? 'ok' : '', S.selected && S.selected.size ? `${S.selected.size} yapı` : '');
     const resN = S.planes.length + 1, resOk = plOk + (S.lesion.ok ? 1 : 0);
@@ -59,8 +62,8 @@ window.UI = (function () {
     tag($('tag5'), !S.screws.length ? '' : critOf(/^s\d/) ? 'crit' : scOk === S.screws.length ? 'ok' : 'warn', S.screws.length ? `${scOk}/${S.screws.length} onaylı` : '');
     // the status follows the package lock; a lock left open while something is pending is re-run first (fail-safe)
     if (S.anchor && !$('expZip').disabled && St.pendingList().length) St.renderAppr();
-    const lock = St.lockState ? St.lockState() : { ready: !$('expZip').disabled, pend: St.pendingList().length }, pend = S.anchor ? lock.pend : 0;
-    tag($('tag7'), !S.anchor ? '' : S.crit ? 'crit' : done.st7 ? 'ok' : 'warn', !S.anchor ? '' : S.crit ? `${S.crit} kritik` : done.st7 ? 'Onaylı' : `${pend} bekliyor`);
+    const lock = St.lockState ? St.lockState() : { ready: !$('expZip').disabled, pend: St.pendingList().length }, pend = S.anchor ? lock.pend : AK && planned ? AK.pend : 0;
+    tag($('tag7'), !planned ? '' : S.crit ? 'crit' : done.st7 ? 'ok' : 'warn', !planned ? '' : S.crit ? `${S.crit} kritik` : done.st7 ? 'Onaylı' : `${pend} bekliyor`);
     tag($('tag8'), done.st8 ? 'ok' : '', done.st8 ? 'Alındı' : '');
     const counted = steps.filter(d => !d.hidden && (d.id !== 'st4' || fibOn));
     steps.forEach(d => d.classList.toggle('done', !!done[d.id]));
@@ -71,11 +74,11 @@ window.UI = (function () {
     const crit = S.crit + (qcCrit ? 1 : 0);
     $('critCnt').hidden = !crit; $('critCnt').textContent = crit;
     const pill = $('readyPill');
-    if (!S.anchor) { pill.className = 'pill'; pill.textContent = 'Plan eksik'; }
+    if (!planned) { pill.className = 'pill'; pill.textContent = 'Plan eksik'; }
     else if (crit) { pill.className = 'pill crit'; pill.textContent = 'Kritik uyarı'; }
     else if (done.st7) { pill.className = 'pill ok'; pill.textContent = 'Onaylı plan'; }
     else { pill.className = 'pill'; pill.textContent = pend ? `Onay bekliyor (${pend})` : 'Onay bekliyor'; }
-    pill.title = crit && S.anchor ? 'Kontrolleri aç' : '';
+    pill.title = crit && planned ? 'Kontrolleri aç' : '';
     // the package lock reason (#expMsg) sits under the download button; while it is locked a link leads to step 7
     $('goReview').hidden = !S.anchor || done.st7;
     // the 3D view's text alternative: what the plan holds now (WCAG 1.1.1); keys are listed in the label

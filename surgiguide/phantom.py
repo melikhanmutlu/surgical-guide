@@ -80,3 +80,128 @@ def leg_phantom(spacing=(0.7, 0.7, 0.8), seed=1):
     rng = np.random.default_rng(seed)
     arr += rng.normal(0, 25, arr.shape).astype(np.float32)
     return Volume(arr, spacing, origin)
+
+
+# ---------- ankle (malleolar fracture) ----------
+def _rot(axis, deg):
+    """Rotation matrix about a unit axis (Rodrigues)."""
+    a = np.asarray(axis, float); a /= np.linalg.norm(a)
+    t = np.radians(deg); K = np.array([[0, -a[2], a[1]], [a[2], 0, -a[0]], [-a[1], a[0], 0]])
+    return np.eye(3) + np.sin(t) * K + (1 - np.cos(t)) * K @ K
+
+
+# The displaced fragments of the ankle phantom: name, the side of a plane (point, normal; the fragment is where
+# (p - point) . normal > 0) inside one bone, and the rigid displacement applied to it about its own centre
+# (rotation axis, degrees, then translation in mm). Positions in LPS mm of a right ankle (medial = +x).
+ANKLE_FRACTURES = [
+    # Weber B: oblique lateral malleolus fracture at the syndesmosis, anteroinferior to posterosuperior; the distal
+    # fragment slid proximally along the fracture (shortening), displaced laterally and turned externally
+    dict(name="Lateral malleol", bone="fibula", point=(-24.0, 7.0, 46.0), normal=(0.0, 0.7, -1.0),
+         axis=(0, 0, 1), deg=-8.0, move=(-1.5, 3.0, 0.2)),
+    # transverse medial malleolus fracture at the level of the plafond, the tip tilted and pulled distally
+    dict(name="Medial malleol", bone="tibia", point=(19.0, 0.0, 40.5), normal=(0.25, 0.0, -1.0),
+         axis=(0, 1, 0), deg=12.0, move=(2.5, 0.0, -2.5)),
+    # posterior malleolus: the posterior lip of the plafond, displaced posteriorly and proximally
+    dict(name="Posterior malleol", bone="tibia", point=(0.0, 12.0, 44.0), normal=(0.0, 1.0, -0.35),
+         axis=(1, 0, 0), deg=-6.0, move=(0.0, 1.8, 2.2)),
+]
+
+
+def _ankle_bones(p):
+    """Value of each intact bone at points p (N, 3): dict name -> (inside, cortical) boolean arrays."""
+    x, y, z = p[:, 0], p[:, 1], p[:, 2]
+    out = {}
+    # tibia: shaft (a 13, b 11) flaring to the metaphysis (a 20, b 19) at the plafond; the plafond arches up in the
+    # sagittal plane (the talar dome sits 3 mm below it)
+    zb = 41.0 + 3.0 * np.clip(1 - (y / 20.0) ** 2, 0, 1)
+    s = np.clip((z - 41.0) / 34.0, 0, 1); s = s * s * (3 - 2 * s)
+    a, b = 20.0 + (13.0 - 20.0) * s, 19.0 + (11.0 - 19.0) * s
+    r = np.sqrt(((x - 8.0) / a) ** 2 + (y / b) ** 2)
+    shaft = (r <= 1) & (z >= zb)
+    # medial malleolus: a rounded block hanging from the medial plafond
+    m = ((np.abs(x - 25.0) / 6.0) ** 2.5 + (np.abs(y + 1.0) / 9.0) ** 2.5 + (np.abs(z - 36.0) / 12.0) ** 2.5) <= 1
+    med = m & (z <= 46.0) & (x >= 19.0)
+    tib = shaft | med
+    cort_t = tib & ((r > 1 - 2.2 / np.minimum(a, b)) | (z < zb + 1.8) | (med & ~shaft & (((np.abs(x - 25.0) / 4.4) ** 2.5 + (np.abs(y + 1.0) / 7.4) ** 2.5 + (np.abs(z - 36.0) / 10.4) ** 2.5) > 1)))
+    out["tibia"] = (tib, cort_t)
+    # fibula: shaft radius 7, the lateral malleolus widening to 9.5 and ending in a rounded tip at z = 15
+    t = np.clip((65.0 - z) / 30.0, 0, 1); t = t * t * (3 - 2 * t)
+    rf = 7.0 + 2.5 * t
+    cx, cy = -24.0 - 1.0 * t, 6.0 + 2.0 * t
+    rr = np.sqrt((x - cx) ** 2 + (y - cy) ** 2)
+    tip = np.where(z < 30.0, np.sqrt(np.clip(1 - ((30.0 - z) / 15.0) ** 2, 0, 1)), 1.0)
+    fib = (rr <= rf * tip) & (z >= 15.0)
+    out["fibula"] = (fib, fib & ((rr > rf * tip - 1.8) | (z < 16.5)))
+    # talus: a body under the dome (3 mm joint space), medial and lateral gutters 3.5 mm wide
+    zt = zb - 3.0
+    e = ((np.abs(x - 1.5) / 13.5) ** 3 + (np.abs(y - 1.0) / 23.0) ** 3 + (np.abs(z - 26.0) / 16.0) ** 3) <= 1
+    tal = e & (z <= zt)
+    ei = ((np.abs(x - 1.5) / 11.5) ** 3 + (np.abs(y - 1.0) / 21.0) ** 3 + (np.abs(z - 26.0) / 14.0) ** 3) <= 1
+    out["talus"] = (tal, tal & (~ei | (z > zt - 1.8)))
+    return out
+
+
+def ankle_phantom(spacing=(0.7, 0.7, 0.8), seed=2, displaced=True, gap=1.0):
+    """Right ankle with a trimalleolar fracture (ANKLE_FRACTURES): distal tibia with the medial and posterior malleolus
+    fragments, distal fibula with the lateral malleolus fragment, talus. Each fracture leaves a `gap` mm band of soft
+    tissue so the fragments are separate bones at a bone threshold. displaced=False keeps the fragments in place
+    (the reduction target). Returns (Volume, truth) where truth lists each fragment's centre and displacement."""
+    origin = np.array([-45.0, -35.0, 5.0])
+    shape = (int(105 / spacing[2]), int(75 / spacing[1]), int(90 / spacing[0]))
+    x, y, z = _grid(shape, spacing, origin)
+    P = np.stack([x.ravel(), y.ravel(), z.ravel()], -1)
+    arr = np.full(P.shape[0], AIR, np.float32)
+    arr[((P[:, 0] / 42.0) ** 2 + ((P[:, 1] - 3.0) / 34.0) ** 2) <= 1] = SOFT
+
+    def frag_side(q, f):
+        n = np.asarray(f["normal"], float); n /= np.linalg.norm(n)
+        return (q - np.asarray(f["point"], float)) @ n
+
+    def paint(q, mask_fn, bones):
+        """HU of the intact anatomy at q, restricted to where mask_fn(bone, inside, q) is true."""
+        hu = np.full(q.shape[0], np.nan, np.float32)
+        for name, (inside, cort) in bones.items():
+            sel = inside & mask_fn(name, q)
+            hu[sel] = np.where(cort[sel], CORTICAL, CANCELLOUS)
+        return hu
+
+    # the intact bones minus every fragment (and minus the fracture band)
+    bones = _ankle_bones(P)
+    def keep_main(name, q):
+        ok = np.ones(q.shape[0], bool)
+        for f in ANKLE_FRACTURES:
+            if f["bone"] == name:
+                ok &= frag_side(q, f) < -gap / 2
+        return ok
+    hu = paint(P, keep_main, bones)
+    truth = []
+    for i, f in enumerate(ANKLE_FRACTURES):
+        # the fragment's own region: its side of its plane, not inside a fragment listed before it
+        def in_frag(name, q, f=f, i=i):
+            if name != f["bone"]:
+                return np.zeros(q.shape[0], bool)
+            ok = frag_side(q, f) > gap / 2
+            for g in ANKLE_FRACTURES[:i]:
+                if g["bone"] == name:
+                    ok &= frag_side(q, g) < -gap / 2
+            return ok
+        # the fragment's centre (in place), from the intact bone on a coarse sample of the grid
+        Pc = P[::7]
+        bc = _ankle_bones(Pc)
+        sel = bc[f["bone"]][0] & in_frag(f["bone"], Pc)
+        c = Pc[sel].mean(0)
+        R = _rot(f["axis"], f["deg"]) if displaced else np.eye(3)
+        tv = np.asarray(f["move"], float) if displaced else np.zeros(3)
+        # p = R (q - c) + c + t  ->  q = R^T (p - c - t) + c
+        Q = (P - c - tv) @ R + c
+        hf = paint(Q, in_frag, _ankle_bones(Q))
+        put = ~np.isnan(hf)
+        hu[put] = np.where(np.isnan(hu[put]), hf[put], np.maximum(hu[put], hf[put]))
+        truth.append(dict(name=f["name"], centre=[round(float(v), 2) for v in c], rot_axis=list(map(float, f["axis"])),
+                          rot_deg=float(f["deg"]) if displaced else 0.0, move=[float(v) for v in tv]))
+    bone = ~np.isnan(hu)
+    arr[bone] = hu[bone]
+    arr = arr.reshape(shape)
+    rng = np.random.default_rng(seed)
+    arr += rng.normal(0, 25, arr.shape).astype(np.float32)
+    return Volume(arr, spacing, origin), truth
