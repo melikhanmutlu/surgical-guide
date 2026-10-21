@@ -2,7 +2,8 @@
 // H1 vaka tipi değişince adımlar doğru sırada (iki kez değiştirince de); H2 parçalar adlandırılır, 3B'de tıklayınca seçilir;
 // H3 bilinen yer değiştirmenin tersiyle redüksiyon: çakışma yok, aralık kapanır; H4 aşırı redüksiyon kritik;
 // H5 onaylar (redüksiyon + mühendis + cerrah) ve paket; H6 sayfa yenilenip plan açılınca parça konumları ve onay geri gelir;
-// H7 çene tipine dönünce çene örneği, kondil işaretleri ve 8 adım geri gelir.
+// H7 çene tipine dönünce çene örneği, kondil işaretleri ve 8 adım geri gelir; H8 açılış (?ornek yok) malleol tipiyle anonim
+// gerçek ayak bileği BT örneğini açar: tibia, fibula, talus bulunur, atel parça sayılmaz.
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -92,6 +93,19 @@ const H = require('./lib');
     const o = await order();
     const ok = r.pieces === 0 && r.ankParts === 0 && r.cond === 2 && r.bone && o.length === 8;
     return { pass: ok, actual: JSON.stringify({ ...r, steps: o.length }), evidence: await h.shot('H7_cene') };
+  });
+
+  await h.run('H8', 'Gerçek BT örneği', 'Vaka tipi malleol kalırken sayfa ?ornek olmadan açılır', 'ankle_ct yüklenir; Tibia, Fibula, Talus var; dış nesneler gizli; kritik yok', async () => {
+    await page.evaluate(() => { document.getElementById('st1').open = true; }); await h.sleep(300);
+    await page.selectOption('#caseType', 'ankle'); await pieces(); await h.idle();
+    // a first visit: no last case to reopen (store.js reopens yolmed.lastCase on load)
+    await page.evaluate(() => localStorage.removeItem('yolmed.lastCase'));
+    await page.goto(H.BASE + '/', { waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => window.Studio && Studio.S.source && Studio.S.source.name === 'ankle_ct' && window.Ankle && Ankle.pieces().length > 0 && !Studio.loadBusy(), null, { timeout: 300000 }); await h.idle();
+    const r = await h.ev(() => ({ names: Ankle.pieces().map(p => p.name), outShown: Ankle.pieces().filter(p => p.role === 'out' && p.pivot.visible).length, crit: Ankle.checks().filter(c => c[0] === 'crit').length, btn: !document.getElementById('sampleAct').hidden && document.getElementById('sampleMct').hidden }));
+    const ok = ['Tibia', 'Fibula', 'Talus'].every(n => r.names.includes(n)) && r.outShown === 0 && r.crit === 0 && r.btn;
+    await page.evaluate(() => { document.getElementById('stRed').open = true; }); await h.sleep(600);
+    return { pass: ok, actual: JSON.stringify(r), evidence: await h.shot('H8_gercek') };
   });
 
   await h.done();

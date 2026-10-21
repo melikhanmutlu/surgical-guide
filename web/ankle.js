@@ -31,7 +31,7 @@ window.Ankle = (function () {
   // - pieces further than ROI_MM above the ankle level (knee, femur, patella on a long scan) or DIST_MM below it
   //   (midfoot) are "Diğer kemik"
   // - talus: the largest piece left near the ankle (over 5 cm³); the rest are fragments named by where they lie
-  const MAXP = 12, ROI_MM = 100, DIST_MM = 20, NAMES = ['Tibia', 'Fibula', 'Talus', 'Lateral malleol', 'Medial malleol', 'Posterior malleol', 'Diğer kemik', 'Atel / dış nesne'];
+  const MAXP = 12, THR_ANKLE = 300, THR_MAND = 250, ROI_MM = 100, DIST_MM = 20, NAMES = ['Tibia', 'Fibula', 'Talus', 'Lateral malleol', 'Medial malleol', 'Posterior malleol', 'Diğer kemik', 'Atel / dış nesne'];
   const roleOf = n => ({ Tibia: 'tibia', Fibula: 'fibula', Talus: 'talus', 'Diğer kemik': 'other', 'Atel / dış nesne': 'out' })[n] || 'frag';
   function names(list) {
     const r = S.red, hu = r.hu, A = Math.max(1, Math.round(3 / r.sp[0]));
@@ -428,6 +428,20 @@ window.Ankle = (function () {
     if (!S.restoring && S.source && S.source.type === 'sample' && isAnkle(S.source.name) !== on() && !S.anchor && !pieces.some(moved) && St.loadSample) {
       drop(); St.loadSample(St.sampleFor ? St.sampleFor(on() ? 'ankle' : 'mandible') : on() ? 'ankle' : 'mandible').catch(e => St.alertMsg(String(e.message || e))); return;
     }
+  });
+  // bone threshold: ankle joint spaces are narrow, at 250 HU the tibia, talus and fibula of a real CT fuse into one
+  // piece (2026-10-21 anonymised ankle CT); 300 HU keeps them apart. Only the other type's default is changed, so a
+  // threshold set by hand (or by an opened plan) stays.
+  function thrForType() {
+    const e = $('thr'); if (!e) return false;
+    const want = on() ? THR_ANKLE : THR_MAND, other = on() ? THR_MAND : THR_ANKLE;
+    if (+e.value !== other) return false;
+    e.value = String(want); if ($('thrO')) $('thrO').textContent = want + ' HU'; return true;
+  }
+  thrForType();
+  bus.addEventListener('caseType', () => {
+    // a loaded CT (not a sample, which is swapped above) is segmented again at the new threshold when nothing is planned
+    if (thrForType() && !S.restoring && S.red && S.source && S.source.type !== 'sample' && !S.anchor && !pieces.some(moved) && St.segment) St.segment(false);
   });
   bus.addEventListener('caseType', () => { if (on()) { renderMeta(); build(); } else { drop(); const b = St.parts.bone; if (b) { b.visible = true; b.obj.visible = true; St.renderParts(); } } render(); renderOut(); });
   let tmo = null;

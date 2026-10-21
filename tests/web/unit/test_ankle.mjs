@@ -29,7 +29,9 @@ function reduceAll() {
 }
 
 await until(() => !(St.loadBusy && St.loadBusy()));
+const thr0 = $('thr') && $('thr').value;
 W.CaseType.set('ankle');
+const thrA = $('thr') && $('thr').value;
 await St.loadSample('ankle');
 await until(() => A.pieces().length > 0);
 
@@ -139,6 +141,10 @@ test('pending list: the ankle case lists only its own items; the mandible case d
   W.CaseType.set('mandible');
   assert.ok(!St.pendingList().includes('Redüksiyon')); assert.ok(St.pendingList().includes('Rezeksiyon aralığı'));
   assert.equal(A.pieces().length, 0, 'pieces dropped when leaving the ankle type');
+});
+// the real ankle CT fused tibia, talus and fibula at 250 HU; the ankle type segments at 300 HU, the mandible at 250
+test('bone threshold follows the case type: 300 HU for an ankle, back to 250 HU for the mandible', () => {
+  assert.equal(thr0, '250'); assert.equal(thrA, '300'); assert.equal($('thr').value, '250');
 });
 
 await run('ankle (malleolar fracture)');
