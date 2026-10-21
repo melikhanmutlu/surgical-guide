@@ -2,10 +2,8 @@
 import os
 import datetime
 import numpy as np
-import SimpleITK as sitk
-import pydicom
-from pydicom.dataset import FileDataset, FileMetaDataset
-from pydicom.uid import ExplicitVRLittleEndian, generate_uid, CTImageStorage
+# SimpleITK and pydicom are imported where they are used: the hosted service never reads DICOM files, and importing
+# SimpleITK alone costs it ~45 MB of resident memory plus ~60 MB of mapped library (measured in the Docker image).
 
 
 class Volume:
@@ -21,6 +19,8 @@ class Volume:
     def from_dicom_dir(cls, path, series_name=None):
         """Read one series of a folder: the one whose SeriesDescription contains `series_name` (case-insensitive) or
         whose UID equals it; by default the series with the most slices (ties: the first by UID, so the result is stable)."""
+        import SimpleITK as sitk
+        import pydicom
         reader = sitk.ImageSeriesReader()
         series = sorted(reader.GetGDCMSeriesIDs(path))
         if not series:
@@ -46,11 +46,13 @@ class Volume:
     @classmethod
     def from_file(cls, path):
         """NIfTI / NRRD / MHA etc."""
+        import SimpleITK as sitk
         img = sitk.ReadImage(path)
         return cls(sitk.GetArrayFromImage(img).astype(np.float32), img.GetSpacing(),
                    img.GetOrigin(), img.GetDirection())
 
     def to_sitk(self, array=None):
+        import SimpleITK as sitk
         img = sitk.GetImageFromArray(self.array if array is None else array)
         img.SetSpacing(tuple(self.spacing)); img.SetOrigin(tuple(self.origin))
         img.SetDirection(tuple(self.direction.ravel()))
@@ -67,6 +69,8 @@ class Volume:
 
 def write_dicom_series(vol, out_dir, description="PHANTOM", patient="Phantom^Synthetic"):
     """Write an int16 CT series (HU via slope 1 / intercept -1024)."""
+    from pydicom.dataset import FileDataset, FileMetaDataset
+    from pydicom.uid import ExplicitVRLittleEndian, generate_uid, CTImageStorage
     os.makedirs(out_dir, exist_ok=True)
     study, series, frame = generate_uid(), generate_uid(), generate_uid()
     now = datetime.datetime.now()

@@ -2,7 +2,9 @@ FROM python:3.12-slim
 WORKDIR /app
 # GIT_SHA: the commit being built (Railway passes RAILWAY_GIT_COMMIT_SHA at runtime too); shown in /health, replies and STL headers
 ARG GIT_SHA=unknown
-ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 HOST=0.0.0.0 YOLMED_WEB=/app/web YOLMED_DB=/data/yolmed_cases.sqlite \
+# MALLOC_ARENA_MAX=2: request threads share two malloc arenas, so the heap a guide job frees can be trimmed back to the OS
+# (seg_server.release_memory) instead of staying resident per thread (tests/server/test_memory.py)
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 MALLOC_ARENA_MAX=2 HOST=0.0.0.0 YOLMED_WEB=/app/web YOLMED_DB=/data/yolmed_cases.sqlite \
     GIT_SHA=${GIT_SHA}
 COPY requirements-server.txt .
 RUN pip install --no-cache-dir -r requirements-server.txt

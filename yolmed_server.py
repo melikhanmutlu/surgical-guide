@@ -1197,6 +1197,8 @@ class Handler(seg_server.Handler):
             return self._error(HttpError(500, "internal error"))
         finally:
             self._release_upload()
+            if path == "/guide":
+                seg_server.release_memory()
 
     def health(self):
         code, body = super().health()

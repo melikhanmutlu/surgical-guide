@@ -24,6 +24,7 @@ Shared HTTP behaviour (environment variables, all optional)
   YOLMED_UPLOADS               request bodies held in memory at once (default 6); YOLMED_BODY_MAX_S overall upload limit (600 s)
 """
 import argparse
+import ctypes
 import hmac
 import json
 import os
@@ -57,6 +58,20 @@ UPLOAD_SLOTS = threading.BoundedSemaphore(int(os.environ.get("YOLMED_UPLOADS", "
 UPLOAD_WAIT_S = 30
 DRAIN_MAX = 32 * 1024 * 1024          # an unread upload is read (and discarded) up to this much after an early error answer
 WRITE_MIN_RATE = 64 * 1024            # bytes per second a client must read an answer at (large STL / label answers)
+
+try:
+    _LIBC = ctypes.CDLL("libc.so.6")
+except OSError:                       # not glibc (macOS, Windows, musl without the name): nothing to trim
+    _LIBC = None
+
+
+def release_memory():
+    """Hand the heap a finished guide / segmentation job freed back to the OS. glibc keeps freed memory in its arenas, so
+    without this the process stays at its peak after one job (measured: 83 -> 237 MB after one /guide) and the platform
+    bills that as RAM until the next restart. Returns True when memory was released."""
+    if _LIBC is None or not hasattr(_LIBC, "malloc_trim"):
+        return False
+    return bool(_LIBC.malloc_trim(0))
 
 # Content-Security-Policy of every answer (the studio's page is the one that matters): its own files, three.js /
 # dicom-parser / the DICOM codecs from jsDelivr (the codecs are WebAssembly), the Google fonts stylesheet. Inline style
@@ -349,6 +364,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(500, {"error": "internal error"})
         finally:
             self._release_upload()
+            release_memory()
 
     def _segment(self, u):
         self._require_auth()

@@ -9,7 +9,6 @@ import subprocess
 import tempfile
 import numpy as np
 from scipy import ndimage as ndi
-import SimpleITK as sitk
 
 from . import bones
 
@@ -201,6 +200,7 @@ def totalseg_bone(vol, structure, dicom_dir=None, fast=False):
     Note: some TotalSegmentator tasks (e.g. appendicular_bones) need a licence key from the authors;
     check the licence terms before clinical / commercial use.
     """
+    import SimpleITK as sitk                     # only this backend needs it (see volume.py)
     task, fname = TOTALSEG_TASKS[structure]
     with tempfile.TemporaryDirectory() as tmp:
         src = dicom_dir
