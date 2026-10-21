@@ -11,7 +11,7 @@ window.Fibula = (function () {
   // segment length bands (literature: >= 15 mm keeps the periosteal supply, ~20 mm is the usual floor; the segments at the
   // stumps carry the fixation and heal less well, so >= 25 mm there): < SEG_ERR critical, SEG_ERR..MIN_LEN a warning,
   // a stump segment of a multi-segment graft under STUMP_MIN a warning. DEV_TIE: deviations this close count as equal
-  const SEG_ERR = 15, STUMP_MIN = 25, DEV_TIE = 0.5;
+  const SEG_ERR = 15, STUMP_MIN = 25, DEV_TIE = 0.5, DEV_ERR = 2 * DEV_WARN;
   // Clinical thresholds as one profile: the defaults below (most are our engineering assumptions where the literature has
   // no single number), overridden per plan by plan.rules (only the keys that differ, so a plan without overrides keeps
   // its approval signature). [min, max, step] is the range a stored or edited value is kept in.
@@ -935,7 +935,9 @@ window.Fibula = (function () {
           : `${xl(`Segment sayısı otomatik seçildi: ${ch.n} (sapma hedefi tutmuyor; ${MIN_LEN} mm altı segment vermeyen sayılar içinde en küçük sapma, ${fmt(DEV_TIE)} mm içindeki sapmalarda az segment ve güdük segmentleri ${STUMP_MIN} mm üstü olan sayı).`)} ${xl('Denenen sayılar (en kısa segment mm / sapma mm):')} ${tbl}.`]);
     }
     c.segs.forEach(g => [['başlangıç', g.a0], ['bitiş', g.a1]].forEach(([w, a]) => { if (a > ANGLE_WARN) out.push(['warn', 'Uyarı', xl(`Fibula segmenti ${g.i + 1} ${w} kesisi ${fmt(a)}°; ${ANGLE_WARN}° üstü temas yüzeyini azaltır.`)]); }));
-    if (c.dev > DEV_WARN) out.push(['warn', 'Uyarı', xl(`Greftler defekt hattından ${fmt(c.dev)} mm sapıyor (eşik ${DEV_WARN} mm). Segment ekleyin ya da "Kesileri öner"i kullanın.`)]);
+    // twice the warning threshold holds the approval back (sample value, like DEV_WARN: the clinical team sets both)
+    if (c.dev > DEV_ERR) out.push(['crit', 'Kritik', xl(`Greftler defekt hattından ${fmt(c.dev)} mm sapıyor (hata eşiği ${DEV_ERR} mm); rekonstrüksiyon çene hattını tutmaz. Segment ekleyin ya da "Kesileri öner"i kullanın.`), 'fib', [['fibOpt', 'Kesileri öner']]]);
+    else if (c.dev > DEV_WARN) out.push(['warn', 'Uyarı', xl(`Greftler defekt hattından ${fmt(c.dev)} mm sapıyor (eşik ${DEV_WARN} mm). Segment ekleyin ya da "Kesileri öner"i kullanın.`), 'fib', [['fibOpt', 'Kesileri öner']]]);
     if (P0.distal < DISTAL_MIN) out.push(['crit', 'Kritik', xl(`Distal korunan fibula ${fmt(P0.distal, 0)} mm; ayak bileği stabilitesi için en az ${DISTAL_MIN} mm.`)]);
     // pedicle side on the neo-mandible: lingual or inferior, never buccal (under the skin and the plate) and not towards
     // the crest (implants, occlusion). Only where the segment has an outer side (a curved arch).
@@ -1445,5 +1447,5 @@ window.Fibula = (function () {
   function guideEdited() { guideKey = ''; scheduleGuide(); renderStep(); St.emit('changed'); }
   const guideInfo = () => (active() && last ? { auto: guideAuto(last), body: guideBody(last), screws: guideScrews(last), segs: last.segs, FR: F.c.FR } : null);
   return { pending: () => !!(active() && guideStale), setActive, activePane: () => activePane, summary: () => (active() ? summary() : null), view: () => view, active, approved, checks, apply, exportFiles, reportHTML, guideReport, production, setView, state: () => ({ F, last, view }),
-    graftBone, fibBone: q => (F && F.c ? fibBone(q) : false), guideInfo, guideEdited, plan: () => (active() ? plan() : null), rules, RULES, legSide: () => (F && F.c ? legSide() : null), building: () => building, segmentChoice, lensOk, choice: () => (S.fib && S.fib.choice) || null, defect, MIN_LEN, MAX_N, DEV_WARN, SEG_ERR, STUMP_MIN, DEV_TIE, slotOf: () => (active() ? slotOf(plan()) : null) };
+    graftBone, fibBone: q => (F && F.c ? fibBone(q) : false), guideInfo, guideEdited, plan: () => (active() ? plan() : null), rules, RULES, legSide: () => (F && F.c ? legSide() : null), building: () => building, segmentChoice, lensOk, choice: () => (S.fib && S.fib.choice) || null, defect, MIN_LEN, MAX_N, DEV_WARN, DEV_ERR, SEG_ERR, STUMP_MIN, DEV_TIE, slotOf: () => (active() ? slotOf(plan()) : null) };
 })();

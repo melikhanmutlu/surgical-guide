@@ -1646,7 +1646,7 @@
     // direction, then the fewest failed screws; `onlyScrews` marks a rung whose body sits but whose screws fail,
     // `noBoneDrop` one whose automatic placement found no bone at all past a cut (no wrap depth mends that),
     // `rejected` the automatic screws the built guide found no body under (their spots are kept clear on a retry)
-    let best = null, onlyScrews = false, noBoneDrop = false, rejected = [];
+    let best = null, onlyScrews = false, onlyPieces = false, noBoneDrop = false, rejected = [];
     S.screwBlocked = [];
     const over = () => performance.now() - t0 > FIT_BUDGET_MS;
     const place = () => { if (S.guideOn) placeScrews({ keepWrap: true }); };
@@ -1667,6 +1667,7 @@
       const score = (piecesOk ? 1000 : 0) + (seatFree ? 100 : 0) - bad - (h > 0.5 ? 0.5 : 0);
       if (!best || score > best.score) best = { score, wrap: S.g.wrap, split: S.g.split, flange: S.g.flange, pieces: R.pieces, want, free: R.seat && R.seat.ok ? R.seat.free : null, screws: bad };
       onlyScrews = piecesOk && seatFree && !scOk;
+      onlyPieces = h > 0.5 && !piecesOk && seatFree && scOk;
       noBoneDrop = (S.screwDrops || []).some(d => d.why === 'noBone');
       rejected = R.screwInfo.filter(si => !si.ok && si.noBody && si.s.sc && !si.s.sc.hand).map(si => ({ part: si.s.sc.part || 0, u: si.s.sc.u, v: si.s.sc.v }));
       const pass = piecesOk && (h > 0.5 || seatFree) && scOk;
@@ -1674,8 +1675,10 @@
       if (pass && h <= 0.4) keepFit(o); else disposeObj(o.mesh);
       return pass;
     };
-    // coarse grid first, then confirm at the resolution of the final guide
-    const okAt = async () => (await test()) && (await test(0.4));
+    // coarse grid first, then confirm at the resolution of the final guide. A rung the coarse grid fails only on its
+    // piece count (a thin bridge or flange that 0.8 mm cells break) is tried at the final resolution too: on a real CT
+    // the whole ladder failed that way and kept a guide that was in fact whole
+    const okAt = async () => ((await test()) || onlyPieces) && (await test(0.4));
     // start from the usual depth (an earlier plan may have lowered it), never below 2 mm (the bridge needs it)
     const top = auto.wrap ? Math.max(w0, S.kind === 'leg' ? 6 : 5) : w0, wMin = auto.wrap ? 2 : w0;
     // a rung whose body sits in one piece with a free direction and fails only on its screws is not mended by a
@@ -2636,7 +2639,12 @@
           const lay = xl(kept.split === 2 ? 'iki guide (kendi eksenlerinde)' : kept.split ? 'iki guide (ortak eksen)' : 'tek parça');
           out.push(['info', 'Bilgi', kept.pieces !== kept.want ? `Otomatik uyum: en yakın deneme tutuldu: ${lay}, sarma ${kw} mm; ${kp} parça (beklenen ${kq}), ${ks} vida sorunlu.` : kept.free === 0 ? `Otomatik uyum: en yakın deneme tutuldu: ${lay}, sarma ${kw} mm; takma yönü yok, ${ks} vida sorunlu.` : `Otomatik uyum: en yakın deneme tutuldu: ${lay}, sarma ${kw} mm; gövde oturuyor, ${ks} vida sorunlu.`, 'guide']);
         }
-        if (!last.ok) out.push(['warn', 'Uyarı', L.some(x => x.step === 'flange') ? `Otomatik uyum: ${L.length} deneme (sarma ${w0} → ${lo} mm, iki guide ve kısa kenar dahil) takılabilir guide vermedi; kesileri ya da guide eksenini değiştirin.` : L.some(x => x.step !== 'wrap') ? `Otomatik uyum: ${L.length} deneme (sarma ${w0} → ${lo} mm, iki guide dahil) takılabilir guide vermedi; kesileri ya da guide eksenini değiştirin.` : `Otomatik uyum: ${L.length} deneme (sarma ${w0} → ${lo} mm) takılabilir guide vermedi; kesileri ya da guide eksenini değiştirin.`, 'guide']);
+        // the ladder ended without a passing rung: the guide that was kept decides. One that fails on its pieces, its
+        // insertion direction or its screws holds the approval back (the user's guide went to the printer on a warning);
+        // one that passes them was only failed by the coarse grid of the ladder's first test
+        const keptOk = R.pieces === want && !(R.seat && R.seat.ok && !R.seat.free) && !R.screwInfo.some(si => !si.ok);
+        if (!last.ok && keptOk) out.push(['info', 'Bilgi', `Otomatik uyum: ${L.length} denemenin hiçbiri tam geçmedi; tutulan guide parça, takma yönü ve vida kontrollerini geçiyor.`, 'guide']);
+        else if (!last.ok) out.push(['crit', 'Kritik', L.some(x => x.step === 'flange') ? `Otomatik uyum: ${L.length} deneme (sarma ${w0} → ${lo} mm, iki guide ve kısa kenar dahil) takılabilir guide vermedi; kesileri ya da guide eksenini değiştirin.` : L.some(x => x.step !== 'wrap') ? `Otomatik uyum: ${L.length} deneme (sarma ${w0} → ${lo} mm, iki guide dahil) takılabilir guide vermedi; kesileri ya da guide eksenini değiştirin.` : `Otomatik uyum: ${L.length} deneme (sarma ${w0} → ${lo} mm) takılabilir guide vermedi; kesileri ya da guide eksenini değiştirin.`, 'guide', [['fit', 'Yeniden dene']]]);
       }
     }
     if (!R.pieces) out.push(['crit', 'Kritik', 'Guide oluşmadı (boş); guide merkezini, duvar ve boşluk değerlerini kontrol edin.', 'guide']);
@@ -2679,7 +2687,8 @@
       }
     });
     R.pls.forEach((pw, i) => R.pls.forEach((pq, j) => { if (j > i && Math.abs(pw.off - pq.off) < 3 && Math.abs(pw.N.dot(pq.N)) > 0.95) out.push(['warn', 'Uyarı', `Kesi ${i + 1} ve ${j + 1} birbirine çok yakın.`, 'p' + i]); }));
-    if (window.Fibula) Fibula.checks().forEach(c => out.push([c[0], c[1], c[2], c[3] || 'fib']));
+    const bd = boneDoubt(); if (bd) out.push(['crit', 'Kritik', bd, 'anat', [['bone', 'Ayırmaya git'], ['boneOk', 'Kemik modeli doğru']]]);
+    if (window.Fibula) Fibula.checks().forEach(c => out.push([c[0], c[1], c[2], c[3] || 'fib', c[4]]));
     (window.ExtraChecks || []).forEach(f => f().forEach(c => out.push(c)));
     out.push(...gateChecks());
     S.crit = out.filter(o => o[0] === 'crit').length;
@@ -2687,7 +2696,8 @@
     const rank = { crit: 0, warn: 1, ok: 2 }, infos = out.filter(o => o[0] === 'info'), main = out.filter(o => o[0] !== 'info').sort((a, b) => (rank[a[0]] ?? 3) - (rank[b[0]] ?? 3));
     if (!main.length) main.push(['ok', 'Uygun', 'Tüm kontroller geçti.']);
     // the row's link is an inner element: a list item keeps its listitem role (axe "list", AR-10)
-    const li = ([c, t, m, ref]) => ref ? `<li class="${c}"><div class="go" data-go="${ref}" title="İlgili öğeye git" tabindex="0" role="button"><b>${t}</b><span>${esc(m)}</span></div></li>` : `<li class="${c}"><b>${t}</b><span>${esc(m)}</span></li>`;
+    const fx = fixes => (fixes && fixes.length ? `<span class="fixes">${fixes.map(([id, lb]) => `<button type="button" class="link" data-fix="${esc(id)}">${esc(xl(lb))}</button>`).join('')}</span>` : '');
+    const li = ([c, t, m, ref, fixes]) => ref ? `<li class="${c}"><div class="go" data-go="${ref}" title="İlgili öğeye git" tabindex="0" role="button"><b>${t}</b><span>${esc(m)}</span></div>${fx(fixes)}</li>` : `<li class="${c}"><b>${t}</b><span>${esc(m)}</span></li>`;
     const n = c => out.filter(o => o[0] === c).length;
     $('chkSum').innerHTML = n('crit') || n('warn') ? (n('crit') ? `<span class="tag crit">${n('crit')} kritik</span>` : '') + (n('warn') ? `<span class="tag warn">${n('warn')} uyarı</span>` : '') + (infos.length ? `<span class="tag">${infos.length} bilgi</span>` : '') : '';
     $('chkSum').hidden = !$('chkSum').innerHTML;
@@ -2702,7 +2712,37 @@
       box.innerHTML = mine.length ? `<ul class="checks">${mine.map(li).join('')}</ul>` : '';
     });
     document.querySelectorAll('.checks li > [data-go]').forEach(el => { el.addEventListener('click', () => goTo(el.dataset.go)); el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); goTo(el.dataset.go); } }); });
+    document.querySelectorAll('.checks li [data-fix]').forEach(el => el.addEventListener('click', () => runFix(el.dataset.fix)));
     updateMarkers();
+  }
+  // ---------- the planning bone in doubt (thread "Guide STL kalitesi", 2026-10-21) ----------
+  // A head CT's automatic mandible separation that came out at the edge of the expected size (or failed, or a bone far
+  // too large) was only a warning in the Kontroller tab: a plan was approved and printed on a mandible with upper-jaw
+  // pieces in it. While the planning bone is still that automatic pick, untouched (no layer split, no brush edits, no
+  // other selection) and not confirmed by the user, it is a critical check. The confirmation is part of the plan and
+  // holds only for this bone (source, threshold, selection).
+  const boneKey = () => JSON.stringify([S.source && S.source.fp, +$('thr').value, [...S.selected].sort((a, b) => a - b), window.SegEdit ? SegEdit.key() : '']);
+  function boneDoubt() {
+    if (!S.mask || !S.red || (S.boneOk && S.boneOk === boneKey())) return null;
+    const inf = S.segInfo;
+    const big = window.Bones ? Bones.boneWarnings(S.red, S.mask).find(x => x.code === 'big') : null;
+    if (big) return `Planlama kemiği ${fmt(big.vol, 0)} cm³; bir mandibula için fazla büyük. Kafatası, üst çene ya da omurga da seçili olabilir. Mandibulayı ayırın ya da kemik modelini kontrol edip onaylayın.`;
+    if (!inf || !(inf.status === 'failed' || (inf.status === 'split' && (inf.ext[2] > 105 || inf.vol < 30 || inf.vol > 120)))) return null;
+    const untouched = !(window.Masks && Masks.active()) && !(window.SegEdit && SegEdit.edited()) && S.selected.size === 1 && S.selected.has(inf.picked);
+    if (!untouched) return null;
+    return inf.status === 'failed'
+      ? `Mandibula otomatik ayrılamadı; planlama kemiği kafatası ve omurgayla birlikte (${fmt(inf.before.vol, 0)} cm³). Mandibulayı ayırın ya da kemik modelini kontrol edip onaylayın.`
+      : `Otomatik ayrılan mandibula (${fmt(inf.vol, 0)} cm³, yükseklik ${fmt(inf.ext[2], 0)} mm) beklenen aralığın kenarında; üst çene ya da kafatası parçaları karışmış olabilir. Anatomi adımında "Bitişik kemikleri ayır" ile ayırın ya da kemik modelini kontrol edip onaylayın.`;
+  }
+  // one-click actions of the checks (the row's own fix: the automatic tool that mends it, or the place to mend it)
+  async function runFix(id) {
+    if (id === 'bone') { goTo('anat'); const d = $('secMask'); if (d && !d.open) d.open = true; return; }
+    if (id === 'boneOk') {
+      if (!confirm(xl('Kemik modelini 3B görünümde ve kesitlerde kontrol ettiniz mi? Onay plana kaydedilir ve bu kemik modeli için geçerlidir.'))) return;
+      S.boneOk = boneKey(); emit('changed'); renderChecks(); renderAppr(); return;
+    }
+    if (id === 'fit') { await makeGuide(); return; }
+    if (id === 'fibOpt') { const b = $('fibOpt'); if (b) b.click(); return; }
   }
   // Checks that hold the approval and the package back on what goes to the printer (E1, E3): a production STL the server
   // reports as not watertight or in more pieces than the layout has, and a plate whose path could not be completed
@@ -2719,6 +2759,7 @@
       x.screwNos.forEach(n => out.push(n > 0 ? ['crit', 'Kritik', pre + `Vida ${n} üretim STL'inde yok: sunucu bu vidaya kovan ve delik açamadı. Vidayı kaydırıp üretim STL'ini yeniden alın.`, 's' + (n - 1)]
         : ['crit', 'Kritik', pre + `Bir vida (köprü bağlantısı ya da fibula vidası) üretim STL'inde yok: sunucu ona kovan ve delik açamadı. Guide'ı değiştirip üretim STL'ini yeniden alın.`, pre ? 'fib' : 'guide']));
       if (x.issues.some(i => i.code === 'not_manifold') && x.watertight !== false) out.push(['crit', 'Kritik', pre + `Sunucu üretim STL'inin ağını kapalı bulmadı (manifold dışı kenar); bu dosya basılamaz. Üretim STL'ini yeniden alın.`, pre ? 'fib' : 'guide']);
+      printIssues(x).forEach(pi => out.push(['crit', 'Kritik', pre + pi.msg + ' ' + xl("Guide'ı değiştirip üretim STL'ini yeniden alın."), pre ? 'fib' : 'guide']));
       const co = x.issues.find(i => i.code === 'resolution_coarsened');
       if (co) out.push(co.coarser_than_preview ? ['crit', 'Kritik', pre + `Üretim STL'inin ızgarası ${fmt(co.used_mm, 2)} mm'ye kabalaştırıldı (istenen ${fmt(co.requested_mm, 2)} mm); önizlemeden kaba, delik ve yuvalar planı tutmayabilir. Guide'ı küçültüp üretim STL'ini yeniden alın.`, pre ? 'fib' : 'guide']
         : ['info', 'Bilgi', pre + `Üretim STL'inin ızgarası ${fmt(co.used_mm, 2)} mm'ye kabalaştırıldı (istenen ${fmt(co.requested_mm, 2)} mm); önizlemeden yine ince.`, pre ? 'fib' : 'guide']);
@@ -3569,7 +3610,7 @@ ${draft ? `<p>Onay bekleyen: ${esc(miss.join(', ') || '-')}${S.crit ? ` · ${S.c
 <h2>Kesi düzlemleri</h2><table><tr><th>Kesi</th><th>Konum</th><th>Yatay açı</th><th>Dikey açı</th><th>Yuva</th><th>Durum</th></tr>${S.planes.map((p, i) => `<tr><td>${i + 1}</td><td>${fmt(p.off)} mm</td><td>${fmt(p.yaw)}°</td><td>${fmt(p.pitch)}°</td><td>${fmt(p.w)} mm</td><td>${st(p)}</td></tr>`).join('')}</table>
 <h2>Vidalar</h2><table><tr><th>Vida</th><th>Konum (eksen, yanal)</th><th>Eğim</th><th>Matkap / kovan</th><th>Boy</th><th>Kemik içinde</th><th>Durum</th></tr>${S.screws.map((s, i) => { const si = R && R.screwInfo[i]; return `<tr><td>${i + 1}</td><td>${fmt(s.u)}, ${fmt(s.v)} mm</td><td>${fmt(s.tiltU, 0)}°, ${fmt(s.tiltV, 0)}°</td><td>${fmt(s.d)} / ${fmt(s.D)} mm</td><td>${fmt(s.len, 0)} mm</td><td>${si && si.ok ? fmt(si.inBone) + ' mm' : '-'}</td><td>${st(s)}</td></tr>`; }).join('')}</table>
 <h2>Guide gövdesi</h2><table>${gp.map(([k, v, u]) => `<tr><td>${k}</td><td>${fmt(v)} ${u}</td></tr>`).join('')}${R ? `<tr><td>Temas alanı</td><td>${fmt(R.contact, 0)} mm²</td></tr><tr><td>Hacim</td><td>${fmt(R.volume / 1000, 2)} cm³</td></tr>` : ''}</table>
-${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanlı boolean ile üretildi: ${S.prod.watertight ? 'su geçirmez' : 'su geçirmez değil'}, ${S.prod.bodies} parça, ${fmt(S.prod.volume / 1000, 2)} cm³${S.prod.resolution ? `, ızgara ${fmt(S.prod.resolution, 2)} mm` : ''} (guide_uretim.stl).${S.prod.productionOk === false ? ' <b>Sunucu bu STL\'i basılabilir bulmadı.</b>' : ''}</p>` : '<p>Üretim STL\'i alınmadı; guide.stl 0,4 mm voksel önizlemesidir.</p>'}
+${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanlı boolean ile üretildi: ${S.prod.watertight ? 'su geçirmez' : 'su geçirmez değil'}, ${S.prod.bodies} parça, ${fmt(S.prod.volume / 1000, 2)} cm³${S.prod.resolution ? `, ızgara ${fmt(S.prod.resolution, 2)} mm` : ''} (guide_uretim.stl).${S.prod.productionOk === false ? ' <b>Sunucu bu STL\'i basılabilir bulmadı.</b>' : ''}${printLine(S.prod)}</p>` : '<p>Üretim STL\'i alınmadı; guide.stl 0,4 mm voksel önizlemesidir.</p>'}
 <h2>Otomatik kontroller</h2><ul>${checks}</ul>${window.Fibula ? Fibula.reportHTML() : ''}${approvalsHTML()}
 <h2>Koordinatlar</h2><p>Guide merkezi ${S.anchor ? [S.anchor.p.x, S.anchor.p.y, S.anchor.p.z].map(x => fmt(x)).join(', ') : '-'} mm (DICOM hasta koordinatı, LPS). STL dosyaları aynı koordinatlardadır; BT ile üst üste açılabilir.</p>
 <p><small>${esc(swLine(t => t))}</small></p>
@@ -3587,6 +3628,13 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   }
   // ---------- production STL on the server (surface booleans with Manifold) ----------
   // c = { vol, red, F, thr (HU, or null for AI masks), g, P, u, v, n, pls:[{p,N,w}], scs:[{sc,dir,entry}] }
+  // the production request carries the CT as a ramp around the threshold: soft tissue (HU_SOFT and below) is 0, bone
+  // as far above the threshold as soft tissue is below it is 255. A clean bone/soft-tissue step then gives the same
+  // surface as the bone mask the preview and the planned clearance are built on (the middle between the two cells; a
+  // wider ramp moved the server's guide 0.2 mm off the bone on the synthetic cases, consistency harness 2026-10-21),
+  // and cells part bone, part soft tissue (partial volume, the slice terraces) place the surface between cells
+  const HU_SOFT = 50;
+  const softOcc = (hu, thr) => { const hw = Math.max(100, thr - HU_SOFT); return Math.max(0, Math.min(255, Math.round(255 * (0.5 + (hu - thr) / (2 * hw))))); };
   function guideRequest(c) {
     const { vol, g } = c, arr = q => [q.x, q.y, q.z];
     const top = g.clear + g.wall + Math.max(g.bridge, 0, ...c.scs.map(s => s.sc.sleeveH)) + 6;
@@ -3601,9 +3649,25 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
       if (c.thr != null && hu < c.thr) continue;
       if (fieldAt(c.red, c.F, G.worldOf(vol, lo[0] + i, lo[1] + j, lo[2] + k)) > cut) mask[i + nx * (j + ny * k)] = 1;
     }
+    // a threshold mask goes as the CT values themselves, a ramp around the threshold (mask_scale 255, 128 and up is bone):
+    // the server's surface then lies where the CT crosses the threshold, between cells, instead of on the cell faces
+    // (0.6 mm terraces along the slices on the bone-contact surface). Cells of the planning bone keep >= 128; their
+    // neighbours below the threshold get the ramp (< 128); other bone and the rest stay 0.
+    const soft = c.thr != null;
+    if (soft) {
+      const ramp = hu => softOcc(hu, c.thr);
+      const nxy = nx * ny, out = new Uint8Array(mask.length);
+      for (let k = 0, v = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++, v++) {
+        const hu = vol.hu[lo[0] + i + vol.nx * (lo[1] + j + vol.ny * (lo[2] + k))];
+        if (mask[v]) { out[v] = Math.max(128, ramp(hu)); continue; }
+        if (hu >= c.thr) continue;
+        if ((i > 0 && mask[v - 1]) || (i < nx - 1 && mask[v + 1]) || (j > 0 && mask[v - nx]) || (j < ny - 1 && mask[v + nx]) || (k > 0 && mask[v - nxy]) || (k < nz - 1 && mask[v + nxy])) out[v] = Math.min(127, ramp(hu));
+      }
+      mask.set(out);
+    }
     let bin = ''; for (let i = 0; i < mask.length; i += 0x8000) bin += String.fromCharCode.apply(null, mask.subarray(i, i + 0x8000));
     return {
-      crop: { nx, ny, nz, sp: vol.sp.slice(), origin: G.worldOf(vol, ...lo), axes: vol.axes.map(a => a.slice()) }, mask_b64: btoa(bin),
+      crop: { nx, ny, nz, sp: vol.sp.slice(), origin: G.worldOf(vol, ...lo), axes: vol.axes.map(a => a.slice()) }, mask_b64: btoa(bin), ...(soft ? { mask_scale: 255 } : {}),
       frame: { p: arr(c.P), u: arr(c.u), v: arr(c.v), n: arr(c.n) }, g: Object.assign(clone(c.g), { clear: c.g.clear + (c.g.peri || 0) }), resolution: 0.2,
       planes: c.pls.map(pl => ({ p: arr(pl.pSlot || pl.p), N: arr(pl.N), w: pl.w })),
       gap: (gp => gp && { A: { p: arr(gp.A.p), N: arr(gp.A.N), w: gp.A.w }, B: { p: arr(gp.B.p), N: arr(gp.B.N), w: gp.B.w }, flange: c.g.flange })(c.gap || splitGap(c.g, c.pls)),
@@ -3636,7 +3700,8 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     const ok = typeof js.production_ok === 'boolean' ? js.production_ok : !!js.watertight;
     const screwNos = issues.filter(i => i.code === 'screw_no_body').map(i => { const s = sent && sent[i.screw]; return s ? S.screws.indexOf(s.sc) + 1 : 0; });
     return { productionOk: ok, issues, screwsMissing: Number.isFinite(js.screws_missing) ? js.screws_missing : screwNos.length, screwNos,
-      resolution: Number.isFinite(js.resolution) ? js.resolution : null, requestedResolution: Number.isFinite(js.requested_resolution) ? js.requested_resolution : null, version: typeof js.version === 'string' ? js.version : null };
+      resolution: Number.isFinite(js.resolution) ? js.resolution : null, requestedResolution: Number.isFinite(js.requested_resolution) ? js.requested_resolution : null, version: typeof js.version === 'string' ? js.version : null,
+      printChecks: js.print_checks && typeof js.print_checks === 'object' ? js.print_checks : null };
   }
   async function serverBar(spec, outer) {
     const url = serverUrl(); if (!url) throw new Error('Bu işlem sunucu gerektirir; yayındaki sitede (sguide.up.railway.app) çalışır. Pakette önizleme STL\'i vardır.');
@@ -3667,7 +3732,8 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
         for (const pt of S.result.parts) rs.push(await serverGuide(Object.assign({ vol: S.vol, red: S.red, F: S.maskF, thr: segThr(), g: pt.g, P: pt.frame.P, pls: pt.pls, gap: pt.gap, scs: pt.lug ? pt.scs.concat([pt.lug]) : pt.scs, wrapProfile: pt.wrapProfile, seatDir: pt.result.seatDir }, pt.frame), ac.signal));
         r = { stl: mergeStl(rs[0].stl, rs[1].stl), watertight: rs.every(x => x.watertight), bodies: rs.reduce((s, x) => s + x.bodies, 0), volume: rs.reduce((s, x) => s + x.volume, 0), faces: rs.reduce((s, x) => s + x.faces, 0), ms: rs.reduce((s, x) => s + x.ms, 0),
           productionOk: rs.every(x => x.productionOk), issues: rs.flatMap((x, k) => x.issues.map(i => Object.assign({ piece: k + 1 }, i))), screwsMissing: rs.reduce((s, x) => s + x.screwsMissing, 0), screwNos: rs.flatMap(x => x.screwNos),
-          resolution: Math.max(...rs.map(x => x.resolution || 0)) || null, requestedResolution: rs[0].requestedResolution, version: rs[0].version };
+          resolution: Math.max(...rs.map(x => x.resolution || 0)) || null, requestedResolution: rs[0].requestedResolution, version: rs[0].version,
+          printChecks: rs.every(x => x.printChecks) ? ['thin_wall_mm3', 'bone_overlap_mm3', 'undercut_mm3'].reduce((o, k) => Object.assign(o, { [k]: rs.reduce((a, x) => a + (+x.printChecks[k] || 0), 0) }), { min_wall_mm: rs[0].printChecks.min_wall_mm }) : null };
       } else r = await serverGuide(Object.assign({ vol: S.vol, red: S.red, F: S.maskF, thr: segThr(), g: S.g, P: S.anchor.p, pls: planesWorld(), scs: screwsWorld(), wrapProfile: S.result && S.result.wrapProfile, seatDir: S.result && S.result.seatDir }, frameAxes()), ac.signal);
       // the connecting bar: a separate part, its own server call (exact solids; the server also measures its bone clearance)
       if (S.result && S.result.bar && S.result.bar.ok) stage('Sunucuda bağlantı köprüsü hazırlanıyor…');
@@ -3682,6 +3748,20 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     busy(false);
     renderChecks(); renderAppr();
   }
+  // the server's print checks (thin wall, guide in bone, guide in the bone's shadow along the insertion direction), in words
+  function printIssues(r) {
+    const iss = (r && r.issues) || [], sum = c => iss.filter(i => i.code === c).reduce((a, i) => a + (+i.mm3 || 0), 0), out = [];
+    if (iss.some(i => i.code === 'thin_wall')) out.push({ code: 'thin_wall', msg: xl(`Guide'da ${fmt(iss.find(i => i.code === 'thin_wall').min_wall_mm || 1)} mm'den ince duvar var (${fmt(sum('thin_wall'), 1)} mm³); baskıda ya da elde kırılabilir.`) });
+    if (iss.some(i => i.code === 'bone_overlap')) out.push({ code: 'bone_overlap', msg: xl(`Guide gövdesinin ${fmt(sum('bone_overlap'), 1)} mm³'ü kemiğin içinde; planlanan yere oturmaz.`) });
+    if (iss.some(i => i.code === 'undercut')) out.push({ code: 'undercut', msg: xl(`Guide gövdesinin ${fmt(sum('undercut'), 1)} mm³'ü takma yönünde kemiğin gölgesinde; bu yönde takılamaz.`) });
+    return out;
+  }
+  // the print checks for the reports: what was measured, or why the STL fails them
+  function printLine(r) {
+    const pc = r && r.printChecks; if (!pc) return '';
+    const bad = printIssues(r);
+    return ' ' + (bad.length ? `<b>${esc(bad.map(x => x.msg).join(' '))}</b>` : esc(xl(`Baskı denetimi geçti: ${fmt(pc.min_wall_mm || 1)} mm'den ince duvar yok, kemiğe giren ve takma yönünde kemiğin gölgesinde kalan gövde yok.`)));
+  }
   // the server's reasons not to print an STL, in words (the production message, the checks, the reports)
   function prodWhy(r) {
     if (!r || !r.issues) return '';
@@ -3693,6 +3773,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     const co = r.issues.find(i => i.code === 'resolution_coarsened');
     if (co) out.push(co.coarser_than_preview ? xl(`Izgara ${fmt(co.used_mm, 2)} mm'ye kabalaştırıldı (istenen ${fmt(co.requested_mm, 2)} mm), önizlemeden kaba.`) : xl(`Izgara ${fmt(co.used_mm, 2)} mm'ye kabalaştırıldı (istenen ${fmt(co.requested_mm, 2)} mm).`));
     if (r.issues.some(i => i.code === 'not_manifold')) out.push(xl('Ağ kapalı değil (manifold dışı kenar).'));
+    out.push(...printIssues(r).map(x => x.msg));
     return out.join(' ');
   }
   async function exportPackage() {
@@ -3781,6 +3862,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
       // match the approval signatures (itemSig compares them to 1e-4), and every approval dropped on reopen or undo
       anchor: S.anchor ? { p: vec(S.anchor.p), n: unit(S.anchor.n), axis: unit(S.anchor.axis), ...(S.anchor.base ? { base: { p: vec(S.anchor.base.p), n: unit(S.anchor.base.n), c: vec(S.anchor.base.c) } } : {}) } : null,
       g: clone(S.g), gAuto: clone(S.gAuto), lesion: clone(S.lesion), planes: clone(S.planes), screws: clone(S.screws),
+      ...(S.boneOk ? { boneOk: S.boneOk } : {}),
       perSide: +$('perSide').value || 2, guideOn: !!S.guideOn, resRemoved: !!S.resRemoved, surgeon: $('surgeon').value.trim(), fibula: S.fib ? clone(S.fib.plan) : null,
       measures: clone(S.measures || []), ext: window.PlanExt ? Object.fromEntries(Object.entries(PlanExt).map(([k, f]) => [k, f.get()])) : {},
       // the studio version that wrote the plan (not part of the approval hash: audit.js leaves it out)
@@ -3863,6 +3945,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
       [[S.lesion, 'l']].concat(S.planes.map(p => [p, 'p']), S.screws.map(c => [c, 's'])).forEach(([o, k]) => { if (o.ok && o.sig !== itemSig(o, k)) { unapprove(o); unbound++; } else if (!o.ok) delete o.sig; });
       if (unbound) alertMsg(xl(`Plandaki ${unbound} öğe onayı kayıtlı değerlerle eşleşmiyor (onaydan sonra değiştirilmiş ya da eski sürümde kaydedilmiş); bu öğeleri yeniden onaylayın.`));
       if (plan.perSide === 1 || plan.perSide === 2) $('perSide').value = String(plan.perSide);
+      S.boneOk = typeof plan.boneOk === 'string' ? plan.boneOk : null;
       // plans from before the explicit 'Guide oluştur' step always had a guide when they had screws
       S.guideOn = typeof plan.guideOn === 'boolean' ? plan.guideOn : S.screws.length > 0; S.resRemoved = !!plan.resRemoved;
       $('surgeon').value = typeof plan.surgeon === 'string' ? plan.surgeon : '';
@@ -3900,7 +3983,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   function serverUrl() { return ($('aiUrl').value || '').trim().replace(/\/+$/, ''); }
   function select(sel) { if (sel) S.guideSel = false; S.sel = sel; emit('select', sel); renderElements(); rebuildElementParts(S.result ? S.result.pls : planesWorld(), S.result ? S.result.screwInfo : []); applyExplode(); render(); }
   window.Studio = { bg: bgCall, loadSample, sampleFor, SAMPLES, chooseAxis, nearestPiece, netsOf, blurNetsOf, renamePart, partName, guideBuilds: () => guideBuilds, mandibleView, endModes, onEndModes, startLoad, loadStopped, loadBusy: () => committing, LOAD_CANCELLED, renderComps, setGuideRot, setGuideRoll, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, resEnds, splitGap, cutMisses, evalScrew, resectedAt, resectedNear, resPiece, boneTrack, cutAlongBone, bestScrew,
-    boneSections, sizeBody, autoBody, buildGuideSet, cutsAngle, cutFrame, pieceFrames, pieceBody, screwBodyOn, pieceWrapTop, frameAt, stumpGap, mergeStl, mergeMeshes, AUTO_DEFAULT, G_DEFAULT, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume, boneField, simplifyMesh, BAR, barPlan, barSdf, buildBarMesh, placeLug, longCase, axisOffBone, ramusAxis, stopSides, LONG_MM, CUT_OFF_MAX, prodKey, productionSTL, exportOne, serverBar, guideField, lockState: () => lock, bonelessCut, reframe, exclusive, settled, makeGuide, prodReply, prodWhy, gateChecks, swInfo, swLine, sfetch, reportHTML, lesionMargins, anchorFromSlice, ramusAxis };
+    boneSections, sizeBody, autoBody, buildGuideSet, cutsAngle, cutFrame, pieceFrames, pieceBody, screwBodyOn, pieceWrapTop, frameAt, stumpGap, mergeStl, mergeMeshes, AUTO_DEFAULT, G_DEFAULT, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume, boneField, simplifyMesh, BAR, barPlan, barSdf, buildBarMesh, placeLug, longCase, axisOffBone, ramusAxis, stopSides, LONG_MM, CUT_OFF_MAX, prodKey, productionSTL, exportOne, softOcc, boneDoubt, boneKey, runFix, printIssues, printLine, serverBar, guideField, lockState: () => lock, bonelessCut, reframe, exclusive, settled, makeGuide, prodReply, prodWhy, gateChecks, swInfo, swLine, sfetch, reportHTML, lesionMargins, anchorFromSlice, ramusAxis };
   bus.addEventListener('planeDragged', () => { renderElements(); schedule(true, 'drag'); });
   // messages assembled at run time are written in the language that was active: write them again when it changes
   if (window.addEventListener) window.addEventListener('langchange', () => { try { renderChecks(); renderAppr(); syncLesion(); } catch (e) { /* no case open yet */ } });

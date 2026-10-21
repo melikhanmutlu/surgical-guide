@@ -455,6 +455,8 @@ def _validate_guide(req):
     need(isinstance(ax, (list, tuple)) and len(ax) == 3 and all(_vec(a) for a in ax), "crop.axes must be 3 rows of 3 numbers")
     need(abs(np.linalg.det(np.asarray(ax, float))) > 1e-6, "crop.axes must be independent directions")
     need(isinstance(req.get("mask_b64"), str), "mask_b64 must be a base64 string")
+    ms = req.get("mask_scale")
+    need(ms is None or (isinstance(ms, int) and not isinstance(ms, bool) and 1 <= ms <= 255), "mask_scale must be an integer 1..255")
     need(isinstance(fr, dict) and all(_vec(fr.get(k)) for k in ("p", "u", "v", "n")), "frame must be {p, u, v, n}, 3 numbers each")
     need(isinstance(g, dict) and all(_num(g.get(k)) for k in ("L", "W", "wrap", "wall", "clear", "bridge")),
          "g needs the numbers L, W, wrap, wall, clear, bridge")
@@ -543,6 +545,53 @@ def _mesh_check(data):
     return tm, bool(n and tm.is_watertight and tm.is_winding_consistent and edges_ok and tm.volume > 0)
 
 
+# ---- print checks on the finished guide field (thread "Guide STL kalitesi", 2026-10-21) ----
+# What keeps a watertight STL from working on the table, measured on the grid the STL is cut from:
+#   thin_wall    a patch of guide wall thinner than PRINT_MIN_WALL mm (a ball of that diameter does not fit), larger
+#                than PRINT_THIN_PATCH_MM3: breaks in printing or in the hand. Edges and corners of a thick body also
+#                lose voxels to the ball; only voxels at least one voxel deep inside the body count, so a sharp edge is
+#                not a thin wall
+#   bone_overlap guide material inside the bone: the guide cannot sit where it was planned
+#   undercut     guide material in the bone's shadow along the insertion direction: it cannot be put on along it
+PRINT_MIN_WALL = 1.0      # mm, the thinnest wall a resin print of a cutting guide keeps (sample value; clinical team)
+PRINT_TOL_MM3 = 1.0       # mm3 of guide in bone / in the shadow tolerated (a few cells of meshing noise)
+# a thin patch this large is a wall, not the feathered rim where the shell meets the wrap line (on a real CT guide the
+# rim's largest thin patch was 1 mm3, spread along the edge)
+PRINT_THIN_PATCH_MM3 = 2.0
+
+
+def _ball(rad):
+    k = int(math.ceil(rad))
+    z, y, x = np.mgrid[-k:k + 1, -k:k + 1, -k:k + 1]
+    return (x * x + y * y + z * z) <= rad * rad + 1e-9
+
+
+def print_checks(inside, bone, shadow, r):
+    """inside: guide cells (bool grid), bone: solid bone cells, shadow: cells under bone along the insertion direction
+    (or None), r: grid step in mm. Returns {thin_wall_mm3, bone_overlap_mm3, undercut_mm3, min_wall_mm}."""
+    v3 = r * r * r
+    out = {"bone_overlap_mm3": round(float(np.count_nonzero(inside & bone)) * v3, 2),
+           "undercut_mm3": round(float(np.count_nonzero(inside & shadow)) * v3, 2) if shadow is not None else 0.0,
+           "thin_wall_mm3": 0.0, "thin_patch_mm3": 0.0, "min_wall_mm": PRINT_MIN_WALL}
+    idx = np.nonzero(inside.any(axis=(1, 2)))[0], np.nonzero(inside.any(axis=(0, 2)))[0], np.nonzero(inside.any(axis=(0, 1)))[0]
+    if not all(len(a) for a in idx):
+        return out
+    pad = int(math.ceil(PRINT_MIN_WALL / r)) + 2
+    sl = tuple(slice(max(0, a[0] - pad), a[-1] + pad + 1) for a in idx)
+    g = np.pad(inside[sl], pad)
+    ball = _ball(PRINT_MIN_WALL / 2 / r)
+    opened = ndi.binary_dilation(ndi.binary_erosion(g, ball), ball)
+    core = ndi.binary_erosion(g, ndi.generate_binary_structure(3, 1))
+    thin = g & ~opened & core
+    # isolated voxels are meshing noise; a thin wall is a patch
+    lab, n = ndi.label(thin, ndi.generate_binary_structure(3, 3))
+    if n:
+        sizes = np.bincount(lab.ravel())[1:]
+        out["thin_wall_mm3"] = round(float(sizes[sizes * v3 >= 0.2].sum()) * v3, 2)
+        out["thin_patch_mm3"] = round(float(sizes.max()) * v3, 2)
+    return out
+
+
 def build_guide(req):
     import manifold3d as m3d
     from skimage.measure import marching_cubes
@@ -567,7 +616,16 @@ def build_guide(req):
         raise HttpError(400, "mask_b64 is not base64")
     if len(raw) != cnx * cny * cnz:
         raise HttpError(400, f"mask has {len(raw)} bytes, expected nx*ny*nz = {cnx * cny * cnz}")
-    mask = np.frombuffer(raw, np.uint8).reshape(cnz, cny, cnx) > 0
+    # the mask: 0/1 bone cells, or with mask_scale the bone occupancy of each cell (value / mask_scale, 0.5 = on the
+    # threshold's surface): the studio sends the CT values as a ramp around the threshold, so the surface lies between
+    # cells instead of on their faces (no slice-thick terraces on the bone-contact surface)
+    scale = req.get("mask_scale")
+    if scale:
+        occ = np.frombuffer(raw, np.uint8).reshape(cnz, cny, cnx).astype(np.float32) * np.float32(1 / scale)
+        mask = occ >= 0.5
+    else:
+        occ = None
+        mask = np.frombuffer(raw, np.uint8).reshape(cnz, cny, cnx) > 0
     del raw
     r = float(req.get("resolution") or 0.2)
     if not (0.05 <= r <= 2.0):
@@ -653,6 +711,9 @@ def build_guide(req):
 
     # bone: everything not reachable from outside the crop counts as bone (closed cavities filled)
     filled = ndi.binary_fill_holes(mask)
+    if occ is not None:
+        # closed cavities count as bone (as for the 0/1 mask); elsewhere the occupancy stands
+        occ[filled & ~mask] = 1.0
     del mask
     T["fill"] = time.perf_counter() - t0
 
@@ -676,8 +737,8 @@ def build_guide(req):
     P = np.array([[0, 0, 1], [0, 1, 0], [1, 0, 0]], float)
     # light smoothing of the voxel mask (sigma = half a crop voxel) gives a density whose 0.5 level is the bone surface,
     # between grid nodes
-    src = ndi.gaussian_filter(filled.astype(np.float32), 0.5)
-    del filled
+    src = ndi.gaussian_filter(filled.astype(np.float32) if occ is None else occ, 0.5)
+    del filled, occ
     r_req = r
     for _attempt in range(8):
         glo = lo - r * 0.41421356
@@ -1010,6 +1071,8 @@ def build_guide(req):
     pieces = nlab - len(small)
     del lab
     inside = F < 0
+    pc = print_checks(inside, bone, (E == 2) if n_shadow else None, r)
+    T["print_checks"] = time.perf_counter() - t0
     vol_vox = int(np.count_nonzero(inside))
     contact = int(np.count_nonzero(inside & (dd > clear) & (dd <= cw) & (dd <= clear + r)))
     any_j = inside.any(axis=(0, 2))
@@ -1059,6 +1122,12 @@ def build_guide(req):
         issues.append({"code": "resolution_coarsened", "requested_mm": r_req, "used_mm": r, "coarser_than_preview": bool(r > PREVIEW_RES + 1e-9)})
     if not watertight:
         issues.append({"code": "not_manifold"})
+    if pc["thin_patch_mm3"] > PRINT_THIN_PATCH_MM3:
+        issues.append({"code": "thin_wall", "mm3": pc["thin_wall_mm3"], "min_wall_mm": PRINT_MIN_WALL})
+    if pc["bone_overlap_mm3"] > PRINT_TOL_MM3:
+        issues.append({"code": "bone_overlap", "mm3": pc["bone_overlap_mm3"]})
+    if pc["undercut_mm3"] > PRINT_TOL_MM3:
+        issues.append({"code": "undercut", "mm3": pc["undercut_mm3"]})
     blocking = [i for i in issues if i["code"] != "resolution_coarsened" or i["coarser_than_preview"]]
     return {
         "stl_b64": base64.b64encode(data).decode("ascii"),
@@ -1082,6 +1151,7 @@ def build_guide(req):
         "seat_dir": seat_dir,
         "screws": screw_info,
         "screws_missing": sum(1 for si in screw_info if si.get("no_body")),
+        "print_checks": pc,
         "contact_mm2": round(contact * r * r, 1),
         "field_volume_mm3": round(vol_vox * r * r * r, 1),
         "body_v": body_v,

@@ -7,6 +7,8 @@
 #   sh tests/run_all.sh all      both
 # Each suite runs under SUITE_TIMEOUT seconds (default 1200). Exits 1 when any suite fails; prints a summary.
 # The browser end-to-end scenarios (tests/web/e2e, Playwright) are separate: see tests/web/e2e/README.md.
+# The real-CT audit (anonymised real case end to end, production STLs vs a reviewed baseline) is separate too:
+# bash tests/realct/run.sh (tools/realct_audit.py).
 cd "$(dirname "$0")/.." || exit 1
 MODE="${1:-fast}"
 TO="${SUITE_TIMEOUT:-1200}"
@@ -30,11 +32,13 @@ if [ "$MODE" = fast ] || [ "$MODE" = all ]; then
   suite pipeline            python3 tests/test_pipeline.py
   suite server/http         python3 tests/server/test_http_security.py
   suite server/mesh_repair  python3 tests/server/test_mesh_repair.py
+  suite server/print_checks python3 tests/server/test_print_checks.py
   suite server/audit        python3 tests/server/test_server_audit.py
   suite server/memory       python3 tests/server/test_memory.py
   suite yolmed_server       python3 test_yolmed_server.py
   suite unit/surgiguide     python3 -I tests/web/unit/test_surgiguide.py
   suite ct_samples          python3 -I tests/test_ct_samples.py
+  suite realct_audit        python3 tests/test_realct_audit.py
 fi
 if [ "$MODE" = slow ] || [ "$MODE" = all ]; then
   suite server/slow_clients python3 tests/server/test_slow.py

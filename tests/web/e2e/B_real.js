@@ -243,11 +243,12 @@ if (require.main === module) (async () => {
     const files = await h.ev(() => {
       const S = Studio.S, b64 = d => { const u = typeof d === 'string' ? new TextEncoder().encode(d) : d instanceof Uint8Array ? d : new Uint8Array(d); let s = ''; for (let i = 0; i < u.length; i += 32768) s += String.fromCharCode.apply(null, u.subarray(i, i + 32768)); return btoa(s); };
       const out = [];
-      if (S.prod && S.prod.stl) out.push({ name: 'guide_uretim.stl', data: b64(S.prod.stl), meta: { watertight: S.prod.watertight, bodies: S.prod.bodies, volume: S.prod.volume, faces: S.prod.faces, ms: S.prod.ms } });
+      if (S.prod && S.prod.stl) out.push({ name: 'guide_uretim.stl', data: b64(S.prod.stl), meta: { watertight: S.prod.watertight, bodies: S.prod.bodies, volume: S.prod.volume, faces: S.prod.faces, ms: S.prod.ms, productionOk: S.prod.productionOk, print: S.prod.printChecks || null, issues: (S.prod.issues || []).map(i => i.code) } });
+      if (S.prod && S.prod.stl) out.push({ name: 'guide_uretim_meta.json', data: b64(JSON.stringify({ watertight: S.prod.watertight, bodies: S.prod.bodies, volume: S.prod.volume, faces: S.prod.faces, productionOk: S.prod.productionOk, print: S.prod.printChecks || null, issues: (S.prod.issues || []).map(i => i.code), current: S.prod.key === Studio.prodKey(), crit: Studio.S.crit })) });
       if (Studio.parts.guide) out.push({ name: 'guide_onizleme.stl', data: b64(Studio.stlOf ? Studio.stlOf(Studio.parts.guide.obj) : '') });
       const ff = []; try { Fibula.exportFiles(ff); } catch (e) {}
       ff.forEach(f => out.push({ name: f.name, data: b64(f.data) }));
-      if (S.fib && S.fib.prod) out.push({ name: 'fibula_guide_uretim_meta.json', data: b64(JSON.stringify({ watertight: S.fib.prod.watertight, bodies: S.fib.prod.bodies, volume: S.fib.prod.volume, faces: S.fib.prod.faces, current: S.fib.prod.key === (S.fib.guide && S.fib.guide.key) })) });
+      if (S.fib && S.fib.prod) out.push({ name: 'fibula_guide_uretim_meta.json', data: b64(JSON.stringify({ watertight: S.fib.prod.watertight, bodies: S.fib.prod.bodies, volume: S.fib.prod.volume, faces: S.fib.prod.faces, productionOk: S.fib.prod.productionOk, print: S.fib.prod.printChecks || null, issues: (S.fib.prod.issues || []).map(i => i.code), current: S.fib.prod.key === (S.fib.guide && S.fib.guide.key) })) });
       return out;
     });
     for (const f of files) { if (!f.data) continue; fs.writeFileSync(path.join(REAL, f.name), Buffer.from(f.data, 'base64')); out.push(`kanit/real/${f.name} ${Buffer.from(f.data, 'base64').length} B${f.meta ? ' ' + JSON.stringify(f.meta) : ''}`); }

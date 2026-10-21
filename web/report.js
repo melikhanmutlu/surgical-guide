@@ -189,7 +189,7 @@ window.Report = (function () {
   // production STL state in one sentence (made on the server and sound, or only the 0.4 mm voxel preview)
   function prodLine(p, file) {
     if (!p) return `${xl("Üretim STL'i alınmadı; pakette yalnız 0,4 mm voksel önizleme var:")} ${file}.stl.`;
-    return `${xl("Üretim STL'i sunucuda yüzey tabanlı boolean ile üretildi")} (${file}_uretim.stl): ${xl(p.watertight ? 'su geçirmez' : 'su geçirmez değil')}, ${xl(`${p.bodies} parça`)}, ${fmt(p.volume / 1000, 2)} cm³${p.resolution ? xl(`, ızgara ${fmt(p.resolution, 2)} mm`) : ''}.${p.ok ? '' : ' ' + xl("Sunucu bu STL'i basılabilir bulmadı.")}`;
+    return `${xl("Üretim STL'i sunucuda yüzey tabanlı boolean ile üretildi")} (${file}_uretim.stl): ${xl(p.watertight ? 'su geçirmez' : 'su geçirmez değil')}, ${xl(`${p.bodies} parça`)}, ${fmt(p.volume / 1000, 2)} cm³${p.resolution ? xl(`, ızgara ${fmt(p.resolution, 2)} mm`) : ''}.${p.ok ? '' : ' ' + xl("Sunucu bu STL'i basılabilir bulmadı.")}${p.src && St.printLine ? St.printLine(p.src).replace(/<[^>]+>/g, '') : ''}`;
   }
   async function build() {
     const name = (window.CaseStore && CaseStore.caseName()) || ($('caseInfo').querySelector('dd') || {}).textContent || 'Vaka';
@@ -233,7 +233,7 @@ window.Report = (function () {
     d.table(['Kesi', 'Konum (eksen)', 'Yatay açı', 'Dikey açı', 'Yuva', 'Onay'], S.planes.map((p, i) => [`Kesi ${i + 1}`, `${fmt(p.off)} mm`, `${fmt(p.yaw)}°`, `${fmt(p.pitch)}°`, `${fmt(p.w)} mm`, p.ok ? (p.by || 'onaylı') : 'bekliyor']), [0.16, 0.2, 0.15, 0.15, 0.12, 0.22]);
     d.text(`${xl(`Rezeksiyon: lezyon ${fmt(S.lesion.from)} – ${fmt(S.lesion.to)} mm, güvenlik payı ${fmt(S.lesion.margin)} mm`)}${S.lesion.condyle ? xl(`, kondil dahil (${S.lesion.condyle === 'R' ? 'sağ' : 'sol'}) rezeksiyon`) : ''}${S.g.split ? xl(', iki ayrı guide') : ''}${!S.lesion.condyle && sorted.length >= 2 ? xl(`, kesiler arası ${fmt(sorted.at(-1).off - sorted[0].off)} mm`) : ''}${S.resectedVolume ? xl(`, rezeke hacim ${fmt(S.resectedVolume / 1000, 2)} cm³`) : ''}.`, { size: 22 });
     const P = S.prod && St.prodKey && S.prod.key === St.prodKey() ? S.prod : null;
-    d.text(prodLine(P && { watertight: P.watertight, bodies: P.bodies, volume: P.volume, resolution: P.resolution || null, ok: P.productionOk !== false }, 'guide'), { size: 21, color: P && P.watertight && P.productionOk !== false ? C.ink : C.warn });
+    d.text(prodLine(P && { watertight: P.watertight, bodies: P.bodies, volume: P.volume, resolution: P.resolution || null, ok: P.productionOk !== false, src: P }, 'guide'), { size: 21, color: P && P.watertight && P.productionOk !== false ? C.ink : C.warn });
     if (S.screws.length) {
       d.h2('Vidalar');
       d.table(['Vida', 'Konum (eksen, yanal)', 'Eğim', 'Matkap / kovan', 'Boy', 'Kemikte'], S.screws.map((s, i) => { const si = S.result && S.result.screwInfo[i]; return [`Vida ${i + 1}`, `${fmt(s.u)}, ${fmt(s.v)} mm`, `${fmt(s.tiltU, 0)}°, ${fmt(s.tiltV, 0)}°`, `${fmt(s.d)} / ${fmt(s.D)} mm`, `${fmt(s.len, 0)} mm`, si && si.ok ? `${fmt(si.inBone)} mm` : '–']; }), [0.13, 0.24, 0.16, 0.19, 0.12, 0.16]);
