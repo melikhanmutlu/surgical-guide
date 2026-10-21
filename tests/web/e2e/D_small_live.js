@@ -62,7 +62,7 @@ const layout = () => {
   if (process.env.D_LIVE === '0') return;
   {
     // read-only smoke test of the deployed site: GETs only (fetched through curl), every POST/PUT/DELETE is blocked
-    const LIVE = 'https://sguide.up.railway.app/';
+    const LIVE = 'https://sguide.up.railway.app/?ornek=sentetik';
     const h = await H.start({ name: 'D_live', dir: 'D', external: 'live' });
     const { page, context } = h;
     const blocked = [];

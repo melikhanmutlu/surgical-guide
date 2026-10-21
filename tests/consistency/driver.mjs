@@ -48,7 +48,7 @@ page.on('dialog', d => d.accept());
 
 const t0 = Date.now();
 try {
-  await page.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: 'load' });
+  await page.goto(`http://127.0.0.1:${PORT}/?ornek=sentetik`, { waitUntil: 'load' });
   await page.waitForFunction(() => window.Studio && window.Studio.S && window.Studio.S.red && window.Studio.parts.bone, null, { timeout: 300000 });
   // (evaluated over the devtools protocol: the page's CSP admits no inline or injected script, rightly)
   await page.evaluate(fs.readFileSync(path.join(HERE, 'page_helpers.js'), 'utf8'));

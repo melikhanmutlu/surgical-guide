@@ -103,7 +103,7 @@ async function runOne(run, idx) {
   page.on('dialog', d => d.accept());
   const shot = async (name, clip) => { const f = `${run.id}_${name}.jpg`; await page.screenshot({ path: path.join(OUT, 'ekran', f), type: 'jpeg', quality: 60, clip: clip || undefined }); rec.shots.push(f); };
   try {
-    await page.goto(BASE + '/', { waitUntil: 'load' });
+    await page.goto(BASE + '/?ornek=sentetik', { waitUntil: 'load' });
     await page.waitForFunction(() => window.Studio && window.Studio.S && window.Studio.S.red && window.Studio.parts.bone, null, { timeout: LOAD_TIMEOUT });
     await page.addScriptTag({ path: path.join(HERE, 'sweep_page.js') });
     await page.evaluate(() => SW.idle(1500));

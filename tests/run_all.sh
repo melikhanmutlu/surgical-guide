@@ -33,6 +33,7 @@ if [ "$MODE" = fast ] || [ "$MODE" = all ]; then
   suite server/memory       python3 tests/server/test_memory.py
   suite yolmed_server       python3 test_yolmed_server.py
   suite unit/surgiguide     python3 -I tests/web/unit/test_surgiguide.py
+  suite ct_samples          python3 -I tests/test_ct_samples.py
 fi
 if [ "$MODE" = slow ] || [ "$MODE" = all ]; then
   suite server/slow_clients python3 tests/server/test_slow.py

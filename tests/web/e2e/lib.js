@@ -165,7 +165,7 @@ async function start(opt = {}) {
       await page.waitForFunction(() => window.Studio && Studio.S && Studio.S.vol && Studio.parts && Studio.parts.bone, null, { timeout });
       await h.idle(timeout);
     },
-    async goto(url = BASE + '/', o = {}) {
+    async goto(url = BASE + '/?ornek=sentetik', o = {}) {
       await page.goto(url, { waitUntil: 'domcontentloaded' });
       if (TOKEN) await h.token();
       if (o.ready !== false) await h.waitReady();

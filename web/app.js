@@ -291,9 +291,13 @@
     const d = await (await fetch(`sample_${name}.json`)).json();
     const q = await gunzip(d.data), hu = new Int16Array(q.length);
     for (let i = 0; i < q.length; i++) hu[i] = q[i] * d.scale + d.offset;
-    const [nx, ny, nz] = d.dims;
-    return { hu, nx, ny, nz, sp: d.spacing, origin: d.origin, axes: [[1, 0, 0], [0, 1, 0], [0, 0, 1]] };
+    const [nx, ny, nz] = d.dims, v = { hu, nx, ny, nz, sp: d.spacing, origin: d.origin, axes: d.axes || [[1, 0, 0], [0, 1, 0], [0, 0, 1]] };
+    if (d.meta) v.meta = Object.assign({ series: 1 }, d.meta);
+    return v;
   }
+  // built-in samples: the synthetic pair, and one anonymised real CT pair (cropped to bone, face removed; tools/make_ct_sample.py)
+  const SAMPLES = { mandible: ['Örnek: mandibula (sentetik BT)', 'mandible'], leg: ['Örnek: alt bacak (sentetik BT)', 'leg'],
+    mandible_ct: ['Örnek: mandibula (anonim gerçek BT)', 'dicom'], leg_ct: ['Örnek: alt bacak (anonim gerçek BT)', 'dicom'] };
   // the sample replaces whatever is being read (W6): a DICOM / zip read still running is cancelled (and says so) before
   // its volume could land over the sample; a newer load in turn replaces the sample before it is committed
   async function loadSample(name) {
@@ -305,7 +309,8 @@
     if (loadStopped(ctl)) return;
     if (loadCtl === ctl) loadCtl = null;
     S.source = { type: 'sample', name, fp: 'sample:' + name };
-    await setVolume(vol, name === 'mandible' ? 'Örnek: mandibula (sentetik BT)' : 'Örnek: alt bacak (sentetik BT)', name);
+    const [label, kind] = SAMPLES[name] || SAMPLES.mandible;
+    await setVolume(vol, label, kind);
   }
   // true when this load was cancelled (by the button, or replaced by a newer load); the busy bar is hidden unless a newer load owns it
   function loadStopped(ctl) {
@@ -3349,6 +3354,11 @@
       from = V(-12, box.min.y - 40, box.max.z - 70); dirv = V(0, 1, 0);
       lesion = { from: -1, to: 3, margin: 3 };
       g = { rot: 0, L: 44, W: 20, wrap: 6, wall: 2.5, clear: 0.3, bridge: 4, side: 1 };
+    } else if (S.source && S.source.type === 'sample' && S.source.name === 'mandible_ct') {
+      // real CT sample: from the right side onto the front of the right body (about a third back, a fifth up)
+      const sz = box.getSize(V());
+      from = V(box.min.x - 40, box.min.y + 0.35 * sz.y, box.min.z + 0.2 * sz.z); dirv = V(1, 0, 0);
+      S.presetRay = { from, dirv }; setTimeout(() => fitTo(parts.bone.obj), 50); return;
     } else return;
     // sample defaults only; the region is picked on the model (or by 'Otomatik hazırla', which uses this spot)
     S.presetRay = { from, dirv };
@@ -3468,6 +3478,7 @@
   const sampleClick = name => { if (loadBlocked()) return; if (planned() && !confirm('Örnek vaka yüklensin mi? Mevcut plan (kesiler, vidalar, guide) silinir.')) return; loadSample(name); };
   $('sampleM').addEventListener('click', () => sampleClick('mandible'));
   $('sampleL').addEventListener('click', () => sampleClick('leg'));
+  $('sampleMct').addEventListener('click', () => sampleClick('mandible_ct'));
   $('dicomDir').addEventListener('change', e => { if (e.target.files.length) loadDicom([...e.target.files]); });
   $('dicomFiles').addEventListener('change', e => { if (e.target.files.length) loadDicom([...e.target.files]); });
   stage.addEventListener('dragover', e => e.preventDefault());
@@ -3865,5 +3876,8 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   if (window.addEventListener) window.addEventListener('langchange', () => { try { renderChecks(); renderAppr(); syncLesion(); } catch (e) { /* no case open yet */ } });
   emit('ready');
 
-  try { await loadSample('mandible'); } catch (e) { busy(false); alertMsg('Örnek vaka açılamadı: ' + e.message); }
+  // the studio opens on the real CT sample; ?ornek=sentetik opens the synthetic one (the browser tests use it)
+  let first = 'mandible_ct';
+  try { if (/[?&]ornek=sentetik\b/.test(location.search)) first = 'mandible'; } catch (e) { first = 'mandible'; }
+  try { await loadSample(first); } catch (e) { busy(false); alertMsg('Örnek vaka açılamadı: ' + e.message); }
 })();

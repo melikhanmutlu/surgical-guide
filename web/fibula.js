@@ -108,9 +108,9 @@ window.Fibula = (function () {
     let vol, source, label;
     // a DICOM / zip read can be cancelled; a newer fibula load replaces it. The fibula has its own controller: the
     // mandible's (St.startLoad) would cancel a mandible load running at the same time, and be cancelled by one (W5)
-    const ctl = kind === 'sample' ? null : startLoad();
+    const ctl = /^sample/.test(kind) ? null : startLoad();
     try {
-      if (kind === 'sample') { vol = await St.readSample('leg'); source = { type: 'sample', name: 'leg', fp: 'sample:leg' }; label = 'Örnek: alt bacak (sentetik BT)'; }
+      if (kind === 'sample' || kind === 'sample_ct') { const n = kind === 'sample' ? 'leg' : 'leg_ct'; vol = await St.readSample(n); source = { type: 'sample', name: n, fp: 'sample:' + n }; label = n === 'leg' ? 'Örnek: alt bacak (sentetik BT)' : 'Örnek: alt bacak (anonim gerçek BT)'; }
       else { const r = await St.readDicom(files, ctl); if (loadStopped(ctl)) return false; if (loadCtl === ctl) loadCtl = null; if (r.error) { St.busy(false); msg(r.error); return false; } ({ vol, source, label } = r); }
     } catch (e) {
       if (e === St.LOAD_CANCELLED) { loadStopped(ctl); return false; }
@@ -1154,7 +1154,7 @@ window.Fibula = (function () {
     if (!p) { if (S.fib) unload(); return; }
     const sn = sanitize(p); p = sn.plan; if (sn.warn.length) setTimeout(() => St.alertMsg(sn.warn.join(' ')), 0);
     if (!F || !F.source || F.source.fp !== p.source.fp) {
-      if (p.source && p.source.type === 'sample') { if (!(await load('sample'))) return; }
+      if (p.source && p.source.type === 'sample') { if (!(await load(p.source.name === 'leg_ct' ? 'sample_ct' : 'sample'))) return; }
       else { pending = p; msg(`${xl('Bu planın fibula serisi')} "${p.source ? p.source.name : '?'}". ${xl('Fibula planını açmak için aynı seriyi ilk adımda yükleyin.')}`); if (window.UI) UI.openStep('st1'); return; }
       F.c = null;
     }
@@ -1388,6 +1388,7 @@ window.Fibula = (function () {
 
   // ---------- wiring ----------
   $('fibSample').addEventListener('click', () => start('sample'));
+  $('fibSampleCt').addEventListener('click', () => start('sample_ct'));
   $('fibDicom').addEventListener('change', e => { if (e.target.files.length) start('dicom', [...e.target.files]); e.target.value = ''; });
   $('fibFiles').addEventListener('change', e => { if (e.target.files.length) start('dicom', [...e.target.files]); e.target.value = ''; });
   $('fibCand').addEventListener('change', e => { if (setCandidate(+e.target.value, planSide()) === false) { if (F.c) e.target.value = F.c.i; return; } plan().cand = F.c.centroid.map(x => Math.round(x * 10) / 10); guideKey = ''; edited(false, true); setView(view); });
