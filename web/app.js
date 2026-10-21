@@ -3743,7 +3743,24 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     if (kind === 'full') { const g = fullBoneGeo(); if (g) await offer('kemik_tam.stl', new Blob([stlOf(new THREE.Mesh(g))])); }
     else if (kind === 'bone' && parts.bone) await offer('kemik_kalan.stl', new Blob([stlOf(parts.bone.obj)]));
     else if (kind === 'res' && parts.resected) await offer('rezeke_parca.stl', new Blob([stlOf(parts.resected.obj)]));
-    else if (kind === 'guide' && parts.guide && !$('expZip').disabled) await offer(prod ? 'guide_uretim.stl' : 'guide.stl', new Blob([prod ? prod.stl : stlOf(parts.guide.obj)]));
+    else if (kind === 'guide' && parts.guide && !$('expZip').disabled) await exportGuideOne(prod);
+  }
+  // the guide alone: the production STL (server, 0.2 mm, exact booleans), made now when it is missing or out of date,
+  // like the package does. The 0.4 mm voxel preview leaves only when no production STL can be had, and then under a
+  // name and a message that say so (a preview saved as guide.stl was taken for the printable guide).
+  async function exportGuideOne(prod) {
+    if (!prod && serverUrl()) {
+      await productionSTL();
+      prod = S.prod && S.prod.key === prodKey() ? S.prod : null;
+      if ($('expZip').disabled) { $('oneMsg').textContent = xl("Üretim STL'i kontrolleri geçmedi (Kontroller sekmesi); guide indirilmedi."); return; }
+    }
+    if (prod) {
+      await offer('guide_uretim.stl', new Blob([prod.stl]));
+      $('oneMsg').textContent = xl(`guide_uretim.stl indirildi: sunucuda üretilen STL, ${prod.faces} üçgen.`);
+    } else {
+      await offer('guide_onizleme.stl', new Blob([stlOf(parts.guide.obj)]));
+      $('oneMsg').textContent = xl("Üretim STL'i alınamadı; indirilen guide_onizleme.stl 0,4 mm voksel önizlemesidir, baskı için değildir.");
+    }
   }
   function syncOne() {
     const b = k => $('oneStl').querySelector(`[data-one="${k}"]`);
@@ -3883,7 +3900,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   function serverUrl() { return ($('aiUrl').value || '').trim().replace(/\/+$/, ''); }
   function select(sel) { if (sel) S.guideSel = false; S.sel = sel; emit('select', sel); renderElements(); rebuildElementParts(S.result ? S.result.pls : planesWorld(), S.result ? S.result.screwInfo : []); applyExplode(); render(); }
   window.Studio = { bg: bgCall, loadSample, sampleFor, SAMPLES, chooseAxis, nearestPiece, netsOf, blurNetsOf, renamePart, partName, guideBuilds: () => guideBuilds, mandibleView, endModes, onEndModes, startLoad, loadStopped, loadBusy: () => committing, LOAD_CANCELLED, renderComps, setGuideRot, setGuideRoll, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, resEnds, splitGap, cutMisses, evalScrew, resectedAt, resectedNear, resPiece, boneTrack, cutAlongBone, bestScrew,
-    boneSections, sizeBody, autoBody, buildGuideSet, cutsAngle, cutFrame, pieceFrames, pieceBody, screwBodyOn, pieceWrapTop, frameAt, stumpGap, mergeStl, mergeMeshes, AUTO_DEFAULT, G_DEFAULT, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume, boneField, simplifyMesh, BAR, barPlan, barSdf, buildBarMesh, placeLug, longCase, axisOffBone, ramusAxis, stopSides, LONG_MM, CUT_OFF_MAX, prodKey, serverBar, guideField, lockState: () => lock, bonelessCut, reframe, exclusive, settled, makeGuide, prodReply, prodWhy, gateChecks, swInfo, swLine, sfetch, reportHTML, lesionMargins, anchorFromSlice, ramusAxis };
+    boneSections, sizeBody, autoBody, buildGuideSet, cutsAngle, cutFrame, pieceFrames, pieceBody, screwBodyOn, pieceWrapTop, frameAt, stumpGap, mergeStl, mergeMeshes, AUTO_DEFAULT, G_DEFAULT, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume, boneField, simplifyMesh, BAR, barPlan, barSdf, buildBarMesh, placeLug, longCase, axisOffBone, ramusAxis, stopSides, LONG_MM, CUT_OFF_MAX, prodKey, productionSTL, exportOne, serverBar, guideField, lockState: () => lock, bonelessCut, reframe, exclusive, settled, makeGuide, prodReply, prodWhy, gateChecks, swInfo, swLine, sfetch, reportHTML, lesionMargins, anchorFromSlice, ramusAxis };
   bus.addEventListener('planeDragged', () => { renderElements(); schedule(true, 'drag'); });
   // messages assembled at run time are written in the language that was active: write them again when it changes
   if (window.addEventListener) window.addEventListener('langchange', () => { try { renderChecks(); renderAppr(); syncLesion(); } catch (e) { /* no case open yet */ } });

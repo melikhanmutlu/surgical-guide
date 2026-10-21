@@ -50,10 +50,19 @@ window.Exports = (function () {
     const rels = '<?xml version="1.0" encoding="UTF-8"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Target="/3D/3dmodel.model" Id="rel0" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>';
     return St.zipBytes([{ name: '[Content_Types].xml', data: types }, { name: '_rels/.rels', data: rels }, { name: '3D/3dmodel.model', data: model }]);
   }
+  // a binary STL as the mesh shape objectXML reads (positions only, no index, no transform)
+  function stlMesh(u8) {
+    const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength), n = dv.getUint32(80, true), P = new Float32Array(n * 9);
+    for (let t = 0; t < n; t++) for (let k = 0; k < 9; k++) P[t * 9 + k] = dv.getFloat32(84 + t * 50 + 12 + k * 4, true);
+    return { geometry: { attributes: { position: { array: P } }, index: null }, matrixAutoUpdate: false, parent: null };
+  }
+  // the guides as printed: the server's production STL while it matches the plan, the 0.4 mm preview only without one
+  const prodNow = () => (S.prod && S.prod.key === St.prodKey() ? S.prod : null);
+  const fibProdNow = () => (S.fib && S.fib.guide && S.fib.prod && S.fib.prod.key === S.fib.guide.key ? S.fib.prod : null);
   function guideItems() {
-    const out = [], pt = St.parts;
-    if (pt.guide) out.push({ name: 'Mandibula guide', meshes: [pt.guide.obj] });
-    if (S.fib && S.fib.guide) out.push({ name: 'Fibula guide (fibula BT koordinatı)', meshes: [S.fib.guide.mesh] });
+    const out = [], pt = St.parts, p = prodNow(), fp = fibProdNow();
+    if (pt.guide) out.push(p ? { name: 'Mandibula guide (üretim)', meshes: [stlMesh(p.stl)] } : { name: 'Mandibula guide (önizleme)', meshes: [pt.guide.obj] });
+    if (S.fib && S.fib.guide) out.push(fp ? { name: 'Fibula guide (üretim, fibula BT koordinatı)', meshes: [stlMesh(fp.stl)] } : { name: 'Fibula guide (önizleme, fibula BT koordinatı)', meshes: [S.fib.guide.mesh] });
     return out;
   }
   function modelItems() {
@@ -191,8 +200,17 @@ window.Exports = (function () {
     if (!St.parts.guide) { msg('Önce guide üretilmeli.'); return; }
     // printable guides leave only through the same gate as the package (approvals, surgeon, no critical check)
     if ($('expZip').disabled) { msg('Guide 3MF dosyası paketle aynı koşulla alınır: onaylar tamam, cerrah adı girili, kritik kontrol yok.'); return; }
+    // the printable guides come from the production STLs: missing or out of date, they are made now (as for the package)
+    const fibNeeds = !!(window.Fibula && Fibula.active() && S.fib && S.fib.guide);
+    if (St.serverUrl() && (!prodNow() || (fibNeeds && !fibProdNow()))) {
+      await St.productionSTL();
+      if ($('expZip').disabled) { msg("Üretim STL'i kontrolleri geçmedi (Kontroller sekmesi); 3MF verilmedi."); return; }
+    }
     St.busy(true, '3MF hazırlanıyor…'); await St.sleep();
-    try { await save('guideler.3mf', guides3MF(), 'model/3mf'); await save('modeller.3mf', models3MF(), 'model/3mf'); msg('guideler.3mf ve modeller.3mf hazır.'); } catch (e) { msg('3MF oluşturulamadı: ' + e.message); }
+    try {
+      await save('guideler.3mf', guides3MF(), 'model/3mf'); await save('modeller.3mf', models3MF(), 'model/3mf');
+      msg(prodNow() ? 'guideler.3mf ve modeller.3mf hazır.' : xl("guideler.3mf ve modeller.3mf hazır. Üretim STL'i alınamadı; guideler.3mf 0,4 mm önizlemedir, baskı için değildir."));
+    } catch (e) { msg('3MF oluşturulamadı: ' + e.message); }
     St.busy(false);
   });
   $('xSeg').addEventListener('click', async () => {
