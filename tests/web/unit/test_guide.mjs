@@ -224,7 +224,7 @@ test('applyPlan: hostile / damaged plan values are clamped to the control ranges
   await St.applyPlan({ seg: { thr: 250 }, anchor: { p: [0, 0, 0], n: [0, 0, 1], axis: [1, 0, 0] }, g: { L: 1e9, W: 'x', wrap: -5, clear: NaN, wall: 0 },
     planes: [{ off: 999, yaw: -500, pitch: 'a', w: 0 }], screws: [{ u: 1e6, v: -1e6, d: 0, D: -1, len: 1e9 }, { u: 'x', tiltU: Infinity }], lesion: { from: -1e9, to: 1e9, margin: -1, condyle: '<b>' } });
   assert.equal(S.g.L, 160); assert.equal(S.g.W, 22); assert.equal(S.g.wrap, 2); assert.equal(S.g.clear, 0.3); assert.equal(S.g.wall, 1.5);
-  assert.deepEqual([S.planes[0].off, S.planes[0].yaw, S.planes[0].pitch, S.planes[0].w], [80, -89, 0, 0.6]);   // cut position within ±L_MAX/2
+  assert.deepEqual([S.planes[0].off, S.planes[0].yaw, S.planes[0].pitch, S.planes[0].w], [80, -89, 0, 0.4]);   // cut position within ±L_MAX/2; slot ≥ 0.4 mm (thin blades)
   S.screws.forEach(sc => assert.ok(Math.abs(sc.v) <= 40, 'screw v clamped to ±40: ' + sc.v));
   assert.equal(S.lesion.condyle, null); assert.equal(S.lesion.margin, 0);
   S.screws.forEach(sc => assert.ok(sc.d >= 0.5 && sc.D >= sc.d && Math.abs(sc.u) <= 80 && Number.isFinite(sc.tiltU), JSON.stringify(sc)));

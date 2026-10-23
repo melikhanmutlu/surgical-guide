@@ -25,7 +25,7 @@ async function volume(bone, box = { x: 50, y: 24, z: 42 }) {
 const ellipseBar = (hy, hz, len = 48) => (x, y, z) => Math.abs(x) < len && (y / hy) ** 2 + ((z + hz) / hz) ** 2 < 1;
 async function plan(offs, opts = {}) {
   S.anchor = { p: V(0, 0, 0), n: V(0, 0, 1), axis: V(1, 0, 0) };
-  S.planes = offs.map(off => ({ off, yaw: 0, pitch: 0, w: 1.2 }));
+  S.planes = offs.map(off => ({ off, yaw: 0, pitch: 0, w: 0.8 }));
   S.g.split = opts.split || 0; if (opts.split) S.gAuto.split = 0;
   S.guideOn = true; St.placeScrews(); await St.rebuildResection(); await St.regenerate();
   return S.result;
@@ -83,7 +83,7 @@ const ARC = (x, y, z) => { const r = Math.hypot(x, z + 45), th = Math.atan2(x, z
 
 test('angle bone: the local bone axes at the two cuts differ by > 20°, split = 2 builds two guides on their own frames, each seatable, every sleeve on bone', async () => {
   await volume(ARC, { x: 50, y: 24, z: 50 });
-  S.anchor = { p: V(0, 0, 0), n: V(0, 0, 1), axis: V(1, 0, 0) }; S.planes = [{ off: -25, yaw: 0, pitch: 0, w: 1.2 }, { off: 25, yaw: 0, pitch: 0, w: 1.2 }];
+  S.anchor = { p: V(0, 0, 0), n: V(0, 0, 1), axis: V(1, 0, 0) }; S.planes = [{ off: -25, yaw: 0, pitch: 0, w: 0.8 }, { off: 25, yaw: 0, pitch: 0, w: 0.8 }];
   const ang = St.cutsAngle(); console.log(`    angle between the cut frames ${ang.toFixed(0)}°`);
   assert.ok(ang > 20 && ang < 90, 'cuts straddle the bend: ' + ang);
   const fa = St.cutFrame(St.planesWorld()[0], V(-1, 0, 0), V(0, 0, 1)); assert.ok(fa && fa.u.x < -0.5 && fa.n.z > 0.5 && Math.abs(fa.n.x) > 0.2, 'frame A tilted with the bone: ' + JSON.stringify(fa && fa.n));
@@ -98,7 +98,7 @@ test('angle bone: the local bone axes at the two cuts differ by > 20°, split = 
 
 test('fitWrap ladder on the angle bone: the result is reported step by step and the final guide seats (one piece or two)', async () => {
   await volume(ARC, { x: 50, y: 24, z: 50 });
-  S.anchor = { p: V(0, 0, 0), n: V(0, 0, 1), axis: V(1, 0, 0) }; S.planes = [{ off: -25, yaw: 0, pitch: 0, w: 1.2 }, { off: 25, yaw: 0, pitch: 0, w: 1.2 }];
+  S.anchor = { p: V(0, 0, 0), n: V(0, 0, 1), axis: V(1, 0, 0) }; S.planes = [{ off: -25, yaw: 0, pitch: 0, w: 0.8 }, { off: 25, yaw: 0, pitch: 0, w: 0.8 }];
   S.guideOn = true; St.placeScrews(); await St.rebuildResection();
   const f = await St.fitWrap();
   assert.ok(f && f.ok, 'a seatable layout found: ' + JSON.stringify(S.fitLog));
@@ -115,14 +115,14 @@ test('kerf side: stump gap 0 per end with the kerf on the resected side (default
   await volume(ellipseBar(10, 6));
   assert.equal(S.g.kerfSide, 1, 'default: resected side');
   await plan([-12, 12]);
-  const pw = St.planesWorld(); pw.forEach(p => near(St.stumpGap(p), 0, 1e-9)); near(pw[0].shift, 0.6, 1e-9); near(pw[1].shift, -0.6, 1e-9);
+  const pw = St.planesWorld(); pw.forEach(p => near(St.stumpGap(p), 0, 1e-9)); near(pw[0].shift, 0.4, 1e-9); near(pw[1].shift, -0.4, 1e-9);
   assert.ok(/planlı aralık: kesi 1 ucunda 0,0 mm, kesi 2 ucunda 0,0 mm \(testere payı rezeke tarafta\)/.test(text()), text());
   S.g.kerfSide = 0; await St.rebuildResection(); await St.regenerate();
-  St.planesWorld().forEach(p => { near(St.stumpGap(p), 0.6, 1e-9); near(p.shift, 0, 1e-9); });
-  assert.ok(/kesi 1 ucunda 0,6 mm, kesi 2 ucunda 0,6 mm \(testere payı kesi düzlemine ortalı\)/.test(text()), text());
+  St.planesWorld().forEach(p => { near(St.stumpGap(p), 0.4, 1e-9); near(p.shift, 0, 1e-9); });
+  assert.ok(/kesi 1 ucunda 0,4 mm, kesi 2 ucunda 0,4 mm \(testere payı kesi düzlemine ortalı\)/.test(text()), text());
   S.planes.forEach(p => { p.w = 2.4; }); await St.regenerate();
   assert.ok(checks().some(c => c[0] === 'warn' && /aralık: kesi 1 ucunda 1,2 mm/.test(c[2])), 'gap above 1.0 mm is a warning: ' + text());
-  S.g.kerfSide = 1; S.planes.forEach(p => { p.w = 1.2; });
+  S.g.kerfSide = 1; S.planes.forEach(p => { p.w = 0.8; });
 });
 
 // ---------- bone-aware screw placement (app.js placeScrews / bestScrew / evalScrew) ----------
