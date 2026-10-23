@@ -38,7 +38,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function plan() {
   await St.settled();
   S.g.split = 0; S.anchor = { p: V(0, 0, 0), n: V(0, 0, 1), axis: V(1, 0, 0) }; $('perSide').value = '2'; S.lesion.condyle = null;   // (as setVolume leaves it)
-  S.planes = [{ off: -15, yaw: 0, pitch: 0, w: 1.2, ok: false }, { off: 15, yaw: 0, pitch: 0, w: 1.2, ok: false }];
+  S.planes = [{ off: -15, yaw: 0, pitch: 0, w: 0.8, ok: false }, { off: 15, yaw: 0, pitch: 0, w: 0.8, ok: false }];
   S.guideOn = true; St.placeScrews(); await St.regenerate(); await St.settled();
 }
 // let the ui.js frame (requestAnimationFrame → setTimeout 0 here) and audit.js' 200 ms render run
