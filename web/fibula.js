@@ -981,6 +981,9 @@ window.Fibula = (function () {
     }
     // saw slot against the blade: slot = blade + 0.1-0.3 mm (a wider slot lets the blade tilt and angle errors add up)
     const sw = slotOf(P0);
+    // slot play (plan 1.3): the blade (the kerf) tilts atan((slot - kerf) / wall) in the fibula guide's slot
+    if (St.slotPlay && R) { const wl = (S.fib.guide.ctx && S.fib.guide.ctx.g && S.fib.guide.ctx.g.wall) || 2.5, a = St.slotPlay(sw, P0.kerf, wl);
+      if (a > St.SLOT_PLAY_MAX + 1e-6) out.push(['crit', 'Kritik', xl(`Fibula guide yuvasında testere ${fmt(a, 1)}° eğilebilir (yuva ${fmt(sw, 2)} mm, testere payı ${fmt(P0.kerf, 2)} mm, kılavuz derinliği ${fmt(wl, 1)} mm); en çok ${St.SLOT_PLAY_MAX}° olmalı.`) + ' ' + xl('Yuvayı testere payına daraltın.'), 'fib']); }
     if (sw - P0.kerf > 0.3 + 1e-9) out.push(['warn', 'Uyarı', `Fibula guide yuvası (${fmt(sw, 2)} mm) testere payından (${fmt(P0.kerf, 2)} mm) ${fmt(sw - P0.kerf, 2)} mm geniş; bıçaktan en çok 0,3 mm geniş yuva önerilir, daha genişi açı hatası biriktirir.`]);
     return out;
   }

@@ -10,6 +10,7 @@ import os
 import subprocess
 import sys
 import textwrap
+import time
 import unittest
 
 import numpy as np
@@ -81,17 +82,25 @@ class JobsTrim(unittest.TestCase):
         stop_server(cls.srv)
         seg_server.release_memory = cls.orig
 
+    def wait_calls(self, want, limit=5.0):
+        """release_memory runs in the handler's `finally`, after the answer is written: the client can read the answer
+        before the call (a loaded machine, denetim 2026-10-23), so the count is awaited for a moment, not read at once."""
+        t_end = time.time() + limit
+        while self.calls < want and time.time() < t_end:
+            time.sleep(0.02)
+        return self.calls
+
     def test_guide(self):
         n = self.calls
         st, r = J(call(self.base, "POST", "/guide", tiny_guide_request()))
         self.assertEqual(st, 200, r)
-        self.assertEqual(self.calls, n + 1)
+        self.assertEqual(self.wait_calls(n + 1), n + 1)
 
     def test_bad_guide(self):
         n = self.calls
         st, _ = J(call(self.base, "POST", "/guide", {"crop": 1}))
         self.assertEqual(st, 400)
-        self.assertEqual(self.calls, n + 1)
+        self.assertEqual(self.wait_calls(n + 1), n + 1)
 
     def test_segment(self):
         n = self.calls
@@ -99,7 +108,7 @@ class JobsTrim(unittest.TestCase):
         st, _, _ = call(self.base, "POST", "/segment?nx=12&ny=10&nz=8&sp=1,1,1&origin=0,0,0&axes=1,0,0,0,1,0,0,0,1",
                         raw=body, headers={"Content-Type": "application/octet-stream"})
         self.assertEqual(st, 200)
-        self.assertEqual(self.calls, n + 1)
+        self.assertEqual(self.wait_calls(n + 1), n + 1)
 
     def test_cases_do_not_trim(self):
         n = self.calls

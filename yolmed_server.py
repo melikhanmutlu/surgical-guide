@@ -509,7 +509,7 @@ def _validate_guide(req):
     need(isinstance(fr, dict) and all(_vec(fr.get(k)) for k in ("p", "u", "v", "n")), "frame must be {p, u, v, n}, 3 numbers each")
     need(isinstance(g, dict) and all(_num(g.get(k)) for k in ("L", "W", "wrap", "wall", "clear", "bridge")),
          "g needs the numbers L, W, wrap, wall, clear, bridge")
-    need(all(g.get(k) is None or _num(g.get(k)) for k in ("side", "vc", "uc", "skirt")), "g.side, vc, uc, skirt must be numbers")
+    need(all(g.get(k) is None or _num(g.get(k)) for k in ("side", "vc", "uc", "skirt", "boss", "bossW")), "g.side, vc, uc, skirt, boss, bossW must be numbers")
     planes, screws = req.get("planes") or [], req.get("screws") or []
     need(isinstance(planes, list) and all(isinstance(p, dict) and _vec(p.get("p")) and _vec(p.get("N")) and _num(p.get("w")) for p in planes),
          "planes must be a list of {p, N, w}")
@@ -688,8 +688,14 @@ def build_guide(req, progress=None):
     vc = float(g.get("vc", 0) or 0)                      # lateral (v) centre of the body relative to the frame origin
     uc = float(g.get("uc", 0) or 0)                      # centre along the guide
     skirt = 3.0 if g.get("skirt") is None else float(g["skirt"])   # the shell is kept within this distance of real bone
+    # the slot rim (the studio's g.boss / g.bossW, gkernel.js): the shell raised to `boss` mm over the inner surface
+    # within bossW mm of each slot side; only a rim deeper than the wall is built
+    boss = float(g.get("boss") or 0)
+    boss_w = float(g.get("bossW") or 2)
     _check_ranges({"L": (L, 5, 200), "W": (W, 3, 100), "wrap": (wrap, 0, 40), "wall": (wall, 0.5, 10), "clear": (clear, 0, 3),
-                   "bridge": (bridge, 0, 30), "vc": (vc, -50, 50), "uc": (uc, -100, 100), "skirt": (skirt, 0, 30)})
+                   "bridge": (bridge, 0, 30), "vc": (vc, -50, 50), "uc": (uc, -100, 100), "skirt": (skirt, 0, 30),
+                   "boss": (boss, 0, 15), "bossW": (boss_w, 0.5, 6)})
+    boss_h = boss if boss > wall else 0.0
     # optional per-position wrap depth ([[uu, depth], ...], the automatic sizing's profile): the depth at uu is the
     # smaller of g.wrap and the profile's value
     wrap_u = None
@@ -715,6 +721,7 @@ def build_guide(req, progress=None):
         raise HttpError(400, "invalid crop grid")
     cw = clear + wall
     bridge_lo, bridge_hi = cw - 0.5, cw + 2.5
+    top_hi = max(bridge_hi, clear + boss_h)
     # optional depth limit along the guide ([uu, nn] pairs, nn <= 0): the preview's own wrap line (bone top per
     # position minus the wrap depth), so the production body ends exactly where the preview's does
     prof = req.get("wrap_profile")
@@ -774,7 +781,7 @@ def build_guide(req, progress=None):
     # resolution is built at the next coarser one (reported in the answer) rather than refused.
     max_sleeve = max([float(s["sleeveH"]) for s in screws] or [0.0])
     lo = np.array([uc - L / 2 - 4, vc - W / 2 - 4 - ext_neg, -max(wrap + 10, 30) - max(0.0, L / 2 - 15) * 0.6])
-    hi = np.array([uc + L / 2 + 4, vc + W / 2 + 4 + ext_pos, cw + max(max_sleeve, bridge) + 6])
+    hi = np.array([uc + L / 2 + 4, vc + W / 2 + 4 + ext_pos, clear + max(wall + max(max_sleeve, bridge), boss) + 6])
     # grow the box around both ends of every sleeve (a tilted or wide sleeve near an edge would otherwise be clipped and
     # capped by the grid); grown by whole grid steps so the nodes stay where the preview puts them
     for s in screws:
@@ -981,7 +988,7 @@ def build_guide(req, progress=None):
         slots) or the bridge band inside the body edge, everything within `skirt` of real bone."""
         outer = abs(UU[i] - uc) - L / 2
         dde_i, dd_i = dde[i], dd[i]
-        far = (outer > 0) | (dde_i > bridge_hi + r)
+        far = (outer > 0) | (dde_i > top_hi + r)
         box = np.maximum(np.maximum(outer, box_v), wrap_at[i] - NN2)
         if stop:
             shadow = col_top[i][:, None] > NN2
@@ -990,13 +997,17 @@ def build_guide(req, progress=None):
             box = np.where(sd2, np.minimum(box, sv), box)
         shell = np.maximum(clear - dde_i, dde_i - cw)
         if with_slots:
+            if boss_h:
+                for Nf, e, half in slots:
+                    sd = np.abs(Nf[0] * UU[i] + Nf[1] * VV2 + Nf[2] * NN2 - e)
+                    shell = np.minimum(shell, np.maximum(np.maximum(sd - half - boss_w, clear - dde_i), dde_i - clear - boss_h))
             for Nf, e, half in slots:
                 shell = np.maximum(shell, half - np.abs(Nf[0] * UU[i] + Nf[1] * VV2 + Nf[2] * NN2 - e))
         br = np.maximum(bridge_lo - dde_i, dde_i - bridge_hi)
         if e_t is not None:
             br = np.maximum(br, e_t)
         f = np.maximum(np.maximum(box, dd_i - dde_i - skirt), np.minimum(shell, br))
-        return np.where(far, np.maximum(outer, dde_i - bridge_hi), f).astype(np.float32)
+        return np.where(far, np.maximum(outer, dde_i - top_hi), f).astype(np.float32)
     # pass 0 (no slots, no bridge limit) finds the body's own +v / -v edge per position along the guide: the bridge (the
     # rib across the saw slots) runs `bridge` wide inside that edge, not the box edge, so it never floats
     BR_OFF = np.float32(1e3)

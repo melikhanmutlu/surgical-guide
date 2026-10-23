@@ -29,7 +29,7 @@ window.Mfg = (function () {
   // write the profile into the design; changed items lose their approval
   function apply() {
     if (!M.prof) return;
-    S.g.clear = M.clear; S.g.fit = M.fit; if (S.g.wall < M.minWall) S.g.wall = M.minWall;
+    S.g.clear = M.clear; S.g.fit = M.fit; S.g.blade = M.blade; if (S.g.wall < M.minWall) S.g.wall = M.minWall;
     const w = slot();
     S.planes.forEach(p => { if (Math.abs(p.w - w) > 1e-6) { p.w = w; St.unapprove(p); } });
     const fp = window.Fibula && Fibula.plan();

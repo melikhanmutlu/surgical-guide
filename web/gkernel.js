@@ -124,6 +124,9 @@ var GKernel = (function () {
     const slots = K.slots, gp = K.gp;
     const F = new Float32Array(N).fill(h * 4);
     const bridgeLo = cw - 0.5, bridgeHi = cw + 2.5, skirt = g.skirt == null ? 3 : g.skirt;
+    // the slot rim (plan 1.3): the shell raised to `boss` mm over the inner surface within bossW mm of each slot side, so
+    // the blade is guided over that depth instead of the wall alone (only a rim deeper than the wall is built)
+    const bossH = g.boss > g.wall ? g.boss : 0, bossW = g.bossW || 2, topHi = Math.max(bridgeHi, c + bossH);
     // the bridge (the rib that carries the body across the saw slots) runs along the body's own +v / -v edge at each
     // position along the guide: on a bone curved across v the box edge lies off the body, so a rib there would float
     const edgeV = new Float32Array(nx).fill(NaN);
@@ -142,7 +145,7 @@ var GKernel = (function () {
           const id = i + nx * (j + ny * k), uu = lo[0] + i * h, d = dd[id], dE = ddE[id];
           const ev = edgeV[i], eT = pass === 0 || Number.isNaN(ev) ? 1e3 : (g.side > 0 ? ev - g.bridge - vv : vv - ev - g.bridge);
           const outer = Math.abs(uu - uc) - g.L / 2;
-          if (outer > 0 || dE > bridgeHi + h) { F[id] = Math.max(outer, dE - bridgeHi); continue; }
+          if (outer > 0 || dE > topHi + h) { F[id] = Math.max(outer, dE - topHi); continue; }
           // box: guide length and width, depth below the wrap line (stops: a lip past the edge, only off the bone's shadow)
           const shadow = colTopBone[i + nx * j] > nn;
           let box = Math.max(outer, av - g.W / 2, wrapAt[i] - nn);
@@ -152,7 +155,10 @@ var GKernel = (function () {
             box = Math.min(box, stop);
           }
           let shell = Math.max(c - dE, dE - cw);
-          if (pass === 1) for (const s of slots) shell = Math.max(shell, s.half - Math.abs(s.a * uu + s.b * vv + s.c * nn - s.e));   // (pass 0 finds the body edge without the slots, so the rib does not dip into them)
+          if (pass === 1) {   // (pass 0 finds the body edge without the slots, so the rib does not dip into them)
+            if (bossH) for (const s of slots) shell = Math.min(shell, Math.max(Math.abs(s.a * uu + s.b * vv + s.c * nn - s.e) - s.half - bossW, c - dE, dE - c - bossH));
+            for (const s of slots) shell = Math.max(shell, s.half - Math.abs(s.a * uu + s.b * vv + s.c * nn - s.e));
+          }
           const bridge = Math.max(bridgeLo - dE, dE - bridgeHi, eT);
           // near real bone: the envelope point under this voxel is bone, or a shadow face within `skirt` of bone
           F[id] = Math.max(box, d - dE - skirt, Math.min(shell, bridge));
