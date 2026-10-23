@@ -69,6 +69,27 @@ class Audit(unittest.TestCase):
         k = run_dir(sphere()); os.remove(os.path.join(k, "real", "fibula_guide_uretim.stl"))
         self.assertTrue(any("yok" in x for x in A.audit(k, None)[0]["fails"]))
 
+    def test_accuracy_measures(self):
+        """plan 0.3: a guide shell 0.3 mm off a bone sphere reads p50 ~0.3 mm at the contact; the preview 0.1 mm off
+        the production reads ~0.1 mm; the slot play is atan((slot - blade) / depth); the fibula slots 20 mm apart match a
+        20 mm segment."""
+        guide = trimesh.creation.icosphere(subdivisions=5, radius=10.3)
+        k = run_dir(guide); r = os.path.join(k, "real")
+        trimesh.creation.icosphere(subdivisions=5, radius=10.0).export(os.path.join(r, "kemik.stl"))
+        trimesh.creation.icosphere(subdivisions=5, radius=10.4).export(os.path.join(r, "guide_onizleme.stl"))
+        with open(os.path.join(r, "plan_frame.json"), "w") as f: json.dump({"g": {"clear": 0.3}}, f)
+        with open(os.path.join(r, "olcum.json"), "w") as f:
+            json.dump({"blade": 0.6, "boss": 5, "wall": 3, "slots": [0.8, 1.2], "fibSegs": [20.0, 25.0],
+                       "fibSlots": [{"p": [0, 0, 0], "N": [1, 0, 0], "w": 0.8}, {"p": [20.4, 1, 0], "N": [1, 0, 0], "w": 0.8},
+                                    {"p": [30, 0, 0], "N": [-1, 0, 0], "w": 0.8}, {"p": [55, 0, 0], "N": [1, 0, 0], "w": 0.8}]}, f)
+        a = A.accuracy(k)
+        self.assertAlmostEqual(a["guide_bone"]["p50_mm"], 0.3, delta=0.02); self.assertGreater(a["guide_bone"]["contact_share"], 0.99)
+        self.assertAlmostEqual(a["preview_vs_production"]["mean_mm"], 0.1, delta=0.02)
+        self.assertEqual(a["slot_play_deg"], [round(float(np.degrees(np.arctan(0.2 / 5))), 2), round(float(np.degrees(np.arctan(0.6 / 5))), 2)])
+        self.assertEqual([s["diff_mm"] for s in a["fibula_segments"]], [0.4, 0.0])
+        # a run without these files: no measures, no error
+        self.assertEqual(A.accuracy(run_dir(sphere())), {})
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

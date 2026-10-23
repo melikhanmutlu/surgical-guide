@@ -18,7 +18,7 @@ if [ -z "${KANIT:-}" ]; then
   REPO="$REPO" PORT="${PORT:-8846}" ONLY=B E2E_SCRATCH="$OUT/e2e" bash "$REPO/tests/web/e2e/run_all.sh" | tee "$OUT/e2e.log"
   grep -q '^FAIL' "$OUT/e2e.log" && echo "UYARI: e2e senaryosunda başarısız adım var (e2e.log)"
 fi
-args=("$KANIT" --baseline "$BASELINE" --report "$OUT/rapor.md" --json "$OUT/sonuc.json")
+args=("$KANIT" --baseline "$BASELINE" --report "$OUT/rapor.md" --json "$OUT/sonuc.json" --accuracy "$OUT/accuracy.json")
 [ "${WRITE_BASELINE:-0}" = 1 ] && args+=(--write-baseline)
 python3 -I "$REPO/tools/realct_audit.py" "${args[@]}"; rc=$?
 echo "rapor: $OUT/rapor.md"

@@ -118,9 +118,46 @@ def audit(kanit, baseline, allow_drift=False):
     return {"ok": ok, "fails": fails, "drifts": drifts, "files": out, "had_baseline": bool(base)}, rows
 
 
+CONTACT_MM = 2.0          # guide surface nearer the bone than this is its contact (seating) surface
+
+
+def accuracy(kanit):
+    """Accuracy measures of one run (plan 0.3), written to accuracy.json: how near the production guide's contact surface
+    lies to the bone (it should sit at the planned clearance), how far the preview differs from the production STL, the
+    saw's angular play in each slot, and whether the fibula guide's slots reproduce the planned segment lengths.
+    Numbers only; nothing here fails the audit (thresholds are for the clinical team)."""
+    real = os.path.join(kanit, "real") if os.path.isdir(os.path.join(kanit, "real")) else kanit
+    out = {}
+    j = lambda n: json.load(open(os.path.join(real, n))) if os.path.exists(os.path.join(real, n)) else None
+    prod, prev, bone = (os.path.join(real, n) for n in ("guide_uretim.stl", "guide_onizleme.stl", "kemik.stl"))
+    pm = trimesh.load_mesh(prod, file_type="stl", process=True) if os.path.exists(prod) else None
+    if pm is not None and os.path.exists(bone):
+        bm = trimesh.load_mesh(bone, file_type="stl", process=True)
+        pts, _ = trimesh.sample.sample_surface(pm, SAMPLES, seed=3)
+        d = _to_surface(pts, bm); c = d[d < CONTACT_MM]
+        g = (j("plan_frame.json") or {}).get("g") or {}
+        out["guide_bone"] = {"contact_share": round(float(len(c) / len(d)), 3), "planned_clear_mm": g.get("clear"),
+                             **({"p50_mm": round(float(np.percentile(c, 50)), 3), "p95_mm": round(float(np.percentile(c, 95)), 3), "p99_mm": round(float(np.percentile(c, 99)), 3)} if len(c) else {})}
+    if pm is not None and os.path.exists(prev):
+        out["preview_vs_production"] = distance(trimesh.load_mesh(prev, file_type="stl", process=True), pm)
+    o = j("olcum.json")
+    if o:
+        depth = o["boss"] if (o.get("boss") or 0) > (o.get("wall") or 0) else o.get("wall")
+        if depth and o.get("blade") is not None:
+            out["slot_play_deg"] = [round(float(np.degrees(np.arctan(max(0.0, w - o["blade"]) / depth))), 2) for w in o.get("slots") or []]
+        if o.get("fibSegs") and o.get("fibSlots"):
+            P = [(np.array(q["p"]), np.array(q["N"]) / np.linalg.norm(q["N"])) for q in o["fibSlots"]]
+            gaps = [abs(float(np.dot(P[i + 1][0] - P[i][0], (P[i][1] + np.sign(np.dot(P[i][1], P[i + 1][1])) * P[i + 1][1]) / 2))) for i in range(len(P) - 1)]
+            out["fibula_segments"] = [{"planned_mm": round(L, 2), "slots_mm": round(min(gaps, key=lambda x: abs(x - L)), 2) if gaps else None,
+                                       "diff_mm": round(min(abs(x - L) for x in gaps), 2) if gaps else None} for L in o["fibSegs"]]
+    return out
+
+
 def report(res, rows):
     L = ["# Gerçek BT denetimi", "", f"Sonuç: **{'GEÇTİ' if res['ok'] else 'KALDI'}**", ""]
     if not res["had_baseline"]: L += ["Taban çizgisi yok; yalnız basılabilirlik denetlendi.", ""]
+    acc = res.get("accuracy") or {}
+    if acc: L += ["## Doğruluk ölçüleri (accuracy.json)", ""] + [f"- {k}: {json.dumps(v, ensure_ascii=False)}" for k, v in acc.items()] + [""]
     if res["fails"]: L += ["## Basılabilirlik hataları", ""] + [f"- {x}" for x in res["fails"]] + [""]
     if res["drifts"]: L += ["## Tabana göre değişen", ""] + [f"- {x}" for x in res["drifts"]] + [""]
     L += ["## Ölçümler", "", "| dosya | üçgen | su geçirmez | parça | hacim mm³ | pürüzlülük | tabana uzaklık (ort / %95) | baskı denetimi |", "|---|---|---|---|---|---|---|---|"]
@@ -148,9 +185,13 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("kanit"); ap.add_argument("--baseline"); ap.add_argument("--report")
     ap.add_argument("--write-baseline", action="store_true"); ap.add_argument("--allow-drift", action="store_true")
-    ap.add_argument("--json")
+    ap.add_argument("--json"); ap.add_argument("--accuracy", help="write the accuracy measures (plan 0.3) to this file")
     a = ap.parse_args()
     res, rows = audit(a.kanit, a.baseline, a.allow_drift)
+    try: res["accuracy"] = accuracy(a.kanit)
+    except Exception as e: res["accuracy"] = {"error": str(e)}
+    if a.accuracy:
+        with open(a.accuracy, "w") as f: json.dump(res["accuracy"], f, indent=1)
     txt = report(res, rows)
     print(txt)
     if a.report:
