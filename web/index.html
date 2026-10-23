@@ -635,7 +635,19 @@ button.ghost.danger { color: var(--crit); }
           <h3 class="sub">Parçalar</h3>
           <div id="ankBody" class="col"></div>
           <div id="ankWarn"></div>
+          <h3 class="sub">Karşı taraf aynası</h3>
+          <div id="ankMirror" class="col"></div>
+          <h3 class="sub">Eklem ölçüleri</h3>
+          <div id="ankLM" class="col"></div>
           <div class="nav"><button class="primary next" data-next="st7">İnceleme ve onay<svg class="i"><use href="#i-next"/></svg></button></div>
+        </div>
+      </details>
+
+      <details class="step" id="stAnkS" name="flow">
+        <summary><span class="n">4</span>Vidalar<span class="tick" role="img" aria-label="Tamamlandı"></span><span class="tag" id="tagAnkS"></span><svg class="chev"><use href="#i-chev"/></svg></summary>
+        <div class="body">
+          <div id="ankScrewBox" class="col"></div>
+          <div class="nav"><button class="primary next" data-next="stAnkG">Kesi guide'ı<svg class="i"><use href="#i-next"/></svg></button></div>
         </div>
       </details>
 
@@ -980,6 +992,9 @@ button.ghost.danger { color: var(--crit); }
 <script src="layers.js"></script>
 <script src="masks.js"></script>
 <script src="ankle.js"></script>
+<script src="anklm.js"></script>
+<script src="ankmirror.js"></script>
+<script src="ankscrew.js"></script>
 <script src="ankguide.js"></script>
 <script src="guiderot.js"></script>
 <script src="panel.js"></script>

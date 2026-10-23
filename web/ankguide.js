@@ -155,7 +155,7 @@ window.AnkGuide = (function () {
   async function production() {
     if (!ready() || !St.serverGuide) return;
     const me = out, p = out.piece, r = S.red, F = new Float32Array(r.nx * r.ny * r.nz);
-    for (let i = 0; i < F.length; i++) if (S.labels[i] === p.label) F[i] = 1;
+    const L = A.labels(); for (let i = 0; i < F.length; i++) if (L[i] === p.label) F[i] = 1;
     St.busy(true, xl('Üretim STL\'i sunucuda hazırlanıyor…'), { f: 0, restart: true });
     try {
       const thr = +($('thr') ? $('thr').value : 300);
