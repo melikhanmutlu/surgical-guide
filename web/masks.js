@@ -95,7 +95,7 @@ window.Masks = (function () {
     acc.forEach((a, s) => { if (s && a[3] && layers[s - 1]) split.push({ label: BASE + s, size: a[3], centroid: [a[0] / a[3], a[1] / a[3], a[2] / a[3]] }); });
     if (!split.length) return false;
     const rest = S.comps.filter(c => !touched.has(c.label));
-    S.labels = L; S.comps = split.concat(rest).slice(0, 12);
+    S.labels = L; S.compsAll = { labels: L, comps: split.concat(rest) }; S.comps = S.compsAll.comps.slice(0, 12);
     S.compNames = {}; split.forEach(c => { S.compNames[c.label] = layers[c.label - BASE - 1].name; });
     rest.forEach((c, i) => { S.compNames[c.label] = `Diğer yapı ${i + 1}`; });
     S.segMethod += ' + katmanlara ayırma';

@@ -19,7 +19,7 @@ window.CaseType = (function () {
       label: 'Çene rekonstrüksiyonu',
       hint: 'Mandibula rezeksiyonu, fibula grefti ile rekonstrüksiyon, kesi ve fibula guide\'ları.',
       steps: ['st1', 'st2', 'st3', 'st4', 'st5', 'st6', 'st7', 'st8'],
-      hide: ['#sampleA', '#sampleAct', '#hAnk', '#ankAppr'],
+      hide: ['#sampleA', '#sampleAct', '#hAnk', '#ankAppr', '#ankRoi'],
     },
     // malleolar fracture (ankle.js): the pieces of the fracture are reduced by hand, the reduced model is the output
     ankle: {

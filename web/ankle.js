@@ -23,66 +23,180 @@ window.Ankle = (function () {
 
   // ---------- pieces from the segmentation ----------
   const r3 = q => [q.x, q.y, q.z].map(x => Math.round(x * 10) / 10);
-  // anatomical names (a guess shown as such; each name can be changed in the panel):
-  // - outside the body: a piece whose voxels mostly lie within 3 mm of air (in the axial plane) is a splint, cast or
-  //   table, not bone ("Atel / dış nesne": hidden, not measured, not exported). Bone lies under soft tissue.
-  // - tibia and fibula: the two longest remaining pieces (the larger is the tibia); the ankle level is the fibula's
-  //   distal end (the end away from the scan edge the shafts leave by)
-  // - pieces further than ROI_MM above the ankle level (knee, femur, patella on a long scan) or DIST_MM below it
-  //   (midfoot) are "Diğer kemik"
-  // - talus: the largest piece left near the ankle (over 5 cm³); the rest are fragments named by where they lie
-  const MAXP = 12, THR_ANKLE = 300, THR_MAND = 250, ROI_MM = 100, DIST_MM = 20, NAMES = ['Tibia', 'Fibula', 'Talus', 'Lateral malleol', 'Medial malleol', 'Posterior malleol', 'Diğer kemik', 'Atel / dış nesne'];
+  // ---------- joints: touching bones are one threshold component ----------
+  // On a real ankle CT the joint space is narrower than the voxel blur: at 300 HU the tibia and the talus came out as one
+  // piece (2026-10-23 anonymised CT; the "talus" was then the calcaneus). Every large component is cut at its thin necks
+  // (G.separator, the watershed the mandible uses) with a low neck ratio: a joint contact is much thinner than the bones
+  // on both sides, a bone's own narrowings (trabecular metaphysis, talar neck) are not. Labels are rewritten in place.
+  const SEP = { minCm3: 10, ratio: 0.3 };
+  function separate(r, labels, comps) {
+    const vox = r.sp[0] * r.sp[1] * r.sp[2] / 1000, minVox = Math.max(1, Math.round(LIM.minCm3 / vox)), out = [];
+    let base = 0; for (let v = 0; v < labels.length; v++) if (labels[v] > base) base = labels[v];
+    base = Math.max(base, 1) + 1;
+    comps.forEach(c => {
+      if (c.size * vox < SEP.minCm3) { out.push(c); return; }
+      const sep = G.separator(labels, r.nx, r.ny, r.nz, r.sp, { label: c.label });
+      const cs = sep.empty ? [] : sep.run({ ratio: SEP.ratio, base, out: labels, minSize: minVox });
+      if (cs.length > 1) { out.push(...cs); base += cs.ids + 1; } else { if (!sep.empty) sep.restore(c.label); out.push(c); }
+    });
+    return out.sort((a, b) => b.size - a.size);
+  }
+
+  // ---------- the ankle region and the anatomical names ----------
+  // Names are a guess shown as such; each can be changed in the panel.
+  // - outside the body: a piece whose surface mostly lies against air (in the axial plane, within 1.7 mm) or whose
+  //   voxels mostly lie within 3 mm of air is a splint, cast or table ("Atel / dış nesne": hidden, not measured, not
+  //   exported). Bone lies under skin and soft tissue; a cast's outer surface is the air.
+  // - tibia and fibula: the two longest remaining pieces (the larger is the tibia; on a CT of both legs, those of the
+  //   chosen side). Up = towards the knee: the end of the shafts nearer a scan edge.
+  // - talus: the largest piece over 5 cm³ that touches the tibia (within 6 mm) below the tibia's middle
+  // - the ankle level is the talar dome (the talus' top); without a talus the tibia's distal end. The region kept
+  //   (crop, ROI) runs from `below` mm under to `above` mm over it; a piece with under 30 % of its voxels inside is
+  //   left out (knee, femur, patella on a long scan; the toes).
+  // - a fracture fragment lies within 6 mm of the tibia or the fibula and is named from where it lies against the
+  //   distal tibia; a bone touching only the talus or the foot (navicular, calcaneus) is "Diğer kemik".
+  const MAXP = 16, THR_ANKLE = 300, THR_MAND = 250, NEAR_FRAG = 6, NEAR_TAL = 6, IN_ROI = 0.3;
+  const ROI_DEF = { above: 100, below: 40, side: '' }, ROI_LIM = { above: [30, 250], below: [10, 100] };
+  const NAMES = ['Tibia', 'Fibula', 'Talus', 'Lateral malleol', 'Medial malleol', 'Posterior malleol', 'Diğer kemik', 'Atel / dış nesne'];
   const roleOf = n => ({ Tibia: 'tibia', Fibula: 'fibula', Talus: 'talus', 'Diğer kemik': 'other', 'Atel / dış nesne': 'out' })[n] || 'frag';
-  function names(list) {
-    const r = S.red, hu = r.hu, A = Math.max(1, Math.round(3 / r.sp[0]));
-    const ext = new Map(list.map(p => [p.label, [Infinity, -Infinity, 0, 0]]));
+  let roi = Object.assign({}, ROI_DEF), roiInfo = null;
+  // one pass over the labels: per piece its slice range, per-slice voxel counts and in-plane sums (the centroid of
+  // any slab), bounding box, and how much of its surface lies against air
+  function stats(list) {
+    const r = S.red, hu = r.hu, nx = r.nx, ny = r.ny, nz = r.nz, nxy = nx * ny, A = Math.max(1, Math.round(1.7 / r.sp[0])), A3 = Math.max(1, Math.round(3 / r.sp[0]));
+    const L = S.labels, by = new Map();
+    list.forEach(p => { p.st = { kLo: Infinity, kHi: -Infinity, n: 0, nAir3: 0, bnd: 0, bndAir: 0, sl: new Float64Array(nz * 3), box: [nx, ny, nz, -1, -1, -1] }; by.set(p.label, p.st); });
     const air = v => hu && hu[v] < -500;
-    for (let k = 0, v = 0; k < r.nz; k++) for (let j = 0; j < r.ny; j++) for (let i = 0; i < r.nx; i++, v++) {
-      const e = ext.get(S.labels[v]); if (!e) continue; if (k < e[0]) e[0] = k; if (k > e[1]) e[1] = k;
-      e[2]++; if ((i >= A && air(v - A)) || (i + A < r.nx && air(v + A)) || (j >= A && air(v - A * r.nx)) || (j + A < r.ny && air(v + A * r.nx))) e[3]++;
+    for (let k = 0, v = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++, v++) {
+      const l = L[v], e = by.get(l); if (!e) continue;
+      if (k < e.kLo) e.kLo = k; if (k > e.kHi) e.kHi = k; e.n++;
+      const b = e.box; if (i < b[0]) b[0] = i; if (j < b[1]) b[1] = j; if (k < b[2]) b[2] = k; if (i > b[3]) b[3] = i; if (j > b[4]) b[4] = j; if (k > b[5]) b[5] = k;
+      e.sl[3 * k]++; e.sl[3 * k + 1] += i; e.sl[3 * k + 2] += j;
+      if ((i >= A3 && air(v - A3)) || (i + A3 < nx && air(v + A3)) || (j >= A3 && air(v - A3 * nx)) || (j + A3 < ny && air(v + A3 * nx))) e.nAir3++;
+      const bd = (i > 0 && L[v - 1] !== l) || (i < nx - 1 && L[v + 1] !== l) || (j > 0 && L[v - nx] !== l) || (j < ny - 1 && L[v + nx] !== l) || (k > 0 && L[v - nxy] !== l) || (k < nz - 1 && L[v + nxy] !== l);
+      if (!bd) continue;
+      e.bnd++;
+      let near = false;
+      for (let s = 1; s <= A && !near; s++) near = (i >= s && air(v - s)) || (i + s < nx && air(v + s)) || (j >= s && air(v - s * nx)) || (j + s < ny && air(v + s * nx));
+      if (near) e.bndAir++;
     }
-    list.forEach(p => { const e = ext.get(p.label); p.kLo = e[0]; p.kHi = e[1]; p.airFrac = e[2] ? e[3] / e[2] : 0; p.role = ''; });
-    list.forEach(p => { if (p.airFrac > 0.5) { p.name = 'Atel / dış nesne'; p.role = 'out'; } });
-    const len = p => (p.kHi - p.kLo) * r.sp[2];
+    list.forEach(p => { const e = p.st; p.kLo = e.kLo; p.kHi = e.kHi; p.airFrac = e.n ? e.nAir3 / e.n : 0; p.skinFrac = e.bnd ? e.bndAir / e.bnd : 0; });
+  }
+  const wOf = (r, i, j, k) => (r.origin ? G.worldOf(r, i, j, k) : [i * r.sp[0], j * r.sp[1], k * r.sp[2]]);
+  // in-plane centroid (world) of a piece's slices ka..kb
+  function slabC(p, ka, kb) {
+    const r = S.red, sl = p.st.sl; let n = 0, si = 0, sj = 0;
+    for (let k = Math.max(0, Math.min(ka, kb)); k <= Math.min(r.nz - 1, Math.max(ka, kb)); k++) { n += sl[3 * k]; si += sl[3 * k + 1]; sj += sl[3 * k + 2]; }
+    if (!n) return null;
+    return V(...wOf(r, si / n, sj / n, (ka + kb) / 2));
+  }
+  // smallest distance (mm) from piece p to each of the labels in `to`, looked for up to R mm away (else Infinity)
+  function gaps(p, to, R = 10) {
+    const r = S.red, L = S.labels, b = p.st.box, pad = [0, 1, 2].map(a => Math.ceil(R / r.sp[a]) + 1);
+    const lo = [0, 1, 2].map(a => Math.max(0, b[a] - pad[a])), hi = [0, 1, 2].map(a => Math.min([r.nx, r.ny, r.nz][a] - 1, b[a + 3] + pad[a]));
+    const cx = hi[0] - lo[0] + 1, cy = hi[1] - lo[1] + 1, cz = hi[2] - lo[2] + 1, m = new Uint8Array(cx * cy * cz), out = new Map(to.map(l => [l, Infinity]));
+    for (let k = 0; k < cz; k++) for (let j = 0; j < cy; j++) { const row = lo[0] + r.nx * (lo[1] + j + r.ny * (lo[2] + k)), o = cx * (j + cy * k); for (let i = 0; i < cx; i++) if (L[row + i] === p.label) m[o + i] = 1; }
+    const d = G.sdf(m, cx, cy, cz, r.sp);
+    for (let k = 0; k < cz; k++) for (let j = 0; j < cy; j++) { const row = lo[0] + r.nx * (lo[1] + j + r.ny * (lo[2] + k)), o = cx * (j + cy * k); for (let i = 0; i < cx; i++) { const l = L[row + i]; if (out.has(l) && d[o + i] < out.get(l)) out.set(l, d[o + i]); } }
+    out.forEach((v, l) => { if (v > R) out.set(l, Infinity); });
+    return out;
+  }
+  // names every piece of `list` and decides the region kept; returns the side of the ankle ('R', 'L' or '')
+  // pieces outside the region (or on the other leg) get role 'roi' / 'side' and are left out by build()
+  function names(list, want = roi) {
+    const r = S.red, sp = r.sp[2];
+    stats(list);
+    const info = { bilateral: false, side: '', mid: null, kDome: null, up: 1, outRoi: 0, otherSide: 0, talus: false };
+    list.forEach(p => { p.role = ''; p.name = ''; if (p.skinFrac > 0.25 || p.airFrac > 0.5) { p.name = 'Atel / dış nesne'; p.role = 'out'; } });
+    const len = p => (p.kHi - p.kLo) * sp;
+    // a CT of both legs: two long pieces of about the same size far apart side to side; the leg with more pieces
+    // (the fracture's fragments) is planned unless the user chose a side. Patient right is -x (LPS).
+    const long = list.filter(p => !p.role && len(p) > 40).sort((a, b) => b.size - a.size);
+    if (long.length >= 3 && long[1].size > 0.5 * long[0].size && Math.abs(long[0].c.x - long[1].c.x) > 60) {
+      const mid = (long[0].c.x + long[1].c.x) / 2, sideOf = p => (p.c.x < mid ? 'R' : 'L');
+      const cnt = { R: 0, L: 0 }; list.forEach(p => { if (!p.role) cnt[sideOf(p)]++; });
+      info.bilateral = true; info.mid = mid; info.side = want.side === 'R' || want.side === 'L' ? want.side : cnt.L > cnt.R ? 'L' : 'R';
+      list.forEach(p => { if (p.role !== 'out' && sideOf(p) !== info.side) { p.role = 'side'; p.name = 'Diğer kemik'; info.otherSide++; } });
+    }
     const shafts = list.filter(p => !p.role && len(p) > 25).sort((a, b) => len(b) - len(a)).slice(0, 2).sort((a, b) => b.size - a.size);
-    const tib = shafts[0] || null, fib = shafts[1] || null;
+    const tib = shafts[0] || null, fib = shafts[1] && Math.hypot(shafts[1].c.x - shafts[0].c.x, shafts[1].c.y - shafts[0].c.y) < 60 ? shafts[1] : null;
     if (tib) { tib.name = 'Tibia'; tib.role = 'tibia'; }
     if (fib) { fib.name = 'Fibula'; fib.role = 'fibula'; }
-    // the ankle level (slice index): the distal end of the fibula (or of the tibia without one)
-    // up = towards the knee in slice order; pieces wholly above kA + ROI_MM or wholly below kA - DIST_MM (the midfoot)
-    // are left as "Diğer kemik": malleolar fragments, talus and plafond reach above the fibula tip
-    const sh = fib || tib; let kA = null, up = 1;
-    if (sh) { up = sh.kLo <= (r.nz - 1 - sh.kHi) ? -1 : 1; kA = up > 0 ? sh.kLo : sh.kHi; }
-    const roi = ROI_MM / r.sp[2], dist = DIST_MM / r.sp[2];
-    const far = p => (up > 0 ? p.kLo > kA + roi || p.kHi < kA - dist : p.kHi < kA - roi || p.kLo > kA + dist);
-    list.forEach(p => { if (!p.role && kA != null && far(p)) { p.name = 'Diğer kemik'; p.role = 'other'; } });
-    const rest = list.filter(p => !p.role).sort((a, b) => b.size - a.size);
-    const tal = rest[0] && rest[0].cm3 > 5 && (!tib || rest[0].cm3 > 0.08 * tib.cm3) ? rest[0] : null;
-    if (tal) { tal.name = 'Talus'; tal.role = 'talus'; }
-    const lat = tib && fib ? V().subVectors(fib.c, tib.c).setZ(0).normalize() : null;
+    // up (towards the knee, in slice order): the shafts leave the scan by the edge they come nearer to
+    const sh = tib || fib; let up = 1;
+    if (sh) up = sh.kLo <= (r.nz - 1 - sh.kHi) ? -1 : 1;
+    info.up = up;
+    const distalK = p => (up > 0 ? p.kLo : p.kHi), proxK = p => (up > 0 ? p.kHi : p.kLo);
+    // the talus: the largest piece over 5 cm³ that touches the tibia, with its centre below the tibia's middle
+    const g = new Map();
+    const gapsOf = p => { if (!g.has(p.label)) g.set(p.label, gaps(p, [tib, fib].filter(Boolean).map(x => x.label))); return g.get(p.label); };
+    let tal = null;
+    if (tib) {
+      const kMid = (tib.kLo + tib.kHi) / 2, below = p => (up > 0 ? kOfC(p) < kMid : kOfC(p) > kMid);
+      const cand = list.filter(p => !p.role && p.cm3 > 5 && below(p)).sort((a, b) => b.size - a.size);
+      for (const p of cand) { if (gapsOf(p).get(tib.label) <= NEAR_TAL) { tal = p; break; } }
+    }
+    if (tal) { tal.name = 'Talus'; tal.role = 'talus'; info.talus = true; }
+    // the ankle level and the region kept
+    const kD = tal ? proxK(tal) : tib ? distalK(tib) : fib ? distalK(fib) : null;
+    info.kDome = kD;
+    if (kD != null) {
+      const k0 = kD - up * want.below / sp, k1 = kD + up * want.above / sp, kl = Math.min(k0, k1), kh = Math.max(k0, k1);
+      info.kLo = kl; info.kHi = kh;
+      list.forEach(p => {
+        if (p.role === 'out' || p.role === 'side' || p === tib || p === fib || p === tal) return;
+        let n = 0; for (let k = Math.max(0, Math.ceil(kl)); k <= Math.min(r.nz - 1, Math.floor(kh)); k++) n += p.st.sl[3 * k];
+        if (n < IN_ROI * p.st.n) { p.role = 'roi'; p.name = 'Diğer kemik'; info.outRoi++; }
+      });
+    }
+    // fracture fragments: near the tibia or the fibula; named against the distal tibia (its last 25 mm)
+    const kT = tib ? distalK(tib) : null, tc = tib ? slabC(tib, kT, kT + up * 25 / sp) || tib.c : null, fc = fib ? slabC(fib, distalK(fib), distalK(fib) + up * 25 / sp) || fib.c : null;
+    const lat = tc && fc ? V().subVectors(fc, tc).setZ(0).normalize() : null, post = lat ? V(-lat.y, lat.x, 0) : null;
+    if (post && post.y < 0) post.negate();     // posterior is +y in LPS
     let n = 0;
     list.filter(p => !p.role).forEach(p => {
+      const gp = tib || fib ? gapsOf(p) : new Map(), dT = tib ? gp.get(tib.label) : Infinity, dF = fib ? gp.get(fib.label) : Infinity;
+      p.gapT = dT; p.gapF = dF;
+      if (!(Math.min(dT, dF) <= NEAR_FRAG)) { p.name = 'Diğer kemik'; p.role = 'other'; return; }
       p.role = 'frag';
-      if (tib && fib && lat) {
-        const dF = Math.hypot(p.c.x - fib.c.x, p.c.y - fib.c.y), dT = Math.hypot(p.c.x - tib.c.x, p.c.y - tib.c.y), d = V().subVectors(p.c, tib.c);
-        if (dF < dT) { p.name = 'Lateral malleol'; return; }
+      if (dF < dT) { p.name = 'Lateral malleol'; return; }
+      if (lat) {
+        const d = V().subVectors(p.c, tc).setZ(0);
         if (-d.dot(lat) > 8) { p.name = 'Medial malleol'; return; }
-        if (d.y > 6) { p.name = 'Posterior malleol'; return; }
+        if (d.dot(post) > 6) { p.name = 'Posterior malleol'; return; }
       }
       p.name = `Parça ${++n}`;
     });
+    roiInfo = info;
     // the side of the ankle: the fibula is lateral, a right ankle has it on the patient's right (-x in LPS)
     return tib && fib ? (fib.c.x < tib.c.x ? 'R' : 'L') : '';
+    function kOfC(p) { let s = 0, w = 0; for (let k = p.kLo; k <= p.kHi; k++) { s += k * p.st.sl[3 * k]; w += p.st.sl[3 * k]; } return w ? s / w : (p.kLo + p.kHi) / 2; }
   }
-  const sigOf = () => S.labels && S.comps ? S.comps.map(c => `${c.label}:${c.size}`).join(',') + '|' + S.red.nx + 'x' + S.red.ny + 'x' + S.red.nz : '';
+  // all the threshold components of the current labels (app.js keeps them all for the ankle; the list it shows is capped)
+  const allComps = () => (S.compsAll && S.compsAll.labels === S.labels ? S.compsAll.comps : S.comps) || [];
+  const sigOf = () => S.labels && S.comps ? allComps().map(c => `${c.label}:${c.size}`).join(',') + '|' + S.red.nx + 'x' + S.red.ny + 'x' + S.red.nz + '|' + roi.above + ',' + roi.below + ',' + roi.side : '';
 
   async function build() {
     if (!on() || !S.red || !S.labels || !S.comps) return;
     const sig = sigOf(); if (sig === built && pieces.length) { show(); return; }
     const job = buildJob = {}, r = S.red, vox = r.sp[0] * r.sp[1] * r.sp[2] / 1000;
     drop();
-    const list = S.comps.filter(c => c.size * vox >= LIM.minCm3).slice(0, MAXP).map(c => ({ label: c.label, size: c.size, cm3: c.size * vox, c: V(...G.worldOf(r, ...c.centroid)) }));
-    const side = autoSide = names(list);
+    const mk = c => ({ label: c.label, size: c.size, cm3: c.size * vox, c: V(...G.worldOf(r, ...c.centroid)) });
+    const all = allComps(), cand = all.filter(c => c.size * vox >= LIM.minCm3).map(mk);
+    const side = autoSide = names(cand);
+    // the pieces shown: the named bones first, then fragments and the rest by size, at most MAXP
+    const rank = { tibia: 0, fibula: 1, talus: 2, frag: 3, other: 4, out: 5 };
+    const keep = cand.filter(p => p.role !== 'roi' && p.role !== 'side').sort((a, b) => (rank[a.role] - rank[b.role]) || b.size - a.size);
+    const list = keep.slice(0, MAXP);
+    // pieces too small to show (under LIM.minCm3) inside the region and near the tibia or fibula may be fragments: counted
+    const tf = list.filter(p => p.role === 'tibia' || p.role === 'fibula').map(p => p.label), small = all.filter(c => c.size * vox < LIM.minCm3).map(mk);
+    let nSmall = 0;
+    if (tf.length && small.length && roiInfo && roiInfo.kDome != null) {
+      stats(small);
+      small.forEach(p => { const kc = (p.kLo + p.kHi) / 2; if (kc < roiInfo.kLo || kc > roiInfo.kHi) return; const g = gaps(p, tf, NEAR_FRAG); if ([...g.values()].some(d => d <= NEAR_FRAG)) nSmall++; });
+    }
+    if (roiInfo) { roiInfo.capped = keep.length - list.length; roiInfo.small = nSmall; }
+    list.forEach(p => { delete p.st; });
     if (!meta.side && side) meta.side = side;
     St.busy(true, xl('Kırık parçaları hazırlanıyor…')); await St.sleep();
     try {
@@ -110,7 +224,8 @@ window.Ankle = (function () {
       pieces = list; built = sig; sel = pieces.findIndex(p => p.role === 'frag');
       pieces.forEach((p, i) => St.setPart('ank' + i, p.name, p.pivot, p.color));
       if (pend) { const x = pend; pend = null; restore(x); }
-      show(); measure(); render(); St.renderParts(); St.emit('changed');
+      show(); measure(); render(); renderRoi(); St.renderParts(); St.emit('ankPieces'); St.emit('changed');
+      if (window.MPR) MPR.redraw();
     } finally { if (job === buildJob) { buildJob = null; St.busy(false); } }
   }
   function drop() { Object.keys(St.parts).filter(k => /^ank\d/.test(k)).forEach(k => St.setPart(k, null, null)); pieces = []; built = ''; sel = -1; metrics = []; attach(); }
@@ -134,6 +249,45 @@ window.Ankle = (function () {
     const c01 = d[b + nxy] * (1 - wx) + d[b + nxy + 1] * wx, c11 = d[b + nxy + nx] * (1 - wx) + d[b + nxy + nx + 1] * wx;
     return (c00 * (1 - wy) + c10 * wy) * (1 - wz) + (c01 * (1 - wy) + c11 * wy) * wz;
   }
+
+  // ---------- the region kept (step Anatomi): mm under / over the talar dome, the leg on a CT of both legs ----------
+  const clampR = (k, x) => Math.max(ROI_LIM[k][0], Math.min(ROI_LIM[k][1], Math.round(+x) || ROI_DEF[k]));
+  function setRoi(x, edit = true) {
+    const nr = { above: clampR('above', x && x.above != null ? x.above : roi.above), below: clampR('below', x && x.below != null ? x.below : roi.below), side: x && ['R', 'L'].includes(x.side) ? x.side : '' };
+    if (nr.above === roi.above && nr.below === roi.below && nr.side === roi.side) return false;
+    const keepPlan = pieces.length ? planGet() : null;
+    roi = nr;
+    if (edit) unapprove();
+    if (on() && S.labels) { if (keepPlan) pend = Object.assign(keepPlan, { roi: nr }); built = ''; build(); }
+    renderRoi(); if (window.MPR) MPR.redraw();
+    if (edit) St.emit('changed');
+    return true;
+  }
+  function renderRoi() {
+    const box = $('ankRoi'); if (!box) return;
+    if (!on()) { box.innerHTML = ''; return; }
+    const ri = roiInfo, sl = (k, lbl) => `<div class="ctl"><div class="ctl-row"><label for="ankRoi_${k}">${xl(lbl)}</label><output id="ankRoi_${k}O">${roi[k]} mm</output></div><input type="range" id="ankRoi_${k}" min="${ROI_LIM[k][0]}" max="${ROI_LIM[k][1]}" step="5" value="${roi[k]}"></div>`;
+    const sum = ri ? [ri.kDome == null ? xl('Ayak bileği seviyesi bulunamadı; bölge uygulanmadı.') : ri.talus ? xl('Seviye: talus kubbesi.') : xl('Seviye: tibianın alt ucu (talus bulunamadı).'),
+      ri.outRoi ? xl(`${ri.outRoi} yapı bölge dışında.`) : '', ri.otherSide ? xl(`Diğer bacaktan ${ri.otherSide} yapı dışarıda.`) : ''].filter(Boolean).join(' ') : '';
+    box.innerHTML = `<h3 class="sub">${xl('Ayak bileği bölgesi')}</h3>${sl('above', 'Talus kubbesinin üstü')}${sl('below', 'Talus kubbesinin altı')}
+      ${ri && ri.bilateral ? `<div class="ctl"><label for="ankRoiSide" class="lbl2">${xl('Planlanan bacak')}</label><select id="ankRoiSide"><option value="">${xl('Otomatik')}</option><option value="R">${xl('Sağ')}</option><option value="L">${xl('Sol')}</option></select></div>` : ''}
+      <p class="hint more">${xl('Kırık parçaları yalnız bu bölgede aranır; diz, uyluk ve ayak önü dışarıda kalır. Koronal ve sagittal kesitlerde turuncu kesikli çizgiler bölgenin sınırıdır.')}</p>${sum ? `<p class="hint">${esc(sum)}</p>` : ''}`;
+    ['above', 'below'].forEach(k => { const el = $('ankRoi_' + k);
+      el.addEventListener('input', () => { $('ankRoi_' + k + 'O').textContent = `${el.value} mm`; });
+      el.addEventListener('change', () => setRoi({ [k]: +el.value, side: roi.side })); });
+    if ($('ankRoiSide')) { $('ankRoiSide').value = roi.side; $('ankRoiSide').addEventListener('change', e => setRoi({ side: e.target.value })); }
+  }
+  // the region's two bounds on the coronal and sagittal slices
+  (window.SliceOverlays = window.SliceOverlays || []).push((v, ctx, Tf, dpr, A) => {
+    if (!on() || !roiInfo || roiInfo.kDome == null || !S.red || v.axis === 2 || !A.planeLine) return;
+    const r = S.red, N = V(...r.axes[2]).normalize();
+    [roiInfo.kLo, roiInfo.kHi].forEach(k => {
+      const L = A.planeLine(v, V(...G.worldOf(r, 0, 0, k)), N); if (!L) return;
+      ctx.strokeStyle = 'rgba(224,160,58,.9)'; ctx.lineWidth = 1.4 * dpr; ctx.setLineDash([6 * dpr, 4 * dpr]);
+      ctx.beginPath(); ctx.moveTo(Tf.fx(L.a[0]), Tf.fy(L.a[1])); ctx.lineTo(Tf.fx(L.b[0]), Tf.fy(L.b[1])); ctx.stroke(); ctx.setLineDash([]);
+      A.label(ctx, xl('Bölge sınırı'), Tf.fx(L.a[0]) + 6 * dpr, Tf.fy(L.a[1]) - 4 * dpr, '#e0a03a', dpr);
+    });
+  });
 
   // ---------- the rigid motion of a piece ----------
   function place(p) { p.pivot.position.copy(p.c).add(p.t); p.pivot.quaternion.copy(p.q); p.pivot.updateMatrixWorld(true); }
@@ -192,6 +346,14 @@ window.Ankle = (function () {
       if (m.gap != null && m.gap > LIM.gapWarn && m.partner >= 0) out.push(['warn', 'Uyarı', xl(`${m.name} ile ${pieces[m.partner].name} arasında ortalama ${fmt(m.gap, 1)} mm aralık var.`), 'ank']);
     });
     if (!pieces.some(moved)) out.push(['info', 'Bilgi', xl('Henüz hiçbir parça taşınmadı; redükte model BT\'deki konumla aynı.'), 'ank']);
+    const ri = roiInfo;
+    if (ri) {
+      if (ri.small) out.push(['warn', 'Uyarı', xl(`Tibia ya da fibulanın yakınında 0,2 cm³'ten küçük ${ri.small} parça var; listede gösterilmiyor. Küçük bir kırık parçası olabilir, kesitlerde kontrol edin.`), 'ank']);
+      if (ri.capped) out.push(['warn', 'Uyarı', xl(`${ri.capped} parça liste sınırını (${MAXP}) aştığı için gösterilmiyor; Anatomi adımında ayak bileği bölgesini daraltın.`), 'ank']);
+      if (ri.bilateral) out.push(['info', 'Bilgi', xl(`İki bacaklı BT: ${ri.side === 'R' ? 'sağ' : 'sol'} bacak planlanıyor, diğer bacak dışarıda. Anatomi adımında "Planlanan bacak" ile değiştirilebilir.`), 'ank']);
+      if (!pieces.some(p => p.role === 'tibia')) out.push(['warn', 'Uyarı', xl('Tibia bulunamadı; parça adlarını elle verin.'), 'ank']);
+      else if (!ri.talus) out.push(['warn', 'Uyarı', xl('Talus bulunamadı (tibiaya değen büyük kemik yok); ayak bileği seviyesi tibianın alt ucundan alındı. Adları kontrol edin.'), 'ank']);
+    }
     return out;
   }
   // the checks list while the case is an ankle (app.js renderChecks hands over when there is no mandible guide)
@@ -376,7 +538,7 @@ window.Ankle = (function () {
     else { if (!red.ok) why.push(xl('redüksiyon onayı')); const A = window.Audit, h = A ? A.planHash() : ''; if (A && !A.status('eng', h).ok) why.push(xl('mühendis onayı')); if (A && !A.status('sur', h).ok) why.push(xl('cerrah onayı')); if (S.crit) why.push(xl(`${S.crit} kritik kontrol`)); }
     box.innerHTML = `<ol class="deliver">
       <li><div><b>${xl('Redükte model STL\'i')}</b><p class="hint">${xl('Bütün parçalar planlanan konumda, tek dosya. Plak ön bükme için basılabilir; onay gerektirmez.')}</p></div><button id="ankStl" ${pieces.length ? '' : 'disabled'}><svg class="i"><use href="#i-download"/></svg>${xl('İndir')}</button></li>
-      ${window.AnkGuide && AnkGuide.ready() ? `<li><div><b>${xl('Kesi guide\'ı ve kama')}</b><p class="hint">${xl('Önizleme STL\'leri (tarayıcıda, 0,4 mm ızgara). Pakete de girer.')}</p></div><button id="ankGStl">${xl('İndir')}</button></li>` : ''}
+      ${window.AnkGuide && AnkGuide.ready() ? `<li><div><b>${xl('Kesi guide\'ı ve kama')}</b><p class="hint">${xl('Üretim STL\'i alındıysa o, alınmadıysa tarayıcı önizlemesi ("BASMAYIN" adıyla) ve kama; redükte modelle aynı koordinatta. Pakete de girer.')}</p></div><button id="ankGStl">${xl('İndir')}</button></li>` : ''}
       <li><div><b>${xl('Parça STL\'leri')}</b><p class="hint">${xl('Her parça ayrı dosya (redükte konumda), .zip içinde.')}</p></div><button id="ankParts" ${pieces.length ? '' : 'disabled'}>${xl('İndir')}</button></li>
       <li><div><b>${xl('Rapor')}</b><p class="hint">${xl('Parçalar, ölçümler, kontroller ve onaylar.')}</p></div><button id="ankRep" ${pieces.length ? '' : 'disabled'}>HTML</button></li>
       <li><div><b>${xl('Paket')}</b><p class="hint" id="ankPackMsg">${ready ? xl('Plan onaylı; paket hazır.') : `${xl('Paket için:')} ${why.join(', ')}.`}</p></div><button class="primary" id="ankPack" ${ready ? '' : 'disabled'}><svg class="i"><use href="#i-download"/></svg>${xl('İndir')}</button></li></ol>`;
@@ -387,8 +549,19 @@ window.Ankle = (function () {
     $('ankRep').addEventListener('click', () => St.offer(`${name()}_rapor.html`, new Blob([reportHTML()], { type: 'text/html' })));
     $('ankPack').addEventListener('click', () => { if (!packReady()) return; St.offer(`${name()}_paket.zip`, St.zip(packFiles())); St.emit('exported'); });
   }
+  // every STL of the package is in one frame (the reduced model's); the file says which and how to go back to the CT
+  function frameJSON() {
+    const g = window.AnkGuide && AnkGuide.ready() ? AnkGuide.state() : null, q4 = q => [q.x, q.y, q.z, q.w].map(x => Math.round(x * 1e6) / 1e6), m3 = v => [v.x, v.y, v.z].map(x => Math.round(x * 1000) / 1000);
+    return JSON.stringify({
+      cerceve: 'BT hasta koordinatları (DICOM LPS), mm; her parça planlanan (redükte) konumunda',
+      frame: 'CT patient coordinates (DICOM LPS), mm; every piece in its planned (reduced) position',
+      donusum: "x' = q (x - c) + c + t, q = [x, y, z, w] birim kuaterniyon; BT konumuna dönüş: x = q^-1 (x' - c - t) + c",
+      dosyalar: { 'redukte_model.stl': 'tüm parçalar', 'parcalar/*_redukte.stl': 'her parça ayrı', 'guide/*.stl': g ? `kesi guide'ı ve kama, "${g.piece}" parçasının hareketiyle taşınmış` : 'yok' },
+      parcalar: kept().map(p => ({ ad: p.name, c: m3(p.c), t: m3(p.t), q: q4(p.q), tasindi: moved(p) })),
+    }, null, 2);
+  }
   function packFiles() {
-    const files = [{ name: 'redukte_model.stl', data: reducedStl() }, ...pieceFiles(), ...(window.AnkGuide ? AnkGuide.files() : []), { name: 'plan.json', data: JSON.stringify(St.planOf(), null, 2) }, { name: 'rapor.html', data: reportHTML() }];
+    const files = [{ name: 'redukte_model.stl', data: reducedStl() }, ...pieceFiles(), ...(window.AnkGuide ? AnkGuide.files() : []), { name: 'cerceve.json', data: frameJSON() }, { name: 'plan.json', data: JSON.stringify(St.planOf(), null, 2) }, { name: 'rapor.html', data: reportHTML() }];
     // the approval log (audit.js); the other export hooks write mandible files (navigation of cuts and screws)
     const extra = []; (window.ExportHooks || []).forEach(f => { try { f(extra); } catch (e) { /* optional */ } });
     extra.filter(f => f.name === 'onay_kaydi.json').forEach(f => files.push(f));
@@ -413,17 +586,30 @@ window.Ankle = (function () {
     if (red.ok && red.sig !== sig()) { red = { ok: false }; St.alertMsg(xl('Redüksiyon onayı kayıtlı parça konumlarıyla eşleşmiyor; yeniden onaylayın.')); }
     measure(); renderMeta(); render(); renderOut();
   }
+  function planGet() {
+    return { side: meta.side, cls: meta.cls, roi: Object.assign({}, roi), red: red.ok ? { ok: true, by: red.by, at: red.at, sig: red.sig } : { ok: false },
+      pieces: pieces.map(p => ({ c: r3(p.c), name: p.name, t: [p.t.x, p.t.y, p.t.z].map(x => Math.round(x * 1000) / 1000), q: [p.q.x, p.q.y, p.q.z, p.q.w].map(x => Math.round(x * 1e6) / 1e6) })) };
+  }
   (window.PlanExt = window.PlanExt || {}).ankle = {
     label: 'Malleol redüksiyonu',
-    get: () => (on() ? { side: meta.side, cls: meta.cls, red: red.ok ? { ok: true, by: red.by, at: red.at, sig: red.sig } : { ok: false },
-      pieces: pieces.map(p => ({ c: r3(p.c), name: p.name, t: [p.t.x, p.t.y, p.t.z].map(x => Math.round(x * 1000) / 1000), q: [p.q.x, p.q.y, p.q.z, p.q.w].map(x => Math.round(x * 1e6) / 1e6) })) } : null),
-    set(x) { if (!x) { if (pieces.length) restore(null); else { meta = { side: '', cls: '' }; red = { ok: false }; } return; } if (x && !on()) CaseType.set('ankle', true); if (!pieces.length || buildJob) { pend = x; return; } restore(x); },
+    get: () => (on() ? planGet() : null),
+    set(x) {
+      if (!x) { roi = Object.assign({}, ROI_DEF); if (pieces.length) restore(null); else { meta = { side: '', cls: '' }; red = { ok: false }; } renderRoi(); return; }
+      if (x && !on()) CaseType.set('ankle', true);
+      // a plan saved with another region: the pieces are found again in that region first
+      const want = x.roi && typeof x.roi === 'object' ? x.roi : ROI_DEF, nr = { above: clampR('above', want.above), below: clampR('below', want.below), side: ['R', 'L'].includes(want.side) ? want.side : '' };
+      const regionChanged = nr.above !== roi.above || nr.below !== roi.below || nr.side !== roi.side;
+      roi = nr; renderRoi();
+      if (!pieces.length || buildJob) { pend = x; return; }
+      if (regionChanged) { pend = x; built = ''; build(); return; }
+      restore(x);
+    },
   };
 
   // ---------- wiring ----------
   bus.addEventListener('bone', () => { if (on()) build(); else if (pieces.length) drop(); });
   // a new volume is a new case: its pieces come with the 'bone' event that came just before (the side found there is kept)
-  bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring)) { meta = { side: autoSide, cls: '' }; red = { ok: false }; } renderMeta(); render(); });
+  bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring)) { meta = { side: autoSide, cls: '' }; red = { ok: false }; } renderMeta(); render(); renderRoi(); });
   bus.addEventListener('caseType', () => {
     // a built-in sample of the other case type is swapped for this type's sample (nothing planned on it yet)
     const isAnkle = n => /^ankle/.test(n);
@@ -443,13 +629,15 @@ window.Ankle = (function () {
   thrForType();
   bus.addEventListener('caseType', () => {
     // a loaded CT (not a sample, which is swapped above) is segmented again at the new threshold when nothing is planned
-    if (thrForType() && !S.restoring && S.red && S.source && S.source.type !== 'sample' && !S.anchor && !pieces.some(moved) && St.segment) St.segment(false);
+    // (also when the threshold stays: an ankle cuts touching bones apart at the joints, the mandible's segmentation did not)
+    const thrSeg = thrForType(), sepMissing = on() && /^Eşik/.test(S.segMethod || '') && !/eklem ayırma/.test(S.segMethod || '');
+    if ((thrSeg || sepMissing) && !S.restoring && S.red && S.source && S.source.type !== 'sample' && !S.anchor && !pieces.some(moved) && St.segment) St.segment(false);
   });
-  bus.addEventListener('caseType', () => { if (on()) { renderMeta(); build(); } else { drop(); const b = St.parts.bone; if (b) { b.visible = true; b.obj.visible = true; St.renderParts(); } } render(); renderOut(); });
+  bus.addEventListener('caseType', () => { if (on()) { renderMeta(); build(); } else { drop(); const b = St.parts.bone; if (b) { b.visible = true; b.obj.visible = true; St.renderParts(); } } render(); renderOut(); renderRoi(); });
   let tmo = null;
   ['changed', 'planApplied', 'lock'].forEach(ev => bus.addEventListener(ev, () => { if (!on()) return; clearTimeout(tmo); tmo = setTimeout(() => { renderAppr(); renderOut(); renderChecks(); }, 120); }));
   ['st2', 'stRed', 'stAnkG', 'st7', 'stAnkOut'].forEach(id => $(id) && $(id).addEventListener('toggle', () => { if (!on()) return; show(); if (id === 'stAnkOut') renderOut(); }));
-  renderMeta(); render(); renderOut();
+  renderMeta(); render(); renderOut(); renderRoi();
 
   const planned = () => on() && pieces.length > 0;
   // for ui.js: step completion and the top bar while the case is an ankle
@@ -457,5 +645,5 @@ window.Ankle = (function () {
     const A = window.Audit, h = A && pieces.length ? A.planHash() : '', both = !!(A && pieces.length && A.status('eng', h).ok && A.status('sur', h).ok);
     return { done: { stRed: pieces.length > 0 && pieces.some(moved) && !checks().some(c => c[0] === 'crit'), stAnkG: !!(window.AnkGuide && AnkGuide.ready()), st7: red.ok && both && !S.crit, stAnkOut: false }, ready: red.ok && both && !S.crit, pend: (red.ok ? 0 : 1) + (A && pieces.length && !A.status('eng', h).ok ? 1 : 0) + (A && pieces.length && !A.status('sur', h).ok ? 1 : 0) };
   }
-  return { on, planned, status, renderChecks, checks, pieces: () => pieces, metrics: () => metrics, select: choose, rename, _names: names, sdfAt, toWorld, toOwn, moved, setMotion, reset, measure, reducedStl, pieceFiles, reportHTML, packFiles, packReady, approve, build, meta: () => meta, approved: () => red.ok, LIM };
+  return { on, planned, status, renderChecks, checks, pieces: () => pieces, metrics: () => metrics, select: choose, rename, _names: names, separate, roi: () => Object.assign({}, roi), roiInfo: () => roiInfo, setRoi, building: () => !!buildJob, sdfAt, toWorld, toOwn, moved, setMotion, reset, measure, reducedStl, pieceFiles, reportHTML, packFiles, frameJSON, packReady, approve, build, meta: () => meta, approved: () => red.ok, LIM };
 })();

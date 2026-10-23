@@ -19,6 +19,9 @@ window.AnkGuide = (function () {
   const DEF = { off: 0, tiltA: 0, tiltB: 0, kerf: 1.0, deg: 8, L: 40, W: 24, wrap: 6, wall: 3, pinD: 2.0, pinDu: 11 };
   const LIM = { off: [-25, 25], tiltA: [-30, 30], tiltB: [-30, 30], kerf: [0.6, 2], deg: [0, 20], L: [24, 60], W: [16, 40], wrap: [2, 12], wall: [2, 4.5], pinD: [1.2, 3.2], pinDu: [6, 20] };
   const COL = { guide: 0x3f7fd9, wedge: 0xe0a03a, slot: 0xd9534f };
+  // the joint (sample threshold, the clinical team sets it): the saw cut and the K-wires stay JOINT_MIN mm away from the
+  // articular surface = the guide bone's surface within JOINT_NEAR mm of the talus (the plafond, the malleolar facets)
+  const JOINT = { near: 4, min: 5 };
   let st = null;          // { piece, c, P, n, prm }: the placement (piece-own coordinates) and the settings
   let out = null;         // { key, guide, wedge, info } the last build
   let picking = false, job = null;
@@ -88,6 +91,44 @@ window.AnkGuide = (function () {
     return { mesh, info: { deg: q.deg, open: Hmax, width: (j1 - j0) * h, depth: (i1 - i0) * h, area: sec.area } };
   }
 
+  // ---------- the joint: how far the cut and the wires stay from the articular surface ----------
+  // all in the guide bone's own (CT) coordinates; the talus is sampled through both pieces' motions
+  function jointPts(f) {
+    const tal = A.pieces().find(p => p.role === 'talus' && p !== f.p); if (!tal) return null;
+    const P = f.p.mesh.geometry.attributes.position.array, out = [], x = V();
+    const step = Math.max(1, Math.floor(P.length / 3 / 40000));
+    for (let v = 0; v < P.length / 3; v += step) {
+      x.fromArray(P, 3 * v); const d = A.sdfAt(tal, A.toOwn(tal, A.toWorld(f.p, x)));
+      if (d < JOINT.near) out.push(x.x, x.y, x.z);
+    }
+    return { tal, J: new Float32Array(out) };
+  }
+  const minTo = (J, x) => { let m = Infinity; for (let k = 0; k < J.length; k += 3) { const dx = J[k] - x.x, dy = J[k + 1] - x.y, dz = J[k + 2] - x.z, d = dx * dx + dy * dy + dz * dz; if (d < m) m = d; } return Math.sqrt(m); };
+  function joint(f, pl, scs) {
+    const jp = jointPts(f); if (!jp || !jp.J.length) return null;
+    const { J, tal } = jp, sec = section(f, pl), x = V();
+    // the saw: every cell of the bone's section on the cut plane (the blade cuts through the whole section)
+    let slot = Infinity;
+    for (let j = 0; j < sec.nA; j += 2) for (let i = 0; i < sec.nA; i += 2) {
+      if (!sec.fp[i + sec.nA * j]) continue;
+      x.copy(pl.p).addScaledVector(sec.a, i * sec.h - sec.R).addScaledVector(sec.b, j * sec.h - sec.R);
+      const d = minTo(J, x); if (d < slot) slot = d;
+    }
+    // a wire: from where it enters the bone to where it leaves the far cortex (the last bone point within 60 mm)
+    const pins = scs.map(s => {
+      if (!s.entry) return null;
+      let last = 0; const y = V();
+      for (let t = 0; t <= 60; t += 0.5) { y.copy(s.entry).addScaledVector(s.dir, t); if (A.sdfAt(f.p, y) <= 0) last = t; }
+      let d = Infinity, talus = false;
+      for (let t = 0; t <= last; t += 0.5) {
+        y.copy(s.entry).addScaledVector(s.dir, t); d = Math.min(d, minTo(J, y));
+        if (A.sdfAt(tal, A.toOwn(tal, A.toWorld(f.p, y))) <= 0) talus = true;
+      }
+      return { d, len: last, talus };
+    });
+    return { slot, pins, n: J.length / 3 };
+  }
+
   // ---------- build ----------
   const keyOf = () => JSON.stringify(st);
   async function make() {
@@ -103,7 +144,8 @@ window.AnkGuide = (function () {
       const w = await wedge(f, pl);
       if (me !== job) return;
       const pins_ = r.result.screwInfo.map((s, i) => ({ side: scs[i].side, ok: !!s.ok, entry: !!scs[i].entry, inBone: s.inBone || 0, crosses: !!s.crossesPlane }));
-      out = { key, piece: f.p, guide: r.mesh, wedge: w && w.mesh, prod: null, req: { g, P: f.P, u: f.u, v: f.v, n: f.n, pls: [pl], scs, wrapProfile: r.result.wrapProfile, seatDir: r.result.seatDir, gap: null }, info: { volume: r.result.volume, contact: r.result.contact, pieces: r.result.pieces, pins: pins_, wedge: w && w.info } };
+      const jt = joint(f, pl, scs);
+      out = { key, piece: f.p, guide: r.mesh, wedge: w && w.mesh, prod: null, req: { g, P: f.P, u: f.u, v: f.v, n: f.n, pls: [pl], scs, wrapProfile: r.result.wrapProfile, seatDir: r.result.seatDir, gap: null }, info: { volume: r.result.volume, contact: r.result.contact, pieces: r.result.pieces, pins: pins_, wedge: w && w.info, joint: jt } };
       show(); St.emit('changed');
     } catch (e) { St.alertMsg(xl('Guide oluşturulamadı: ') + (e.message || e)); }
     finally { if (me === job) { job = null; St.busy(false); } render(); }
@@ -179,6 +221,7 @@ window.AnkGuide = (function () {
       <details class="sec"><summary>${xl('Guide gövdesi ve teller')}</summary><div class="col">${SL.slice(5).map(sl).join('')}</div></details>
       ${info ? `<dl class="kv"><dt>${xl('Guide hacmi')}</dt><dd>${fmt(info.volume / 1000, 1)} cm³</dd><dt>${xl('Temas alanı')}</dt><dd>${fmt(info.contact, 0)} mm²</dd>
         <dt>${xl('K-telleri')}</dt><dd>${info.pins.map(p => (p.ok ? `${fmt(p.inBone, 0)} mm ${xl('kemikte')}` : xl('yok'))).join(' · ')}</dd>
+        <dt>${xl('Eklemden uzaklık')}</dt><dd>${info.joint ? `${xl('kesi')} ${fmt(info.joint.slot, 1)} mm · ${xl('teller')} ${info.joint.pins.map(p => (p ? fmt(p.d, 1) : '–')).join(' / ')} mm` : xl('ölçülemedi')}</dd>
         <dt>${xl('Üretim STL\'i')}</dt><dd>${out.prod ? (out.prod.productionOk ? `${xl('hazır')} · ${fmt(out.prod.volume / 1000, 1)} cm³` : xl('basıma uygun değil')) : xl('alınmadı')}</dd>
         ${w ? `<dt>${xl('Kama')}</dt><dd>${fmt(w.deg, 1)}° · ${xl('açılma')} ${fmt(w.open, 1)} mm · ${fmt(w.depth, 0)} × ${fmt(w.width, 0)} mm</dd>` : ''}</dl>` : f ? `<p class="hint">${xl('Ayarlar değişti ya da guide henüz oluşturulmadı.')}</p>` : ''}`;
     $('agPick').addEventListener('click', () => { picking = !picking; render(); });
@@ -201,15 +244,40 @@ window.AnkGuide = (function () {
       else if (p.inBone < 10) o.push(['warn', 'Uyarı', xl(`${nm} kemikte yalnız ${fmt(p.inBone, 0)} mm ilerliyor.`), 'ank']);
     });
     if (out.info.pieces > 1) o.push(['warn', 'Uyarı', xl('Guide birden fazla parçaya bölündü; ölçüleri büyütün.'), 'ank']);
+    const jt = out.info.joint;
+    if (!jt) o.push(['warn', 'Uyarı', xl('Eklem yüzeyi bulunamadı (talus yok ya da guide kemiğine değmiyor); kesinin ve tellerin ekleme uzaklığı denetlenmedi.'), 'ank']);
+    else {
+      if (jt.slot < JOINT.min) o.push(['crit', 'Kritik', xl(`Testere kesisi eklem yüzeyine ${fmt(jt.slot, 1)} mm yaklaşıyor (en az ${JOINT.min} mm); kesiyi eklemden uzaklaştırın.`), 'ank']);
+      jt.pins.forEach((p, i) => {
+        if (!p) return; const nm = out.info.pins[i] && out.info.pins[i].side > 0 ? xl('Üst K-teli') : xl('Alt K-teli');
+        if (p.talus) o.push(['crit', 'Kritik', xl(`${nm} eklemi geçip talusa giriyor; teli kaldırın ya da yönünü değiştirin.`), 'ank']);
+        else if (p.d < JOINT.min) o.push(['crit', 'Kritik', xl(`${nm} eklem yüzeyine ${fmt(p.d, 1)} mm yaklaşıyor (en az ${JOINT.min} mm).`), 'ank']);
+      });
+    }
+    if (!(out.prod && out.prod.productionOk)) o.push(['warn', 'Uyarı', xl('Guide\'ın üretim STL\'i alınmadı; pakette yalnız tarayıcı önizlemesi var (dosya adı "BASMAYIN"). Kesi guide\'ı adımında "Üretim STL\'i" düğmesine basın.'), 'ank']);
     return o;
   }
   (window.ExtraChecks = window.ExtraChecks || []).push(checks);
   const ready = () => !!(out && out.key === keyOf() && on());
+  // One frame for every file of the package: the CT's patient coordinates (LPS, mm) with every piece in its planned
+  // (reduced) position, the frame of the reduced model. The guide and the wedge are built on their piece in its CT
+  // position and carried here by that piece's motion x' = q (x - c) + c + t (cerceve.json, ankle.js, has every motion).
+  function toPlan(stl, p) {
+    if (!p || !A.moved(p)) return stl;
+    const u = stl.slice(), dv = new DataView(u.buffer, u.byteOffset, u.byteLength), n = dv.getUint32(80, true), x = V();
+    for (let t = 0, o = 84; t < n; t++, o += 50) for (let k = 0; k < 4; k++) {
+      const b = o + 12 * k; x.set(dv.getFloat32(b, true), dv.getFloat32(b + 4, true), dv.getFloat32(b + 8, true));
+      if (k === 0) x.applyQuaternion(p.q); else x.copy(A.toWorld(p, x));
+      dv.setFloat32(b, x.x, true); dv.setFloat32(b + 4, x.y, true); dv.setFloat32(b + 8, x.z, true);
+    }
+    return u;
+  }
+  // the guide: the server's production STL when there is one; else the browser preview, named so it is not printed
   function files() {
     if (!ready()) return [];
-    const fs = [{ name: 'guide/kesi_guide.stl', data: St.stlOf(out.guide) }];
-    if (out.prod && out.prod.productionOk) fs.push({ name: 'guide/kesi_guide_uretim.stl', data: out.prod.stl });
-    if (out.wedge) fs.push({ name: 'guide/kama.stl', data: St.stlOf(out.wedge) });
+    const p = out.piece, prod = out.prod && out.prod.productionOk;
+    const fs = [prod ? { name: 'guide/kesi_guide.stl', data: toPlan(out.prod.stl, p) } : { name: 'guide/kesi_guide_onizleme_BASMAYIN.stl', data: toPlan(St.stlOf(out.guide), p) }];
+    if (out.wedge) fs.push({ name: 'guide/kama.stl', data: toPlan(St.stlOf(out.wedge), p) });
     return fs;
   }
   (window.PlanExt = window.PlanExt || {}).ankGuide = {
@@ -227,7 +295,8 @@ window.AnkGuide = (function () {
   bus.addEventListener('caseType', () => { if (!on()) { st = null; drop(); } render(); });
   bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring)) { st = null; } drop(); render(); });
   bus.addEventListener('bone', () => { drop(); render(); });
+  bus.addEventListener('ankPieces', () => { drop(); render(); });
   if ($('stAnkG')) $('stAnkG').addEventListener('toggle', () => { if (!$('stAnkG').open) { picking = false; } render(); });
   render();
-  return { on, place, make, production, frame, cutPlane, pins, section, files, ready, checks, state: () => st, info: () => (out ? out.info : null), parts: () => out, LIM, DEF, set: (k, v) => { if (st) { st.prm = Object.assign({}, st.prm, { [k]: clamp(k, v) }); changed(); } } };
+  return { on, place, make, production, frame, cutPlane, pins, section, files, ready, checks, joint, toPlan, JOINT, state: () => st, info: () => (out ? out.info : null), parts: () => out, LIM, DEF, set: (k, v) => { if (st) { st.prm = Object.assign({}, st.prm, { [k]: clamp(k, v) }); changed(); } } };
 })();

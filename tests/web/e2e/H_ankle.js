@@ -4,7 +4,8 @@
 // H5 onaylar (redüksiyon + mühendis + cerrah) ve paket; H6 sayfa yenilenip plan açılınca parça konumları ve onay geri gelir;
 // H7 çene tipine dönünce çene örneği, kondil işaretleri ve 8 adım geri gelir; H8 açılış (?ornek yok) malleol tipiyle anonim
 // gerçek ayak bileği BT örneğini açar: tibia, fibula, talus bulunur, atel parça sayılmaz; H9 gerçek örnekte distal tibia ön
-// yüzüne kesi guide'ı: gövde, yarık, iki K-teli, kama, sunucudan su geçirmez üretim STL'i, pakette guide dosyaları.
+// yüzüne (talus kubbesinin 30 mm üstü) kesi guide'ı: gövde, yarık, iki K-teli, kama, kesi ve teller eklemden > 5 mm, sunucudan
+// su geçirmez üretim STL'i, pakette guide dosyası üretim STL'inden.
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -112,14 +113,20 @@ const H = require('./lib');
   await h.run('H9', 'Kesi guide\'ı', 'Gerçek örnekte distal tibia ön yüzüne yerleştir, oluştur, üretim STL\'i al', 'Tek parça guide, iki tel kemikte, kama açılması derinlik × tan 8°, üretim STL\'i su geçirmez tek gövde, kritik yok', async () => {
     await page.evaluate(() => { document.getElementById('stAnkG').open = true; }); await h.sleep(500);
     await h.ev(() => {
-      const T = THREE, tib = Ankle.pieces().find(p => p.name === 'Tibia'), tal = Ankle.pieces().find(p => p.name === 'Talus'), z = tal.c.z + 45; let P = null;
-      for (let t = 3; t < 60; t += 0.2) { const q = new T.Vector3(tib.c.x, tib.c.y - t, z); if (Ankle.sdfAt(tib, q) > 0) { P = q; break; } }
+      // 30 mm over the talar dome (the cut and the K-wires > 5 mm from the plafond); the tibia's centre at that height from its
+      // surface, then from 40 mm in front inwards to the anterior cortex (the centre itself lies in the medullary cavity)
+      const T = THREE, tib = Ankle.pieces().find(p => p.name === 'Tibia'), z = G.worldOf(Studio.S.red, 0, 0, Ankle.roiInfo().kDome)[2] + 30;
+      const pos = tib.mesh.geometry.attributes.position.array; let n = 0, sx = 0, sy = 0, P = null;
+      for (let i = 0; i < pos.length; i += 3) if (Math.abs(pos[i + 2] - z) < 2) { sx += pos[i]; sy += pos[i + 1]; n++; }
+      for (let t = 40; t > 0; t -= 0.1) { const q = new T.Vector3(sx / n, sy / n - t, z); if (Ankle.sdfAt(tib, q) <= 0.2) { P = q.add(new T.Vector3(0, -0.3, 0)); break; } }
       AnkGuide.place(tib, P, new T.Vector3(0, -1, 0));
     });
     const t0 = Date.now(); await h.ev(() => AnkGuide.make()); const ms = Date.now() - t0; await h.idle();
     await h.ev(() => AnkGuide.production()); await h.idle(300000);
-    const r = await h.ev(() => { const i = AnkGuide.info(), p = AnkGuide.parts().prod; return { pieces: i.pieces, vol: Math.round(i.volume), pins: i.pins.map(x => x.ok && !x.crosses ? Math.round(x.inBone) : -1), open: +i.wedge.open.toFixed(2), depth: +i.wedge.depth.toFixed(1), prod: p && { ok: p.productionOk, wt: p.watertight, bodies: p.bodies, vol: Math.round(p.volume) }, crit: Ankle.checks().filter(c => c[0] === 'crit').length + AnkGuide.checks().filter(c => c[0] === 'crit').length }; });
-    const ok = r.pieces === 1 && r.pins.every(x => x >= 10) && Math.abs(r.open - r.depth * Math.tan(8 * Math.PI / 180)) < 0.1 && r.prod && r.prod.ok && r.prod.wt && r.prod.bodies === 1 && Math.abs(r.prod.vol - r.vol) / r.vol < 0.15 && r.crit === 0 && ms < 15000;
+    const r = await h.ev(() => { const i = AnkGuide.info(), p = AnkGuide.parts().prod; return { pieces: i.pieces, vol: Math.round(i.volume), pins: i.pins.map(x => x.ok && !x.crosses ? Math.round(x.inBone) : -1), open: +i.wedge.open.toFixed(2), depth: +i.wedge.depth.toFixed(1), prod: p && { ok: p.productionOk, wt: p.watertight, bodies: p.bodies, vol: Math.round(p.volume) }, crit: Ankle.checks().filter(c => c[0] === 'crit').length + AnkGuide.checks().filter(c => c[0] === 'crit').length,
+      joint: i.joint && { slot: +i.joint.slot.toFixed(1), pins: i.joint.pins.map(x => +x.d.toFixed(1)) }, files: AnkGuide.files().map(f => f.name) }; });
+    const ok = r.pieces === 1 && r.pins.every(x => x >= 8) && Math.abs(r.open - r.depth * Math.tan(8 * Math.PI / 180)) < 0.1 && r.prod && r.prod.ok && r.prod.wt && r.prod.bodies === 1 && Math.abs(r.prod.vol - r.vol) / r.vol < 0.15 && r.crit === 0 && ms < 15000
+      && r.joint && r.joint.slot > 5 && r.joint.pins.every(x => x > 5) && r.files[0] === 'guide/kesi_guide.stl';
     return { pass: ok, actual: JSON.stringify({ ...r, ms }), evidence: await h.shot('H9_guide') };
   });
 

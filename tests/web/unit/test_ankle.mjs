@@ -121,6 +121,86 @@ test('names on a long scan with a splint: splint left out, knee and midfoot bone
     assert.ok(by(1).airFrac < 0.1, `tibia air ${by(1).airFrac}`); assert.ok(by(3).airFrac > 0.9, `splint air ${by(3).airFrac}`);
   } finally { S.red = r0; S.labels = l0; }
 });
+// synthetic labels on a 1 mm grid (body cylinder(s) in air) for the naming rules of plan 3.1 / 3.2
+function scene(nx, ny, nz, bodies) {
+  const hu = new Int16Array(nx * ny * nz).fill(-1000), lab = new Int32Array(nx * ny * nz), at = (i, j, k) => i + nx * (j + ny * k);
+  for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) if (bodies.some(([x, y, R]) => Math.hypot(i - x, j - y) < R)) hu[at(i, j, k)] = 40;
+  const put = (l, f, h = 900) => { let n = 0, sx = 0, sy = 0, sz = 0; for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) if (f(i, j, k)) { lab[at(i, j, k)] = l; hu[at(i, j, k)] = h; n++; sx += i; sy += j; sz += k; } return { label: l, size: n, cm3: n / 1000, c: new T.Vector3(sx / n, sy / n, sz / n) }; };
+  return { hu, lab, put, red: { nx, ny, nz, sp: [1, 1, 1], hu } };
+}
+function withScene(sc, f) { const r0 = S.red, l0 = S.labels; try { S.red = sc.red; S.labels = sc.lab; return f(); } finally { S.red = r0; S.labels = l0; } }
+// a bone touching only the talus: the real CT's navicular came out as "Medial malleol" (it lay medial of the tibia's
+// centre); a fragment is now a piece within 6 mm of the tibia or fibula
+test('names: a navicular (touches only the talus) and a calcaneus are "Diğer kemik"; a fragment beside the tibia is one', () => {
+  const sc = scene(80, 80, 160, [[30, 35, 40]]);
+  const list = [
+    sc.put(1, (i, j, k) => k >= 50 && k < 160 && Math.hypot(i - 32, j - 35) < 7),          // tibia, leaves the top
+    sc.put(2, (i, j, k) => k >= 40 && k < 160 && Math.hypot(i - 18, j - 37) < 3),          // fibula (patient right: -x)
+    sc.put(3, (i, j, k) => k >= 26 && k < 48 && i >= 22 && i < 42 && j >= 25 && j < 46),   // talus under the plafond
+    sc.put(4, (i, j, k) => k >= 18 && k < 30 && i >= 40 && i < 50 && j >= 10 && j < 25),   // navicular: anterior-medial, at the talus only
+    sc.put(5, (i, j, k) => k >= 2 && k < 24 && i >= 24 && i < 40 && j >= 40 && j < 62),    // calcaneus under the talus
+    sc.put(6, (i, j, k) => k >= 44 && k < 56 && i >= 40 && i < 45 && j >= 31 && j < 39),   // medial malleolus fragment, 1 mm off the tibia
+  ];
+  withScene(sc, () => {
+    const side = A._names(list), by = l => list.find(p => p.label === l);
+    assert.equal(by(1).name, 'Tibia'); assert.equal(by(2).name, 'Fibula'); assert.equal(by(3).name, 'Talus');
+    assert.equal(by(4).name, 'Diğer kemik'); assert.equal(by(5).name, 'Diğer kemik'); assert.equal(by(6).name, 'Medial malleol');
+    assert.equal(side, 'R'); assert.equal(A.roiInfo().talus, true);
+  });
+});
+// a cast lying on the skin (no padding): the old test (voxels within 3 mm of air > 50 %) let a 9 mm cast through as the
+// longest piece, the "tibia"; the cast's surface lies against the air, a bone's does not
+test('names: a 9 mm cast lying on the skin is "Atel / dış nesne", not a shaft', () => {
+  const sc = scene(60, 60, 200, [[30, 30, 18]]);
+  const list = [
+    sc.put(1, (i, j, k) => k >= 40 && k < 200 && Math.hypot(i - 32, j - 28) < 6),
+    sc.put(2, (i, j, k) => k >= 30 && k < 200 && Math.hypot(i - 19, j - 30) < 2.5),
+    sc.put(3, (i, j, k) => k >= 10 && k < 38 && i >= 22 && i < 42 && j >= 18 && j < 40),
+    sc.put(4, (i, j, k) => { const d = Math.hypot(i - 30, j - 30); return d >= 18 && d < 27 && j > 30; }),   // posterior 9 mm cast, all the scan long
+  ];
+  withScene(sc, () => {
+    A._names(list); const by = l => list.find(p => p.label === l);
+    assert.equal(by(4).role, 'out', `skin ${by(4).skinFrac} air ${by(4).airFrac}`); assert.equal(by(1).name, 'Tibia'); assert.equal(by(2).name, 'Fibula'); assert.equal(by(3).name, 'Talus');
+  });
+});
+// both legs in one CT: the shafts of both were taken as tibia and fibula; now one leg is planned, the other left out
+test('names: a CT of both legs plans one (the one with the fracture fragment, or the one chosen); the other is left out', () => {
+  const sc = scene(150, 60, 160, [[35, 30, 22], [115, 30, 22]]);
+  const leg = (b, x0, frag) => [
+    sc.put(b + 1, (i, j, k) => k >= 50 && k < 160 && Math.hypot(i - x0, j - 30) < 7),
+    sc.put(b + 2, (i, j, k) => k >= 40 && k < 160 && Math.hypot(i - (x0 < 75 ? x0 - 14 : x0 + 14), j - 32) < 3),
+    sc.put(b + 3, (i, j, k) => k >= 26 && k < 48 && Math.abs(i - x0) < 10 && j >= 20 && j < 41),
+    ...(frag ? [sc.put(b + 4, (i, j, k) => k >= 44 && k < 56 && i >= x0 + 8 && i < x0 + 13 && j >= 26 && j < 34)] : []),
+  ];
+  const list = [...leg(0, 35, true), ...leg(10, 115, false)];
+  withScene(sc, () => {
+    let side = A._names(list); const by = l => list.find(p => p.label === l);
+    assert.equal(A.roiInfo().bilateral, true); assert.equal(A.roiInfo().side, 'R'); assert.equal(side, 'R');
+    assert.equal(by(1).name, 'Tibia'); assert.equal(by(2).name, 'Fibula'); assert.equal(by(3).name, 'Talus'); assert.equal(by(4).role, 'frag');
+    [11, 12, 13].forEach(l => assert.equal(by(l).role, 'side', `label ${l}`));
+    side = A._names(list, { above: 100, below: 40, side: 'L' });
+    assert.equal(by(11).name, 'Tibia'); assert.equal(by(12).name, 'Fibula'); assert.equal(by(13).name, 'Talus'); assert.equal(side, 'L');
+    [1, 2, 3, 4].forEach(l => assert.equal(by(l).role, 'side', `label ${l}`));
+  });
+});
+// the tibia and talus of the real CT were one threshold component across the joint: the joint neck is cut
+test('separate: a tibia and a talus joined across a thin joint contact become two pieces; a lone bone stays one', () => {
+  const sc = scene(50, 50, 120, [[25, 25, 20]]);
+  sc.put(7, (i, j, k) => (k >= 32 && k < 120 && Math.hypot(i - 25, j - 25) < 9) || (k >= 4 && k < 30 && i >= 13 && i < 37 && j >= 13 && j < 37) || (k >= 30 && k < 32 && Math.hypot(i - 25, j - 25) < 2.2));
+  const G = P.eval('G'), m = new Uint8Array(sc.lab.length); for (let v = 0; v < m.length; v++) m[v] = sc.lab[v] ? 1 : 0;
+  const { labels, comps } = G.components(m, 50, 50, 120, 10);
+  assert.equal(comps.length, 1, 'one threshold piece');
+  const out = A.separate(sc.red, labels, comps);
+  assert.equal(out.length, 2, JSON.stringify(out.map(c => [c.size, c.centroid.map(Math.round)])));
+  const hi = out.find(c => c.centroid[2] > 50), lo = out.find(c => c.centroid[2] < 30);
+  assert.ok(hi && lo, 'one above the joint, one below'); assert.ok(hi.size > 15000 && lo.size > 12000, `${hi.size} ${lo.size}`);
+  // every voxel carries one of the two new labels (or a speck under the size limit)
+  let a = 0, b = 0; for (let v = 0; v < labels.length; v++) { if (labels[v] === hi.label) a++; else if (labels[v] === lo.label) b++; }
+  assert.equal(a, hi.size); assert.equal(b, lo.size);
+  const sc2 = scene(40, 40, 100, [[20, 20, 15]]); sc2.put(1, (i, j, k) => k >= 5 && k < 95 && Math.hypot(i - 20, j - 20) < 8);
+  const m2 = Uint8Array.from(sc2.lab, x => (x ? 1 : 0)), c2 = G.components(m2, 40, 40, 100, 10);
+  assert.equal(A.separate(sc2.red, c2.labels, c2.comps).length, 1, 'a shaft is not cut');
+});
 test('package: locked until reduction + engineer + surgeon approvals; holds the STLs, plan, report and approval log', () => {
   assert.equal(A.packReady(), false);
   const Au = W.Audit; assert.ok(Au);
