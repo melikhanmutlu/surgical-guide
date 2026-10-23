@@ -29,12 +29,29 @@ test('no canal marked: no canal rows, nothing in the plan (a plan saved before k
   assert.equal(St.planOf().ext.canal, undefined);
 });
 
+test('A5: no canal marked, screws in bone: the package is locked until the canal is checked; a moved screw asks again', async () => {
+  const gate = () => rows(/sinir kanalı işaretlenmedi|kanal kontrolünden sonra değişti/);
+  let r = gate(); assert.equal(r.length, 1, JSON.stringify(S.checkList.map(c => c[2])));
+  assert.equal(r[0][0], 'crit'); assert.equal(JSON.stringify(r[0][4]), JSON.stringify([['canalMark', 'Kanalı işaretle'], ['canalOk', 'Kanal kontrol edildi']]));
+  await St.runFix('canalOk'); assert.equal(gate().length, 0);
+  const ext = St.planOf().ext.canal; assert.ok(ext && typeof ext.checked === 'string' && !ext.canals.length, 'the check is in the plan');
+  // reopened: still checked
+  P.eval('PlanExt').canal.set(null); assert.equal(gate().length, 1); P.eval('PlanExt').canal.set(ext); assert.equal(gate().length, 0);
+  // a longer screw: asked again
+  S.screws[0].len += 2; r = gate(); assert.equal(r.length, 1); assert.match(r[0][2], /kanal kontrolünden sonra değişti/);
+  S.screws[0].len -= 2; assert.equal(gate().length, 0);
+  // the mark-the-canal fix starts the canal tool
+  await St.runFix('canalMark'); assert.equal(C().mode(), 'canal'); C().setMode('canal');
+  P.eval('PlanExt').canal.set(null);
+});
+
 test('tracing: two clicks off the canal axis, the path between them runs in the canal (within 1 mm of its axis)', () => {
   const c = C(); c.setMode('canal');
   assert.ok(c.active());
   c.pick([-36, 1.5, -15]); c.pick([36, -1, -17]);
   c.setMode('canal');
   assert.equal(S.canals.length, 1);
+  assert.equal(rows(/sinir kanalı işaretlenmedi/).length, 0, 'a marked canal opens the gate');
   const mid = S.canals[0].pts.filter(p => Math.abs(p[0]) < 25);
   assert.ok(mid.length > 30, `${mid.length} points`);
   const off = Math.max(...mid.map(p => Math.hypot(p[1] - v.expect.canal.y, p[2] - v.expect.canal.z)));

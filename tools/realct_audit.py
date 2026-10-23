@@ -121,6 +121,21 @@ def audit(kanit, baseline, allow_drift=False):
 CONTACT_MM = 2.0          # guide surface nearer the bone than this is its contact (seating) surface
 
 
+def crop_surface(crop):
+    """The bone surface of a production request's crop (kemik_kesit.json: crop, mask_b64, mask_scale): marching cubes
+    at the bone level (127.5 on the soft 0-255 mask, else 0.5), in world coordinates."""
+    from skimage.measure import marching_cubes
+    import base64
+    c = crop["crop"]; nx, ny, nz = c["nx"], c["ny"], c["nz"]
+    m = np.frombuffer(base64.b64decode(crop["mask_b64"]), np.uint8).reshape(nz, ny, nx).astype(np.float32)
+    lvl = 127.5 if crop.get("mask_scale") == 255 else 0.5
+    v, f, _, _ = marching_cubes(np.pad(m, 1), lvl)
+    v = v - 1
+    A, sp, o = np.array(c["axes"], float), np.array(c["sp"], float), np.array(c["origin"], float)
+    w = o + (v[:, 2:3] * sp[0]) * A[0] + (v[:, 1:2] * sp[1]) * A[1] + (v[:, 0:1] * sp[2]) * A[2]
+    return trimesh.Trimesh(w, f, process=False)
+
+
 def accuracy(kanit):
     """Accuracy measures of one run (plan 0.3), written to accuracy.json: how near the production guide's contact surface
     lies to the bone (it should sit at the planned clearance), how far the preview differs from the production STL, the
@@ -131,12 +146,17 @@ def accuracy(kanit):
     j = lambda n: json.load(open(os.path.join(real, n))) if os.path.exists(os.path.join(real, n)) else None
     prod, prev, bone = (os.path.join(real, n) for n in ("guide_uretim.stl", "guide_onizleme.stl", "kemik.stl"))
     pm = trimesh.load_mesh(prod, file_type="stl", process=True) if os.path.exists(prod) else None
-    if pm is not None and os.path.exists(bone):
-        bm = trimesh.load_mesh(bone, file_type="stl", process=True)
+    # the bone the contact is measured against: the CT's own threshold surface in the guide's crop (what the production
+    # server builds against, kemik_kesit.json from e2e B), else the bone STL (0.8 mm working mesh: its terraces read
+    # several tenths of a millimetre on their own, plan A4)
+    crop = j("kemik_kesit.json"); bm, ref = None, None
+    if crop: bm, ref = crop_surface(crop), "ct"
+    elif os.path.exists(bone): bm, ref = trimesh.load_mesh(bone, file_type="stl", process=True), "kemik_stl"
+    if pm is not None and bm is not None:
         pts, _ = trimesh.sample.sample_surface(pm, SAMPLES, seed=3)
         d = _to_surface(pts, bm); c = d[d < CONTACT_MM]
         g = (j("plan_frame.json") or {}).get("g") or {}
-        out["guide_bone"] = {"contact_share": round(float(len(c) / len(d)), 3), "planned_clear_mm": g.get("clear"),
+        out["guide_bone"] = {"bone_ref": ref, "contact_share": round(float(len(c) / len(d)), 3), "planned_clear_mm": g.get("clear"),
                              **({"p50_mm": round(float(np.percentile(c, 50)), 3), "p95_mm": round(float(np.percentile(c, 95)), 3), "p99_mm": round(float(np.percentile(c, 99)), 3)} if len(c) else {})}
     if pm is not None and os.path.exists(prev):
         out["preview_vs_production"] = distance(trimesh.load_mesh(prev, file_type="stl", process=True), pm)
@@ -146,10 +166,21 @@ def accuracy(kanit):
         if depth and o.get("blade") is not None:
             out["slot_play_deg"] = [round(float(np.degrees(np.arctan(max(0.0, w - o["blade"]) / depth))), 2) for w in o.get("slots") or []]
         if o.get("fibSegs") and o.get("fibSlots"):
-            P = [(np.array(q["p"]), np.array(q["N"]) / np.linalg.norm(q["N"])) for q in o["fibSlots"]]
-            gaps = [abs(float(np.dot(P[i + 1][0] - P[i][0], (P[i][1] + np.sign(np.dot(P[i][1], P[i + 1][1])) * P[i + 1][1]) / 2))) for i in range(len(P) - 1)]
-            out["fibula_segments"] = [{"planned_mm": round(L, 2), "slots_mm": round(min(gaps, key=lambda x: abs(x - L)), 2) if gaps else None,
-                                       "diff_mm": round(min(abs(x - L) for x in gaps), 2) if gaps else None} for L in o["fibSegs"]]
+            # the slots come in pairs, two per segment (its lower then its upper face); the graft face of a slot is its
+            # bone-side edge: the cut (the wider of the kerf and the slot) is centred on the slot, so the face lies half the
+            # cut from the slot centre towards the graft (plan A4: the old measure took the slot centres and counted the kerf)
+            kerf = float(o.get("kerf") or 0)
+            def face(q, side):
+                N = np.array(q["N"], float); N /= np.linalg.norm(N)
+                return np.array(q["p"], float) - side * N * max(float(q["w"]), kerf) / 2, N
+            segs = []
+            for k, L in enumerate(o["fibSegs"]):
+                if 2 * k + 1 >= len(o["fibSlots"]): break
+                (a0, n0), (a1, n1) = face(o["fibSlots"][2 * k], -1), face(o["fibSlots"][2 * k + 1], 1)
+                m = n0 + np.sign(np.dot(n0, n1)) * n1; m /= np.linalg.norm(m)
+                d = abs(float(np.dot(a1 - a0, m)))
+                segs.append({"planned_mm": round(L, 2), "slots_mm": round(d, 2), "diff_mm": round(abs(d - L), 2)})
+            out["fibula_segments"] = segs
     return out
 
 

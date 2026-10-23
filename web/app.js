@@ -267,7 +267,7 @@
   // depth the saw slot guides the blade over, from the guide's inner surface (a raised rim of bossW mm on each side of
   // the slot; 0 or anything up to the wall = no rim, the slot then guides over the wall only). Plan 1.3, Lohn 2025:
   // slot = blade + 0.1-0.3 mm, angular play atan((slot - blade) / depth) <= 3° (sample threshold, the clinical team sets it)
-  const G_DEFAULT = { rot: 0, roll: 0, L: 36, W: 22, wrap: 6, wall: 2.5, clear: 0.3, bridge: 4, side: 1, split: 0, flange: 3, peri: 0, fit: 0, stopT: 0, stopB: 0, stopL: 6, stopD: 5, kerfSide: 1, vc: 0, blade: 0.6, boss: 5, bossW: 2 };
+  const G_DEFAULT = { rot: 0, roll: 0, L: 36, W: 22, wrap: 6, wall: 2.5, clear: 0.3, bridge: 4, side: 1, split: 0, flange: 3, peri: 0, fit: 0, stopT: 0, stopB: 0, stopL: 6, stopD: 5, kerfSide: 1, vc: 0, blade: 0.6, boss: 5, bossW: 2, slotFlange: 0 };
   const SLOT_TOL = 0.2, SLOT_PLAY_MAX = 3;
   // the slot a new cut gets: the blade plus the material profile's tolerance (Mfg), else SLOT_TOL
   const slotDefault = () => Math.round(((S.g.blade || G_DEFAULT.blade) + (window.Mfg && Mfg.get().prof ? Mfg.get().slotTol : SLOT_TOL)) * 100) / 100;
@@ -448,7 +448,19 @@
     if (!(dz > 0)) return { error: 'Kesit aralığı hesaplanamadı (kesit konumları eksik ya da aynı).' };
     const pos = ser.map(s => V(...s.ipp).dot(nrm)), dzList = pos.slice(1).map((p, i) => p - pos[i]);
     const span = V(...ser.at(-1).ipp).sub(V(...ser[0].ipp));
-    const meta = { dzList, modality: (ds0.string('x00080060') || '').trim(), series: Object.keys(bySeries).length, picked: groups.length > 1,
+    // every slice against the first (plan B4): its orientation, its size and pixel spacing, and its position off the
+    // line through the first and last slice (a slice shifted in plane or turned: the volume would be sheared there)
+    const ang = (a, b) => THREE.MathUtils.radToDeg(V(...a).normalize().angleTo(V(...b).normalize()));
+    const psOf = s => (s.ds.string('x00280030') || '1\\1').split('\\').map(Number), q0 = V(...ser[0].ipp), sd = span.lengthSq() > 1e-9 ? span.clone().normalize() : nrm.clone();
+    const sliceChk = { dup: nIn - ser.length, iopDev: 0, iopBad: 0, sizeMix: 0, drift: 0, driftBad: 0 };
+    ser.forEach(s => {
+      const dv = Math.max(ang(s.iop.slice(0, 3), ser[0].iop.slice(0, 3)), ang(s.iop.slice(3), ser[0].iop.slice(3)));
+      sliceChk.iopDev = Math.max(sliceChk.iopDev, dv); if (dv > 0.5) sliceChk.iopBad++;
+      const q = psOf(s); if (s.ds.uint16('x00280010') !== rows || s.ds.uint16('x00280011') !== cols || Math.abs(q[0] - ps[0]) > 1e-3 || Math.abs(q[1] - ps[1]) > 1e-3) sliceChk.sizeMix++;
+      const w = V(...s.ipp).sub(q0), off = w.sub(sd.clone().multiplyScalar(w.dot(sd))).length();
+      sliceChk.drift = Math.max(sliceChk.drift, off); if (off > 0.5 * Math.min(ps[0], ps[1])) sliceChk.driftBad++;
+    });
+    const meta = { dzList, slices: sliceChk, modality: (ds0.string('x00080060') || '').trim(), series: Object.keys(bySeries).length, picked: groups.length > 1,
       thickness: parseFloat(ds0.string('x00180050')) || null, kernel: (ds0.string('x00181210') || '').trim(),
       tilt: ser.length > 1 ? THREE.MathUtils.radToDeg(span.angleTo(nrm)) : 0, bits: ds0.uint16('x00280101') || 16,
       ts: (ds0.string('x00020010') || '1.2.840.10008.1.2.1').replace(/\0/g, '').trim(),
@@ -561,6 +573,14 @@
       : ['crit', 'Kritik', `Kesit ${fmt(step, 2)} mm; guide tasarımı için çok kalın (≤ 1 mm gerekli).`]);
     const ps = Math.max(vol.sp[0], vol.sp[1]);
     out.push(ps <= 0.8 ? ['ok', 'Uygun', `Piksel aralığı ${fmt(ps, 2)} mm.`] : ['warn', 'Uyarı', `Piksel aralığı ${fmt(ps, 2)} mm; FOV daraltılarak çekim önerilir.`]);
+    // each slice against the series (plan B4): orientation, size / pixel spacing, in-plane position, repeats
+    const sc = m.slices;
+    if (sc) {
+      if (sc.iopBad) out.push(['crit', 'Kritik', `${sc.iopBad} kesitin yönü serinin ilk kesitinden ${fmt(sc.iopDev, 1)}°e kadar farklı; seri karışık ya da bozuk. Tek parça, yönü sabit bir seri kullanın.`]);
+      if (sc.sizeMix) out.push(['crit', 'Kritik', `${sc.sizeMix} kesitin boyutu ya da piksel aralığı seriden farklı; seri karışık. Tek bir rekonstrüksiyonu yükleyin.`]);
+      if (sc.driftBad) out.push(['crit', 'Kritik', `${sc.driftBad} kesit seri hattından ${fmt(sc.drift, 2)} mm'ye kadar kaymış; hacim o bölgede eğri örneklenir. Seriyi kontrol edin.`]);
+      if (sc.dup) out.push(['crit', 'Kritik', `${sc.dup} kesit aynı konumda iki kez var (ikinci bir çekim karışmış olabilir); ilki kullanıldı. Tek bir çekimin serisini yükleyin.`]);
+    }
     if (m.dzList && m.dzList.length > 1) {
       const sorted = m.dzList.slice().sort((a, b) => a - b), med = sorted[sorted.length >> 1];
       const bad = m.dzList.filter(d => Math.abs(d - med) > 0.1).length;
@@ -1913,7 +1933,7 @@
     // optional stops: lips past the upper / lower guide edge that reach around the bone edge (crest, lower border)
     const sUp = stopSides(g, v), anyStop = sUp.pos || sUp.neg, stopX = anyStop ? (g.stopL || 6) : 0, stopZ = anyStop ? (g.stopD || 5) : 0, vc = g.vc || 0;
     const uc = g.uc || 0;
-    const lo = [uc - g.L / 2 - 4, vc - g.W / 2 - 4 - stopX, -Math.max(g.wrap + 10, 30) - Math.max(0, g.L / 2 - 15) * 0.6], hi = [uc + g.L / 2 + 4, vc + g.W / 2 + 4 + stopX, g.clear + Math.max(g.wall + Math.max(maxSleeve, g.bridge), g.boss || 0) + 6];
+    const flX = g.slotFlange > 0 ? g.slotFlange : 0, lo = [uc - g.L / 2 - 4, vc - g.W / 2 - 4 - Math.max(stopX, flX), -Math.max(g.wrap + 10, 30) - Math.max(0, g.L / 2 - 15) * 0.6], hi = [uc + g.L / 2 + 4, vc + g.W / 2 + 4 + Math.max(stopX, flX), g.clear + Math.max(g.wall + Math.max(maxSleeve, g.bridge), g.boss || 0) + 6];
     const nx = Math.ceil((hi[0] - lo[0]) / h) + 1, ny = Math.ceil((hi[1] - lo[1]) / h) + 1, nz = Math.ceil((hi[2] - lo[2]) / h) + 1, N = nx * ny * nz, nxy = nx * ny;
     const toWorld = (a, b, c) => { const x = lo[0] + a * h, y = lo[1] + b * h, z = lo[2] + c * h; return [P.x + u.x * x + v.x * y + n.x * z, P.y + u.y * x + v.y * y + n.y * z, P.z + u.z * x + v.z * y + n.z * z]; };
     if (ctx.field && ctx.field.prepare) { const cs = []; for (const a of [0, nx - 1]) for (const b of [0, ny - 1]) for (const c of [0, nz - 1]) cs.push(toWorld(a, b, c)); ctx.field.prepare(cs); }
@@ -1965,7 +1985,7 @@
       return { inBone: Math.min(inBone, s.sc.len), crossesPlane, slotGap, exitAt, cutGap };
     });
     const K = { h, lo, nx, ny, nz, B, soft, sUp, stopX, stopZ, vc, uc, slots, gp, screws: kScrews, seatDir: ctx.seatDir || null, fast: !!ctx.fast,
-      g: { wrap: g.wrap, wrapU: g.wrapU || null, L: g.L, W: g.W, clear: g.clear, peri: g.peri || 0, wall: g.wall, bridge: g.bridge, side: g.side, skirt: g.skirt, fit: g.fit || 0, boss: g.boss || 0, bossW: g.bossW || 2 },
+      g: { wrap: g.wrap, wrapU: g.wrapU || null, L: g.L, W: g.W, clear: g.clear, peri: g.peri || 0, wall: g.wall, bridge: g.bridge, side: g.side, skirt: g.skirt, fit: g.fit || 0, boss: g.boss || 0, bossW: g.bossW || 2, slotFlange: g.slotFlange || 0 },
       // winding follows the grid -> world map, which is a reflection when (u, v, n) is left-handed
       mirror: u.dot(new THREE.Vector3().crossVectors(v, n)) < 0, debugFp: ctx.debugFp || null };
     const k = await kernel(K, onP ? f => onP(0.08 + 0.87 * f) : null);
@@ -3507,7 +3527,7 @@
   }
 
   // ---------- controls wiring ----------
-  const gFields = [['rot', 'Yüzeyde döndür', -180, 180, 1, '°'], ['roll', 'Kemik etrafında kaydır', -180, 180, 1, '°'], ['L', 'Uzunluk', 16, 160, 1, 'mm'], ['W', 'Genişlik', 10, 40, 1, 'mm'], ['wrap', 'Sarma derinliği', 2, 20, 0.5, 'mm'], ['wall', 'Duvar kalınlığı', 1.5, 5, 0.1, 'mm'], ['clear', 'Kemik aralığı', 0, 1, 0.05, 'mm'], ['bridge', 'Köprü genişliği', 2, 10, 0.5, 'mm'], ['flange', 'Kesi ötesi kenar', 2, 8, 0.5, 'mm'], ['peri', 'Periost payı', 0, 1, 0.05, 'mm'], ['blade', 'Testere bıçağı kalınlığı', 0.3, 1.5, 0.05, 'mm'], ['boss', 'Yuva kılavuz derinliği', 0, 10, 0.5, 'mm']];
+  const gFields = [['rot', 'Yüzeyde döndür', -180, 180, 1, '°'], ['roll', 'Kemik etrafında kaydır', -180, 180, 1, '°'], ['L', 'Uzunluk', 16, 160, 1, 'mm'], ['W', 'Genişlik', 10, 40, 1, 'mm'], ['wrap', 'Sarma derinliği', 2, 20, 0.5, 'mm'], ['wall', 'Duvar kalınlığı', 1.5, 5, 0.1, 'mm'], ['clear', 'Kemik aralığı', 0, 1, 0.05, 'mm'], ['bridge', 'Köprü genişliği', 2, 10, 0.5, 'mm'], ['flange', 'Kesi ötesi kenar', 2, 8, 0.5, 'mm'], ['peri', 'Periost payı', 0, 1, 0.05, 'mm'], ['blade', 'Testere bıçağı kalınlığı', 0.3, 1.5, 0.05, 'mm'], ['boss', 'Yuva kılavuz derinliği', 0, 10, 0.5, 'mm'], ['slotFlange', 'Yuva flaşı (kenar dışına)', 0, 6, 0.5, 'mm']];
   $('gCtl').innerHTML = gFields.map(([k, t, mn, mx, st]) => `<div class="ctl" id="gc_${k}"><div class="ctl-row"><label for="g_${k}">${t}</label><output id="go_${k}"></output></div><input type="range" id="g_${k}" min="${mn}" max="${mx}" step="${st}"></div>`).join('') +
     '<h3 class="sub">Gövde</h3><details class="sub-d" id="secGFine"><summary>İnce ayar: duvar, aralık, periost</summary><div class="col" id="gFine"></div></details>';
   // placement first, then body size; wall and clearances rarely change, so they sit folded at the end
@@ -3727,7 +3747,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     const { vol, g } = c, arr = q => [q.x, q.y, q.z];
     const top = g.clear + Math.max(g.wall + Math.max(g.bridge, 0, ...c.scs.map(s => s.sc.sleeveH)), g.boss || 0) + 6;
     const ss = stopSides(g, c.v), sx = ss.pos || ss.neg ? (g.stopL || 6) : 0, sz = ss.pos || ss.neg ? (g.stopD || 5) : 0;
-    const deep = Math.max(g.wrap + 4, ...(c.wrapProfile || []).map(q => 4 - q[1])) + sz, R = Math.hypot(Math.abs(g.uc || 0) + g.L / 2 + 4, Math.abs(g.vc || 0) + g.W / 2 + 4 + sx, Math.max(deep, top)) + 6, ic = G.indexOf(vol, arr(c.P)), dims = [vol.nx, vol.ny, vol.nz];
+    const deep = Math.max(g.wrap + 4, ...(c.wrapProfile || []).map(q => 4 - q[1])) + sz, R = Math.hypot(Math.abs(g.uc || 0) + g.L / 2 + 4, Math.abs(g.vc || 0) + g.W / 2 + 4 + Math.max(sx, g.slotFlange > 0 ? g.slotFlange : 0), Math.max(deep, top)) + 6, ic = G.indexOf(vol, arr(c.P)), dims = [vol.nx, vol.ny, vol.nz];
     const lo = [0, 1, 2].map(a => Math.max(0, Math.floor(ic[a] - R / vol.sp[a]))), hi = [0, 1, 2].map(a => Math.min(dims[a] - 1, Math.ceil(ic[a] + R / vol.sp[a])));
     const [nx, ny, nz] = [0, 1, 2].map(a => hi[a] - lo[a] + 1);
     if (nx < 2 || ny < 2 || nz < 2) throw new Error('Guide bölgesi hacmin dışında.');

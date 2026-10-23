@@ -13,7 +13,8 @@ window.Seat = (() => {
   const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
   const norm = a => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
   const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-  const FREE_MM2 = 2;   // projected overhang (mm²) tolerated as voxel noise: about a 1.4 mm square
+  const FREE_MM2 = 2;
+  const AXIS_REACH = 20;   // mm around the contact centroid searched for the least resisted axis along u   // projected overhang (mm²) tolerated as voxel noise: about a 1.4 mm square
   function basis(d) { const t = Math.abs(d[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0], a = norm(cross(t, d)); return [a, cross(d, a)]; }
 
   function analyze({ Gm, B, D, nx, ny, nz, h, lo, clear }) {
@@ -79,7 +80,21 @@ window.Seat = (() => {
       const ww = w.map(x => x * sg); rots.push({ axis: name, sign: sg, r: resisted(r => cross(ww, [r[0] - c[0], r[1] - c[1], r[2] - c[2]])) });
     }));
     const worstSlide = slides.reduce((a, b) => (b.r < a.r ? b : a)), worstRot = rots.reduce((a, b) => (b.r < a.r ? b : a));
-    return { ok: true, area, dirs, free: free.length, best, blockPts, slides, rots, worstSlide, worstRot, ms: performance.now() - t0 };
+    // rotation about the bone axis (u) through the best point (plan A2): a shell on a round shaft turns about the
+    // shaft's own axis, not about the contact centroid, which lies on the shell. The axis parallel to u is moved over a
+    // 1 mm grid within ±AXIS_REACH mm of the centroid (in v and n), inside the bone (an axis outside it turns the guide
+    // off the bone, which the hand pressing it on holds), and the least resisted position is kept.
+    let axisU = null;
+    const ci = Math.min(nx - 1, Math.max(0, Math.round((c[0] - lo[0]) / h)));
+    for (let dy = -AXIS_REACH; dy <= AXIS_REACH; dy += 1) for (let dz = -AXIS_REACH; dz <= AXIS_REACH; dz += 1) for (const sg of [1, -1]) {
+      const cy = c[1] + dy, cz = c[2] + dz, cj = Math.round((cy - lo[1]) / h), ck = Math.round((cz - lo[2]) / h); let r = 0;
+      if (cj < 0 || ck < 0 || cj >= ny || ck >= nz || !B[ci + nx * (cj + ny * ck)]) continue;
+      // m = sg·u × (q - axis point) = sg·[0, -(z - cz), y - cy]
+      for (const q of contacts) { const my = -sg * (q.r[2] - cz), mz = sg * (q.r[1] - cy), l = Math.hypot(my, mz); if (l > 1e-9 && my * q.n[1] + mz * q.n[2] < -0.17 * l) r++; }
+      r /= contacts.length;
+      if (!axisU || r < axisU.r) axisU = { r, sign: sg, at: [c[0], cy, cz] };
+    }
+    return { ok: true, area, dirs, free: free.length, best, blockPts, slides, rots, worstSlide, worstRot, axisU, ms: performance.now() - t0 };
   }
   return { analyze, FREE_MM2 };
 })();

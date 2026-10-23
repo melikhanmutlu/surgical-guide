@@ -88,6 +88,23 @@ test('D4: of two real series of the same coverage the bone-kernel one opens firs
   const ctl = St.startLoad(), r = await St.readDicom(ser24('1.2.40.1', 'STANDARD', 'STND', 0).concat(ser24('1.2.40.2', 'BONE', 'Bone', 100)), ctl);
   assert.ok(!r.error, r.error); assert.equal(r.vol.meta.kernel, 'BONE'); assert.equal(r.scan.cur, r.cur); assert.equal(r.scan.groups[r.cur][0].series.replace(/\0/g, ''), '1.2.40.2');
 });
+// plan B4: each slice is checked against the series: a turned slice, a slice of another size, a slice shifted in
+// plane and a repeated position are critical (the volume would be sheared or mixed there); a clean series has none
+test('B4: per-slice orientation, size, in-plane position and repeats are checked; a clean series passes', async () => {
+  const mk = (k, o = {}) => new File([dicom(Object.assign({ rows: 8, cols: 8, pixels: px(64, i => 1200 * ((i + k) % 3 === 0)), ipp: [0, 0, k], iop: [1, 0, 0, 0, 1, 0], ps: [1, 1], series: '1.2.41.' + (o.uid || 1), sop: `1.2.41.9.${k}`, thickness: 1, icpt: -1024, slope: 1 }, o))], `b4_${k}.dcm`);
+  const crit = async files => { const r = await St.readDicom(files, St.startLoad()); assert.ok(!r.error, r.error); return St.qualityCheck(r.vol).filter(c => c[0] === 'crit').map(c => c[2]); };
+  const clean = Array.from({ length: 12 }, (_, k) => mk(k));
+  assert.equal(JSON.stringify(await crit(clean)), "[]");
+  const turned = clean.slice(); turned[5] = mk(5, { iop: [Math.cos(0.05), Math.sin(0.05), 0, -Math.sin(0.05), Math.cos(0.05), 0] });
+  assert.ok((await crit(turned)).some(t => /1 kesitin yönü serinin ilk kesitinden 2,9°e kadar farklı/.test(t)));
+  const shifted = clean.slice(); shifted[6] = mk(6, { ipp: [2, 0, 6] });
+  assert.ok((await crit(shifted)).some(t => /1 kesit seri hattından 2,00 mm'ye kadar kaymış/.test(t)));
+  const sized = clean.slice(); sized[3] = mk(3, { ps: [1.2, 1.2] });
+  assert.ok((await crit(sized)).some(t => /1 kesitin boyutu ya da piksel aralığı seriden farklı/.test(t)));
+  const twice = clean.concat([mk(4, { sop: '1.2.41.9.99' })]);
+  assert.ok((await crit(twice)).some(t => /1 kesit aynı konumda iki kez var/.test(t)));
+});
+
 test('W17: a series switch that is cancelled leaves the list on the series that is loaded', async () => {
   S.anchor = null; S.planes = []; S.screws = [];
   const f = el('dicomFiles'); f.files = ser24('1.2.41.1', 'STANDARD', 'STND', 200).concat(ser24('1.2.41.2', 'BONE', 'Bone', 300)); fire('dicomFiles', 'change');

@@ -66,4 +66,15 @@ test('units (Denetim 4 W15): the block is the projected overhang area in mm², t
   assert.ok(speck.dirs[0].block > 0 && speck.dirs[0].block < Seat.FREE_MM2 && speck.best.tilt === 0, JSON.stringify(speck.dirs[0]));
 });
 
+test('A2: a shell on a round shaft (the fibula) resists neither rotation about the shaft axis nor sliding along it', () => {
+  // shaft along x (u), radius 6 voxels, centre at j = 10, k = 8; the guide wraps the upper half (0.3 mm off)
+  const r = Seat.analyze(grid(NX, NY, NZ, (i, j, k) => Math.hypot(j - 10, k - 8) < 6, (i, j, k) => { const d = Math.hypot(j - 10, k - 8); return i > 3 && i < 26 && d >= 6.6 && d < 10 && k >= 8; }));
+  assert.ok(r.ok && r.free > 0);
+  const rotU = r.axisU.r, slideU = Math.min(...r.slides.filter(x => Math.abs(x.dir[0]) > 0.7).map(x => x.r));
+  assert.ok(rotU < 0.05, 'rotation about the shaft resisted by ' + rotU); assert.ok(slideU < 0.05, 'slide along the shaft resisted by ' + slideU);
+  assert.ok(Math.hypot(r.axisU.at[1] - 5, r.axisU.at[2] - 4) < 3, 'the free axis runs inside the shaft: ' + r.axisU.at);
+  // rotation about the lateral axis is resisted (the shell would lift off one end)
+  assert.ok(Math.min(...r.rots.filter(x => x.axis === 'v').map(x => x.r)) > 0.05);
+});
+
 await run('seat.js');

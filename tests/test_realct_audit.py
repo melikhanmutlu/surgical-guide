@@ -90,6 +90,31 @@ class Audit(unittest.TestCase):
         # a run without these files: no measures, no error
         self.assertEqual(A.accuracy(run_dir(sphere())), {})
 
+    def test_accuracy_a4_kerf_and_ct_surface(self):
+        """plan A4: a 20 mm segment whose slots (0.8 mm) sit in a 1.0 mm kerf reads 20 mm, not 21 (the old measure took
+        the slot centres); the contact is measured against the CT's threshold surface (kemik_kesit.json) when the run has
+        it: a guide 0.3 mm off a sphere reads 0.3 even when the bone STL is a coarse voxel mesh."""
+        import base64
+        guide = trimesh.creation.icosphere(subdivisions=5, radius=10.3)
+        k = run_dir(guide); r = os.path.join(k, "real")
+        trimesh.creation.icosphere(subdivisions=4, radius=10.0).voxelized(1.6).marching_cubes.export(os.path.join(r, "kemik.stl"))
+        sp, n = 0.6, 46; ax = (np.arange(n) - (n - 1) / 2) * sp; Z, Y, X = np.meshgrid(ax, ax, ax, indexing="ij")
+        occ = np.clip(0.5 + (10.0 - np.sqrt(X * X + Y * Y + Z * Z)) / sp, 0, 1)
+        mask = np.where(occ >= 0.5, np.maximum(128, np.round(occ * 255)), np.minimum(127, np.round(occ * 255))).astype(np.uint8)
+        with open(os.path.join(r, "kemik_kesit.json"), "w") as f:
+            json.dump({"crop": {"nx": n, "ny": n, "nz": n, "sp": [sp] * 3, "origin": [float(ax[0])] * 3, "axes": [[1, 0, 0], [0, 1, 0], [0, 0, 1]]},
+                       "mask_b64": base64.b64encode(mask.tobytes()).decode(), "mask_scale": 255}, f)
+        with open(os.path.join(r, "plan_frame.json"), "w") as f: json.dump({"g": {"clear": 0.3}}, f)
+        with open(os.path.join(r, "olcum.json"), "w") as f:
+            json.dump({"kerf": 1.0, "fibSegs": [20.0], "fibSlots": [{"p": [-0.5, 0, 0], "N": [1, 0, 0], "w": 0.8}, {"p": [20.5, 0, 0], "N": [1, 0, 0], "w": 0.8}]}, f)
+        a = A.accuracy(k)
+        self.assertEqual(a["guide_bone"]["bone_ref"], "ct")
+        self.assertAlmostEqual(a["guide_bone"]["p50_mm"], 0.3, delta=0.05)
+        self.assertEqual(a["fibula_segments"], [{"planned_mm": 20.0, "slots_mm": 20.0, "diff_mm": 0.0}])
+        # without the crop: the bone STL, said so
+        os.remove(os.path.join(r, "kemik_kesit.json"))
+        self.assertEqual(A.accuracy(k)["guide_bone"]["bone_ref"], "kemik_stl")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

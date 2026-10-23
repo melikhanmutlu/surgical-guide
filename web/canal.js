@@ -206,8 +206,23 @@ window.Canal = (function () {
     return out;
   }
   const SCREW_LEN_MIN = 6;
+  // plan A5, the gate: a case without a marked canal has screws nobody checked against it. Until the canal is marked or
+  // the surgeon says it was checked on the slices ("Kanal kontrol edildi", tied to the screws as they are: a moved,
+  // added or longer screw asks again) the package stays locked.
+  const r1 = x => Math.round(x * 2) / 2;
+  function screwKey() {
+    const g = S.guideOn && St.screwsWorld ? St.screwsWorld().filter(w => w.entry).map(w => [w.entry.x, w.entry.y, w.entry.z, w.dir.x * 10, w.dir.y * 10, w.dir.z * 10, w.sc.len].map(r1)) : [];
+    const p = plateScrews().map(q => [q.entry.x, q.entry.y, q.entry.z, q.len].map(r1));
+    return g.length || p.length ? JSON.stringify([g, p]) : null;
+  }
+  function gate() {
+    if (S.canals.length || (window.Ankle && Ankle.on && Ankle.on()) || S.kind !== 'dicom') return null;
+    const k = screwKey(); if (!k || S.canalChecked === k) return null;
+    return S.canalChecked ? 'changed' : 'unmarked';
+  }
   (window.ExtraChecks = window.ExtraChecks || []).push(() => {
-    const out = [], f = findings();
+    const out = [], f = findings(), gt = gate();
+    if (gt) out.push(['crit', 'Kritik', (gt === 'changed' ? xl('Vidalar kanal kontrolünden sonra değişti; alt alveoler sinir kanalına karşı yeniden kontrol edilmedi.') : xl('Alt alveoler sinir kanalı işaretlenmedi; guide ve plak vidaları kanala karşı kontrol edilmedi.')) + ' ' + xl('Kanalı kesitlerde işaretleyin ya da kesitlerde kontrol edip onaylayın.'), 'guide', [['canalMark', 'Kanalı işaretle'], ['canalOk', 'Kanal kontrol edildi']]]);
     f.guide.forEach(g => {
       if (g.cl < SAFE) out.push(['crit', 'Kritik', xl(`Vida ${g.i + 1} alt alveoler sinir kanalına ${fmt(Math.max(0, g.cl), 1)} mm (en az ${SAFE} mm).`) + ' ' + xl('Vidayı kısaltın ya da kanaldan uzağa taşıyın.'), 's' + g.i, g.fit != null && g.fit >= SCREW_LEN_MIN ? [['canalLen', 'Vidayı kanaldan önce bitir']] : undefined]);
       g.roots.forEach(k => out.push(['crit', 'Kritik', xl(`Vida ${g.i + 1} diş kökünü geçiyor (kök ${k}).`) + ' ' + xl('Vidayı kökler arasına taşıyın.'), 's' + g.i]));
@@ -218,8 +233,10 @@ window.Canal = (function () {
     });
     return out.map(r => (r[4] === undefined ? r.slice(0, 4) : r));
   });
+  (window.FixHooks = window.FixHooks || {}).canalOk = async () => { S.canalChecked = screwKey(); render(); St.emit('changed'); };
+  FixHooks.canalMark = async () => { if (window.UI && UI.openStep) UI.openStep('st6'); if (mode !== 'canal') setMode('canal'); };
   // the fix: every guide screw too near the canal ends SAFE mm short of it (not below SCREW_LEN_MIN)
-  (window.FixHooks = window.FixHooks || {}).canalLen = async () => {
+  FixHooks.canalLen = async () => {
     findings().guide.forEach(g => {
       if (g.fit == null || g.fit < SCREW_LEN_MIN) return;
       const sc = S.screws[g.i]; if (sc && sc.len > g.fit) { sc.len = g.fit; if (St.unapprove) St.unapprove(sc); }
@@ -229,15 +246,16 @@ window.Canal = (function () {
 
   // ---------- plan ----------
   (window.PlanExt = window.PlanExt || {}).canal = {
-    get: () => (S.canals.length || S.roots.length ? JSON.parse(JSON.stringify({ canals: S.canals, roots: S.roots })) : undefined),
+    get: () => (S.canals.length || S.roots.length || S.canalChecked ? JSON.parse(JSON.stringify(Object.assign({ canals: S.canals, roots: S.roots }, S.canalChecked ? { checked: S.canalChecked } : {}))) : undefined),
     set: v => {
       const ok = p => Array.isArray(p) && p.length === 3 && p.every(Number.isFinite);
       S.canals = v && Array.isArray(v.canals) ? v.canals.filter(c => c && Array.isArray(c.pts) && c.pts.length && c.pts.every(ok)).map(c => ({ keys: (c.keys || []).filter(ok), pts: c.pts })) : [];
       S.roots = v && Array.isArray(v.roots) ? v.roots.filter(rt => rt && ok(rt.a) && ok(rt.b)).map(rt => ({ a: rt.a, b: rt.b, r: Number.isFinite(rt.r) && rt.r > 0.5 && rt.r < 6 ? rt.r : R_ROOT })) : [];
+      S.canalChecked = v && typeof v.checked === 'string' && v.checked.length < 20000 ? v.checked : null;
       mode = null; keys = []; cur = -1; draw(); render();
     },
   };
-  bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring)) { S.canals = []; S.roots = []; mode = null; keys = []; cur = -1; draw(); render(); } });
+  bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring)) { S.canals = []; S.roots = []; S.canalChecked = null; mode = null; keys = []; cur = -1; draw(); render(); } });
 
   // ---------- wiring: 3D clicks (the Tools chain), slices (mpr.js), Esc ----------
   const prevTools = window.Tools;
@@ -253,5 +271,5 @@ window.Canal = (function () {
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && mode) setMode(mode); });
   St.onEndModes(() => { if (mode) setMode(mode); });
   render();
-  return { active: () => !!mode, mode: () => mode, setMode, pick, trace, segSeg, canalClear, rootsHit, maxLen, findings, R_CANAL, SAFE, R_ROOT };
+  return { active: () => !!mode, mode: () => mode, setMode, pick, trace, segSeg, canalClear, rootsHit, maxLen, findings, gate, screwKey, R_CANAL, SAFE, R_ROOT };
 })();

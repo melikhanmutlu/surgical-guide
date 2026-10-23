@@ -257,7 +257,15 @@ if (require.main === module) (async () => {
     fs.writeFileSync(path.join(REAL, 'plan_frame.json'), JSON.stringify(await h.ev(() => { const f = Studio.frameAxes(), v = x => x.toArray(); return { anchor: v(Studio.S.anchor.p), u: v(f.u), v: v(f.v), n: v(f.n), planesWorld: Studio.planesWorld().map(p => ({ off: p.off, w: p.w, p: v(p.p), N: v(p.N) })), screwsWorld: Studio.S.screws.map(sc => { const s = Studio.screwWorld(sc); return { sc, dir: v(s.dir), entry: s.entry && v(s.entry) }; }), g: Studio.S.g, source: Studio.S.source, vol: { dims: [Studio.S.vol.nx, Studio.S.vol.ny, Studio.S.vol.nz], sp: Studio.S.vol.sp, origin: Studio.S.vol.origin, axes: Studio.S.vol.axes }, thr: document.getElementById('thr').value }; }), null, 1));
     // what the accuracy measures read (tools/realct_audit.py accuracy): the fibula segments and its guide's slots
     fs.writeFileSync(path.join(REAL, 'olcum.json'), JSON.stringify(await h.ev(() => { const st = window.Fibula && Fibula.state(), S = Studio.S, v = x => x.toArray();
-      return { fibSegs: st && st.last ? st.last.segs.map(s => s.L) : null, fibSlots: S.fib && S.fib.guide && S.fib.guide.ctx ? S.fib.guide.ctx.pls.map(p => ({ p: v(p.pSlot || p.p), N: v(p.N), w: p.w })) : null, blade: S.g.blade, boss: S.g.boss, wall: S.g.wall, slots: S.planes.map(p => p.w) }; }), null, 1));
+      return { fibSegs: st && st.last ? st.last.segs.map(s => s.L) : null, fibSlots: S.fib && S.fib.guide && S.fib.guide.ctx ? S.fib.guide.ctx.pls.map(p => ({ p: v(p.pSlot || p.p), N: v(p.N), w: p.w })) : null, blade: S.g.blade, boss: S.g.boss, wall: S.g.wall, slots: S.planes.map(p => p.w), kerf: window.Fibula && Fibula.plan() ? Fibula.plan().kerf : null }; }), null, 1));
+    // the bone the production server builds the mandible guide against (its request's crop at the CT's resolution): the
+    // contact measure reads the guide against this surface, not the 0.8 mm bone STL (plan A4)
+    { const crop = await h.ev(() => { const S = Studio.S, St = Studio; if (!S.guideOn || !S.anchor) return null;
+        const pt = S.result && S.result.parts && S.result.parts[0];
+        const c = pt ? Object.assign({ vol: S.vol, red: S.red, F: S.maskF, thr: St.segThr(), g: pt.g, P: pt.frame.P, pls: pt.pls, gap: pt.gap, scs: pt.scs, wrapProfile: pt.wrapProfile }, pt.frame)
+          : Object.assign({ vol: S.vol, red: S.red, F: S.maskF, thr: St.segThr(), g: S.g, P: S.anchor.p, pls: St.planesWorld(), scs: St.screwsWorld(), wrapProfile: S.result && S.result.wrapProfile }, St.frameAxes());
+        const q = St.guideRequest(c); return { crop: q.crop, mask_b64: q.mask_b64, mask_scale: q.mask_scale || null }; });
+      if (crop) fs.writeFileSync(path.join(REAL, 'kemik_kesit.json'), JSON.stringify(crop)); }
     // the single files from the Teslim list too
     for (const k of ['guide', 'bone', 'res', 'full']) {
       try { const [d] = await Promise.all([page.waitForEvent('download', { timeout: 120000 }), page.click(`#oneStl button[data-one="${k}"]`)]); const p = path.join(h.SCRATCH, 'real_' + d.suggestedFilename()); await d.saveAs(p); out.push(`${d.suggestedFilename()} ${fs.statSync(p).size} B`); if (k === 'guide') fs.copyFileSync(p, path.join(REAL, 'tek_' + d.suggestedFilename())); if (k === 'bone') fs.copyFileSync(p, path.join(REAL, 'kemik.stl')); } catch (e) { out.push(`${k}: ${e.message.slice(0, 50)}`); }

@@ -44,9 +44,12 @@ window.Fibula = (function () {
   // vOff: graft shift towards the occlusal plane; dbl: double barrel (a second strut stacked dblH mm above);
   // fg / fsc: fibula guide body and screw edits (null = automatic)
   // nAuto: the segment count is still chosen from the defect (pressing a count button takes it over by hand)
-  // kerf: the saw blade (bone taken by one cut); slotW: width of the guide's saw slot (null = the kerf, as it was before
-  // the two were separate). The slot lies outside each graft face, so the graft keeps its planned length.
-  const defaultPlan = () => ({ source: null, cand: null, mirror: 0, n: 2, nAuto: 1, knots: [0.5], yaw: [0, 0, 0], pitch: [0, 0, 0], roll: [0, 0], rollAuto: 1, side: null, kerf: 1.0, slotW: null, distal: 70, vOff: 0, dbl: 0, dblH: null, fg: null, fsc: null, ok: false });
+  // kerf: the bone taken by one cut (the blade plus its tooth set); slotW: width of the guide's saw slot (null = the
+  // kerf, as plans made before the two were separate). The saw is the mandible's (S.g.blade): a new plan's slot is the
+  // blade plus the tolerance (Studio.slotDefault), so the blade cannot tilt in it (plan A1). The cut (the wider of the
+  // kerf and the slot) lies outside each graft face, so the graft keeps its planned length. boss: the slot rim height
+  // of the fibula guide (as the mandible guide's g.boss; absent = 0, plans made before it)
+  const defaultPlan = () => ({ source: null, cand: null, mirror: 0, n: 2, nAuto: 1, knots: [0.5], yaw: [0, 0, 0], pitch: [0, 0, 0], roll: [0, 0], rollAuto: 1, side: null, kerf: 1.0, slotW: St.slotDefault ? St.slotDefault() : null, boss: St.G_DEFAULT ? St.G_DEFAULT.boss : 0, distal: 70, vOff: 0, dbl: 0, dblH: null, fg: null, fsc: null, ok: false });
   // A segment count is acceptable when every segment is >= minLen and, with two or more segments, the two at the stumps
   // are >= stumpMin (a single segment touches both stumps and no other count makes it longer).
   const lensOk = (lens, minLen = MIN_LEN, stumpMin = STUMP_MIN) => lens.every(x => x >= minLen - 1e-9) && (lens.length < 2 || (lens[0] >= stumpMin - 1e-9 && lens[lens.length - 1] >= stumpMin - 1e-9));
@@ -512,7 +515,7 @@ window.Fibula = (function () {
     // Space between two segments on the fibula: both saw slots (each slot lies outside its graft face) and a bone bridge
     // of at least wedgeBridge mm between them over the whole section (radius FR), so the two cuts never meet in the
     // bone and the guide keeps a wall between its two slots. Tilted cuts close in by FR·tan(angle) at the section edge.
-    const R = rules(), FRm = F.c.FRm || FR, slx = v => slotOf(P0) / Math.max(0.5, Math.abs(v.x));
+    const R = rules(), FRm = F.c.FRm || FR, slx = v => cutOf(P0) / Math.max(0.5, Math.abs(v.x));
     // (Denetim 5 F4: the closure uses the thickest section radius, not the 90th percentile, and each slot is as thick along the
     // axis as its face is oblique to it)
     const between = (pe, n0) => slx(pe) + slx(n0) + R.wedgeBridge + FRm * (tilt(pe) + tilt(n0));
@@ -682,18 +685,21 @@ window.Fibula = (function () {
     const scs = fsc.map(f => { const st = screwAt(c, f); return { sc: { d: f.d, D: f.D, sleeveH: f.sleeveH, len: f.len }, dir: st.dir, entry: st.entry }; });
     return { g, P: Pg, u: u.clone(), v, n, pls, scs, fsc, bone: fibBone, field: St.guideField ? St.guideField(F.vol, F.red, F.c.Fm, F.thr) : q => St.fieldAt(F.red, F.c.Fm, [q.x, q.y, q.z]) };   // (the production server's bone: Studio.guideField)
   }
-  // effective slot width: the plan's slot (never narrower than the blade), else the blade itself (the old single value)
-  const slotOf = P0 => Math.max(P0.kerf, P0.slotW == null ? P0.kerf : P0.slotW);
+  // effective slot width: the plan's slot (never narrower than the blade), else the kerf (the old single value); the cut
+  // takes the wider of the kerf and the slot
+  const blade = () => (S.g && S.g.blade) || 0.6;
+  const slotOf = P0 => (P0.slotW == null ? P0.kerf : Math.max(blade(), P0.slotW));
+  const cutOf = P0 => Math.max(P0.kerf, slotOf(P0));
   // saw slots of the fibula guide: one outside each graft face (p = the face, pSlot = the slot centre, w = slot width);
   // the guide and the production STL open the slot at pSlot, the screw checks measure the distance to the cut at p
   function slotPlanes(c) {
-    const u = F.c.FA[0], sw = slotOf(plan()), out = [];
+    const u = F.c.FA[0], sw = slotOf(plan()), cw = cutOf(plan()), out = [];
     c.segs.forEach(sg => {
       const o = offAt((sg.s0 + sg.s1) / 2);
       [[sg.s0, sg.n0, -1], [sg.s1, sg.n1, 1]].forEach(([s, nl, side]) => {
         const N = dirFib(nl); if (N.dot(u) < 0) N.negate();
         const p = toFib(s, o[0], o[1]);
-        out.push({ p, pSlot: p.clone().add(N.clone().multiplyScalar(side * sw / 2)), N, w: sw });
+        out.push({ p, pSlot: p.clone().add(N.clone().multiplyScalar(side * cw / 2)), N, w: sw });
       });
     });
     return out;
@@ -887,7 +893,7 @@ window.Fibula = (function () {
     // the rib on the edge the slot cuts off) and never past the ends of the bone
     lo = Math.max(lo, sA - Math.max(e.Lm, SLOT_END_MAX), F.c.smin - 4); hi = Math.min(hi, sB + Math.max(e.Lm, SLOT_END_MAX), F.c.smax + 4);
     const L = Math.round(hi - lo), uc = +((lo + hi) / 2 - sm).toFixed(2);
-    return { rot: 0, L, uc, W: e.W, wrap: e.wrap, wall: e.wall, clear: e.clear, bridge: 4, side: 1, peri: S.g.peri || 0, fit: S.g.fit || 0 };
+    return { rot: 0, L, uc, W: e.W, wrap: e.wrap, wall: e.wall, clear: e.clear, bridge: 4, side: 1, peri: S.g.peri || 0, fit: S.g.fit || 0, boss: plan().boss || 0, bossW: S.g.bossW || 2, ...(S.g.slotFlange > 0 ? { slotFlange: S.g.slotFlange } : {}) };
   }
   const screwDefault = (seg) => ({ seg, off: 0, ang: 0, d: 2.0, D: 5, sleeveH: 5, len: Math.round(2 * F.c.FR) });
   function guideScrews(c) {
@@ -1016,6 +1022,15 @@ window.Fibula = (function () {
       if (R.seat && R.seat.ok && !R.seat.free) out.push(['crit', 'Kritik', ad ? xl(`Fibula guide'ı hiçbir yönde takılamıyor; sarma derinliği ${fmt(ad.from, 1)} mm'den ${fmt(ad.to, 1)} mm'ye indirildi, yine de takılamıyor.`) + (shortSeg ? ' ' + xl('Segment 20 mm\'den kısa; kesileri kısa tutmak guide\'ın oturmasını bozuyor.') : '') : xl('Fibula guide\'ı hiçbir yönde takılamıyor; sarma derinliği fazla. Sarma derinliğini azaltın.')]);
       else if (ad && ad.ok) out.push(['info', 'Bilgi', `Fibula guide'ı takılabilsin diye sarma derinliği ${fmt(ad.from, 1)} mm'den ${fmt(ad.to, 1)} mm'ye indirildi.`]);
       if (R.contact < 100) out.push(['warn', 'Uyarı', xl(`Fibula guide'ı temas alanı ${fmt(R.contact, 0)} mm²; oturma belirsiz olabilir.`) + ' ' + xl('Sarmayı artırın ya da guide\'ı daha geniş bir kemik yüzeyine taşıyın.')]);
+      // plan A2: rotation about and slide along the bone axis before the screws hold it (the mandible guide's seating
+      // analysis, seat.js): a round shaft resists neither, the first drill hole then lands off the plan
+      const fs = seatFree(R);
+      if (fs && (fs.rotU < SEAT_FREE || fs.slideU < SEAT_FREE)) {
+        const pc = fmt(Math.min(fs.rotU, fs.slideU) * 100, 0), wrapNow = S.fib.guide.ctx.g.wrap, can = !ad && wrapNow + 1 <= wrapMax();
+        const msg0 = fs.rotU < SEAT_FREE && fs.slideU < SEAT_FREE ? xl(`Fibula guide'ı vidalar takılmadan önce kemik ekseni etrafında dönebilir ve eksen boyunca kayabilir: temasın yalnız %${pc}'i direnç gösteriyor.`)
+          : fs.rotU < SEAT_FREE ? xl(`Fibula guide'ı vidalar takılmadan önce kemik ekseni etrafında dönebilir: temasın yalnız %${pc}'i direnç gösteriyor.`) : xl(`Fibula guide'ı vidalar takılmadan önce kemik ekseni boyunca kayabilir: temasın yalnız %${pc}'i direnç gösteriyor.`);
+        out.push(['warn', 'Uyarı', msg0 + ' ' + xl('İlk vida takılana kadar guide elle tutulmalı; sarmayı artırmak ya da segment başına iki vida koymak dönmeyi azaltır.'), 'fib', can ? [['fibWrapUp', 'Sarmayı 1 mm artır']] : undefined]);
+      }
       R.screwInfo.forEach((si, i) => {
         if (!si.ok) out.push(['crit', 'Kritik', si.noBody ? xl(`Fibula vidası ${i + 1} altında guide gövdesi yok; kovan boşlukta kalırdı.`) + ' ' + xl('Vidayı kaydırın ya da sarmayı artırın.') : xl(`Fibula vidası ${i + 1} kemiğe ulaşmıyor.`) + ' ' + xl('Vidayı kemiğin üstüne kaydırın.')]);
         else if (si.crossesPlane) out.push(['crit', 'Kritik', xl(`Fibula vidası ${i + 1} matkap yolu kesi yuvasıyla kesişiyor.`) + ' ' + xl('Vidayı yuvadan uzaklaştırın.')]);
@@ -1036,10 +1051,12 @@ window.Fibula = (function () {
     }
     // saw slot against the blade: slot = blade + 0.1-0.3 mm (a wider slot lets the blade tilt and angle errors add up)
     const sw = slotOf(P0);
-    // slot play (plan 1.3): the blade (the kerf) tilts atan((slot - kerf) / wall) in the fibula guide's slot
-    if (St.slotPlay && R) { const wl = (S.fib.guide.ctx && S.fib.guide.ctx.g && S.fib.guide.ctx.g.wall) || 2.5, a = St.slotPlay(sw, P0.kerf, wl);
-      if (a > St.SLOT_PLAY_MAX + 1e-6) out.push(['crit', 'Kritik', xl(`Fibula guide yuvasında testere ${fmt(a, 1)}° eğilebilir (yuva ${fmt(sw, 2)} mm, testere payı ${fmt(P0.kerf, 2)} mm, kılavuz derinliği ${fmt(wl, 1)} mm); en çok ${St.SLOT_PLAY_MAX}° olmalı.`) + ' ' + xl('Yuvayı testere payına daraltın.'), 'fib']); }
-    if (sw - P0.kerf > 0.3 + 1e-9) out.push(['warn', 'Uyarı', `Fibula guide yuvası (${fmt(sw, 2)} mm) testere payından (${fmt(P0.kerf, 2)} mm) ${fmt(sw - P0.kerf, 2)} mm geniş; bıçaktan en çok 0,3 mm geniş yuva önerilir, daha genişi açı hatası biriktirir.`]);
+    // slot play (plan 1.3, A1): the blade (S.g.blade, the mandible's saw) tilts atan((slot - blade) / depth) in the
+    // fibula guide's slot, depth = the slot rim when it stands above the wall, else the wall
+    const bl = blade();
+    if (St.slotPlay && R) { const gg = (S.fib.guide.ctx && S.fib.guide.ctx.g) || {}, wl = St.slotDepth ? St.slotDepth({ wall: gg.wall || 2.5, boss: gg.boss || 0 }) : gg.wall || 2.5, a = St.slotPlay(sw, bl, wl);
+      if (a > St.SLOT_PLAY_MAX + 1e-6) out.push(['crit', 'Kritik', xl(`Fibula guide yuvasında testere ${fmt(a, 1)}° eğilebilir (yuva ${fmt(sw, 2)} mm, bıçak ${fmt(bl, 2)} mm, kılavuz derinliği ${fmt(wl, 1)} mm); en çok ${St.SLOT_PLAY_MAX}° olmalı.`) + ' ' + xl('Yuvayı bıçağa göre daraltın ya da yuva kılavuzunu yükseltin.'), 'fib', [['fibSlotFit', 'Yuvayı bıçağa uydur']]]); }
+    if (sw - bl > 0.3 + 1e-9) out.push(['warn', 'Uyarı', `Fibula guide yuvası (${fmt(sw, 2)} mm) bıçaktan (${fmt(bl, 2)} mm) ${fmt(sw - bl, 2)} mm geniş; bıçaktan en çok 0,3 mm geniş yuva önerilir, daha genişi açı hatası biriktirir.`]);
     return out;
   }
   const active = () => !!(F && F.c && S.fib && S.fib.plan);
@@ -1192,7 +1209,8 @@ window.Fibula = (function () {
     if (!(num(q.kerf, 0) > 0)) warn.push(xl(`Testere payı (kerf) sıfır ya da geçersiz; ${D0.kerf} mm kullanıldı. Testere yuvaları için değeri kontrol edin.`));
     q.kerf = num(q.kerf, 0) > 0 ? cl(q.kerf, 0.5, 2, D0.kerf) : D0.kerf;
     // slot width: null (plans saved before it existed) = the kerf; never narrower than the blade
-    if ('slotW' in q) q.slotW = q.slotW == null || !Number.isFinite(Number(q.slotW)) ? null : Math.max(q.kerf, cl(q.slotW, 0.5, 2.5, q.kerf));
+    if ('slotW' in q) q.slotW = q.slotW == null || !Number.isFinite(Number(q.slotW)) ? null : Math.max(blade(), cl(q.slotW, 0.4, 2.5, q.kerf));
+    if ('boss' in q) q.boss = cl(q.boss, 0, 10, 0);
     q.distal = cl(q.distal, 40, 140, D0.distal); q.vOff = cl(q.vOff, -12, 12, 0);
     q.dblH = q.dblH == null ? null : cl(q.dblH, 8, 30, 8); q.dbl = q.dbl ? 1 : 0;
     q.n = Math.round(cl(q.n, 1, MAX_N, 2)); if ('nAuto' in q) q.nAuto = q.nAuto ? 1 : 0;      // a stored count is a decision unless it says it was automatic
@@ -1255,7 +1273,7 @@ window.Fibula = (function () {
   function summary() {
     const P0 = plan(), c = last, ls = legSide();
     return { fibula_serisi: F.label, bacak_tarafi: ls.side === 'L' ? 'sol' : 'sağ', bacak_tarafi_kaynagi: { manual: 'elle seçildi', tibia: 'tibiaya göre', guess: 'tahmin (doğrulanmadı)' }[ls.how],
-      donus: P0.rollAuto ? 'otomatik (lateral yüz bukkala, pedikül linguale)' : 'elle', segmentler_arasi_kemik_koprusu_mm: rules().wedgeBridge, klinik_esik_degisiklikleri: P0.rules || null, segment_sayisi: P0.n, testere_payi_mm: P0.kerf, yuva_genisligi_mm: slotOf(P0), distal_korunan_mm: P0.distal,
+      donus: P0.rollAuto ? 'otomatik (lateral yüz bukkala, pedikül linguale)' : 'elle', segmentler_arasi_kemik_koprusu_mm: rules().wedgeBridge, klinik_esik_degisiklikleri: P0.rules || null, segment_sayisi: P0.n, testere_payi_mm: P0.kerf, yuva_genisligi_mm: slotOf(P0), bicak_mm: blade(), yuva_kilavuz_derinligi_mm: P0.boss || 0, distal_korunan_mm: P0.distal,
       segmentler: c ? c.segs.map(g => ({ no: g.i + 1, kat: g.barrel ? 'üst' : 'alt', boy_mm: +g.L.toFixed(1), distal_uctan_mm: +(g.s0 - F.c.smin).toFixed(1), kesi_acilari_deg: [+g.a0.toFixed(1), +g.a1.toFixed(1)], rotasyon_deg: g.barrel ? 0 : P0.roll[g.i] || 0, pedikul_yonu: g.ped && g.out ? pedTx(g) : null, kret_farki_mm: +g.crest.toFixed(1) })) : [],
       dikey_kayma_mm: P0.vOff || 0, cift_namlu: P0.dbl ? { namlu_arasi_mm: dblH() } : null,
       sapma_mm: c ? +c.dev.toFixed(2) : null, proksimalde_kalan_mm: c ? +c.proxLeft.toFixed(0) : null, onay: approved() ? { cerrah: P0.by, zaman: P0.at } : null };
@@ -1271,12 +1289,13 @@ window.Fibula = (function () {
     const fg = S.fib.guide, R = fg.result, g = fg.ctx.g, scs = guideScrews(last), P = S.fib.prod && S.fib.prod.key === fg.key ? S.fib.prod : null;
     return { stale: guideStale, L: g.L, W: g.W, wrap: g.wrap, wall: g.wall, clear: g.clear, contact: R.contact, volume: R.volume, pieces: R.pieces,
       screws: scs.map((sc, i) => { const si = R.screwInfo && R.screwInfo[i]; return { no: i + 1, seg: sc.seg + 1, end: isEnd(last, sc), d: sc.d, D: sc.D, len: sc.len, inBone: si && si.ok ? si.inBone : null }; }),
+      seat: (fs => fs && { rotU: fs.rotU, slideU: fs.slideU })(seatFree(R)),
       prod: P ? { watertight: P.watertight, bodies: P.bodies, volume: P.volume, resolution: P.resolution || null, ok: P.productionOk !== false } : null };
   }
   function guideReportHTML(esc) {
     const r = guideReport(); if (!r) return '';
     const row = (k, v) => `<tr><td>${xl(k)}</td><td>${v}</td></tr>`;
-    return `<h3>${xl("Fibula guide'ı")}</h3>${r.stale ? `<p><b>${xl("Fibula guide'ı güncelleniyor; rapor son üretilen guide'ı gösteriyor.")}</b></p>` : ''}<table>${row('Uzunluk', fmt(r.L) + ' mm')}${row('Genişlik', fmt(r.W) + ' mm')}${row('Sarma derinliği', fmt(r.wrap) + ' mm')}${row('Duvar', fmt(r.wall) + ' mm')}${row('Kemik boşluğu', fmt(r.clear) + ' mm')}${row('Temas alanı', fmt(r.contact, 0) + ' mm²')}${row('Hacim', fmt(r.volume / 1000, 2) + ' cm³')}</table>
+    return `<h3>${xl("Fibula guide'ı")}</h3>${r.stale ? `<p><b>${xl("Fibula guide'ı güncelleniyor; rapor son üretilen guide'ı gösteriyor.")}</b></p>` : ''}<table>${row('Uzunluk', fmt(r.L) + ' mm')}${row('Genişlik', fmt(r.W) + ' mm')}${row('Sarma derinliği', fmt(r.wrap) + ' mm')}${row('Duvar', fmt(r.wall) + ' mm')}${row('Kemik boşluğu', fmt(r.clear) + ' mm')}${row('Temas alanı', fmt(r.contact, 0) + ' mm²')}${r.seat ? row('Eksen etrafında dönme direnci (vidasız)', '%' + fmt(r.seat.rotU * 100, 0)) + row('Eksen boyunca kayma direnci (vidasız)', '%' + fmt(r.seat.slideU * 100, 0)) : ''}${row('Hacim', fmt(r.volume / 1000, 2) + ' cm³')}</table>
 <table><tr><th>${xl('Vida')}</th><th>${xl('Segment')}</th><th>${xl('Matkap / kovan')}</th><th>${xl('Boy')}</th><th>${xl('Kemik içinde')}</th></tr>${r.screws.map(s => `<tr><td>${s.no}</td><td>${s.end ? xl('guide ucu (greft dışı)') : s.seg}</td><td>${fmt(s.d)} / ${fmt(s.D)} mm</td><td>${fmt(s.len, 0)} mm</td><td>${s.inBone != null ? fmt(s.inBone) + ' mm' : '–'}</td></tr>`).join('')}</table>
 <p>${r.prod ? `${xl("Fibula guide'ının üretim STL'i sunucuda yüzey tabanlı boolean ile üretildi:")} ${xl(r.prod.watertight ? 'su geçirmez' : 'su geçirmez değil')}, ${xl(`${r.prod.bodies} parça`)}, ${fmt(r.prod.volume / 1000, 2)} cm³${r.prod.resolution ? xl(`, ızgara ${fmt(r.prod.resolution, 2)} mm`) : ''} (fibula_guide_uretim.stl).${r.prod.ok ? '' : ` <b>${xl("Sunucu bu STL'i basılabilir bulmadı.")}</b>`}` : xl("Fibula guide'ının üretim STL'i alınmadı; fibula_guide.stl 0,4 mm voksel önizlemesidir.")}</p>`;
   }
@@ -1494,7 +1513,7 @@ window.Fibula = (function () {
     $(id).addEventListener('change', () => edited(false, true));
   });
   // slot width: set on its own, never below the blade (the kerf)
-  $('fibSlot').addEventListener('input', e => { if (!active()) return; const P0 = plan(); P0.slotW = Math.max(P0.kerf, +e.target.value); $('fibSlotO').textContent = fmt(slotOf(P0), 2) + ' mm'; edited(true); });
+  $('fibSlot').addEventListener('input', e => { if (!active()) return; const P0 = plan(); P0.slotW = Math.max(blade(), +e.target.value); $('fibSlotO').textContent = fmt(slotOf(P0), 2) + ' mm'; edited(true); });
   $('fibSlot').addEventListener('change', () => { if (active()) { syncUI(); edited(false, true); } });
   $('fibApprove').addEventListener('click', () => {
     const P0 = plan();
@@ -1523,6 +1542,30 @@ window.Fibula = (function () {
   // fibula guide edits from the guide panel: drop the cached key so the guide is rebuilt
   function guideEdited() { guideKey = ''; scheduleGuide(); renderStep(); St.emit('changed'); }
   const guideInfo = () => (active() && last ? { auto: guideAuto(last), body: guideBody(last), screws: guideScrews(last), segs: last.segs, FR: F.c.FR } : null);
+  // plan A2: the share of the contact that resists rotation about the bone axis (u) and slides along it, from the
+  // guide's seating analysis; null without one. SEAT_FREE: below it the guide is called free (as the mandible guide's 5 %)
+  const SEAT_FREE = 0.05;
+  function seatFree(R) {
+    const st = R && R.seat; if (!st || !st.ok || !st.free || !st.rots || !st.slides) return null;
+    const rotU = Math.min(...st.rots.filter(r => r.axis === 'u').map(r => r.r), st.axisU ? st.axisU.r : 1), sl = st.slides.filter(x => Math.abs(x.dir[0]) > 0.7);
+    return { rotU, slideU: sl.length ? Math.min(...sl.map(x => x.r)) : 1, rot: st.worstRot, slide: st.worstSlide };
+  }
+  // the deepest wrap the fix offers: 90 % of the shaft diameter (deeper wraps past the widest level cannot be put on)
+  const wrapMax = () => Math.round(F.c.FR * 2 * 0.9 * 2) / 2;
+  (window.FixHooks = window.FixHooks || {}).fibWrapUp = async () => {
+    if (!active() || !S.fib.guide) return;
+    const P0 = plan(), w = S.fib.guide.ctx.g.wrap; P0.fg = Object.assign({}, P0.fg || {}, { wrap: Math.min(wrapMax(), w + 1) });
+    edited(false);
+  };
+  // the slot play fix (plan A1): the slot to the blade plus the tolerance, the slot rim to at least the default height
+  // (the same as the mandible guide's "Fit slot to blade"); the plan changes, so its approval goes
+  (window.FixHooks = window.FixHooks || {}).fibSlotFit = async () => {
+    if (!active()) return;
+    const P0 = plan(), wl = (S.fib.guide && S.fib.guide.ctx && S.fib.guide.ctx.g && S.fib.guide.ctx.g.wall) || 2.5, b0 = St.G_DEFAULT ? St.G_DEFAULT.boss : 5;
+    P0.slotW = St.slotDefault ? St.slotDefault() : blade() + 0.2;
+    if (!((P0.boss || 0) > wl) || P0.boss < b0) P0.boss = b0;
+    edited(false);
+  };
   return { pending: () => !!(active() && guideStale), setActive, activePane: () => activePane, summary: () => (active() ? summary() : null), view: () => view, active, approved, checks, apply, exportFiles, reportHTML, guideReport, production, setView, state: () => ({ F, last, view }),
     graftBone, fibBone: q => (F && F.c ? fibBone(q) : false), guideInfo, guideEdited, plan: () => (active() ? plan() : null), rules, RULES, legSide: () => (F && F.c ? legSide() : null), building: () => building, segmentChoice, lensOk, choice: () => (S.fib && S.fib.choice) || null, defect, MIN_LEN, MAX_N, DEV_WARN, DEV_ERR, SEG_ERR, STUMP_MIN, DEV_TIE, slotOf: () => (active() ? slotOf(plan()) : null) };
 })();

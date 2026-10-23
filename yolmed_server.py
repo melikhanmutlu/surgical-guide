@@ -509,7 +509,7 @@ def _validate_guide(req):
     need(isinstance(fr, dict) and all(_vec(fr.get(k)) for k in ("p", "u", "v", "n")), "frame must be {p, u, v, n}, 3 numbers each")
     need(isinstance(g, dict) and all(_num(g.get(k)) for k in ("L", "W", "wrap", "wall", "clear", "bridge")),
          "g needs the numbers L, W, wrap, wall, clear, bridge")
-    need(all(g.get(k) is None or _num(g.get(k)) for k in ("side", "vc", "uc", "skirt", "boss", "bossW")), "g.side, vc, uc, skirt, boss, bossW must be numbers")
+    need(all(g.get(k) is None or _num(g.get(k)) for k in ("side", "vc", "uc", "skirt", "boss", "bossW", "slotFlange")), "g.side, vc, uc, skirt, boss, bossW, slotFlange must be numbers")
     planes, screws = req.get("planes") or [], req.get("screws") or []
     need(isinstance(planes, list) and all(isinstance(p, dict) and _vec(p.get("p")) and _vec(p.get("N")) and _num(p.get("w")) for p in planes),
          "planes must be a list of {p, N, w}")
@@ -692,6 +692,10 @@ def build_guide(req, progress=None):
     # within bossW mm of each slot side; only a rim deeper than the wall is built
     boss = float(g.get("boss") or 0)
     boss_w = float(g.get("bossW") or 2)
+    # the slot flange (g.slotFlange, gkernel.js, plan A3): the slot rim (or the wall without a rim) carried that far past
+    # the body's edges across the guide
+    flg = float(g.get("slotFlange") or 0)
+    _check_ranges({"slotFlange": (flg, 0, 10)})
     _check_ranges({"L": (L, 5, 200), "W": (W, 3, 100), "wrap": (wrap, 0, 40), "wall": (wall, 0.5, 10), "clear": (clear, 0, 3),
                    "bridge": (bridge, 0, 30), "vc": (vc, -50, 50), "uc": (uc, -100, 100), "skirt": (skirt, 0, 30),
                    "boss": (boss, 0, 15), "bossW": (boss_w, 0.5, 6)})
@@ -780,6 +784,7 @@ def build_guide(req, progress=None):
     # so no node lies exactly on a round-numbered design plane). A guide too large for the cell budget at the requested
     # resolution is built at the next coarser one (reported in the answer) rather than refused.
     max_sleeve = max([float(s["sleeveH"]) for s in screws] or [0.0])
+    ext_pos, ext_neg = max(ext_pos, flg), max(ext_neg, flg)
     lo = np.array([uc - L / 2 - 4, vc - W / 2 - 4 - ext_neg, -max(wrap + 10, 30) - max(0.0, L / 2 - 15) * 0.6])
     hi = np.array([uc + L / 2 + 4, vc + W / 2 + 4 + ext_pos, clear + max(wall + max(max_sleeve, bridge), boss) + 6])
     # grow the box around both ends of every sleeve (a tilted or wide sleeve near an edge would otherwise be clipped and
@@ -1007,6 +1012,16 @@ def build_guide(req, progress=None):
         if e_t is not None:
             br = np.maximum(br, e_t)
         f = np.maximum(np.maximum(box, dd_i - dde_i - skirt), np.minimum(shell, br))
+        if with_slots and flg > 0 and slots:
+            fl_h = boss_h or wall
+            rim = np.full(f.shape, 1e3, np.float32)
+            for Nf, e, half in slots:
+                sd = np.abs(Nf[0] * UU[i] + Nf[1] * VV2 + Nf[2] * NN2 - e)
+                rim = np.minimum(rim, np.maximum(np.maximum(sd - half - boss_w, clear - dde_i), dde_i - clear - fl_h))
+            for Nf, e, half in slots:
+                rim = np.maximum(rim, half - np.abs(Nf[0] * UU[i] + Nf[1] * VV2 + Nf[2] * NN2 - e))
+            fb = np.maximum(np.maximum(outer, av2 - W / 2 - flg), wrap_at[i] - NN2)
+            f = np.minimum(f, np.maximum(np.maximum(fb, rim), dd_i - dde_i - skirt))
         return np.where(far, np.maximum(outer, dde_i - top_hi), f).astype(np.float32)
     # pass 0 (no slots, no bridge limit) finds the body's own +v / -v edge per position along the guide: the bridge (the
     # rib across the saw slots) runs `bridge` wide inside that edge, not the box edge, so it never floats

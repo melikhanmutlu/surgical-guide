@@ -127,6 +127,9 @@ var GKernel = (function () {
     // the slot rim (plan 1.3): the shell raised to `boss` mm over the inner surface within bossW mm of each slot side, so
     // the blade is guided over that depth instead of the wall alone (only a rim deeper than the wall is built)
     const bossH = g.boss > g.wall ? g.boss : 0, bossW = g.bossW || 2, topHi = Math.max(bridgeHi, c + bossH);
+    // the slot flange (plan A3, Lohn 2025): the slot rim (or the wall where there is no rim) carried slotFlange mm past
+    // the body's edges across the guide (v), so the blade rests on a longer guiding face at each slot
+    const flg = g.slotFlange > 0 ? g.slotFlange : 0, flH = bossH || g.wall;
     // the bridge (the rib that carries the body across the saw slots) runs along the body's own +v / -v edge at each
     // position along the guide: on a bone curved across v the box edge lies off the body, so a rib there would float
     const edgeV = new Float32Array(nx).fill(NaN);
@@ -162,6 +165,12 @@ var GKernel = (function () {
           const bridge = Math.max(bridgeLo - dE, dE - bridgeHi, eT);
           // near real bone: the envelope point under this voxel is bone, or a shadow face within `skirt` of bone
           F[id] = Math.max(box, d - dE - skirt, Math.min(shell, bridge));
+          if (pass === 1 && flg && slots.length) {
+            let rim = 1e3;
+            for (const s of slots) rim = Math.min(rim, Math.max(Math.abs(s.a * uu + s.b * vv + s.c * nn - s.e) - s.half - bossW, c - dE, dE - c - flH));
+            for (const s of slots) rim = Math.max(rim, s.half - Math.abs(s.a * uu + s.b * vv + s.c * nn - s.e));
+            F[id] = Math.min(F[id], Math.max(outer, av - g.W / 2 - flg, wrapAt[i] - nn, rim, d - dE - skirt));
+          }
         }
       }
     }

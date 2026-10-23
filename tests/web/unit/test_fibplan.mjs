@@ -70,6 +70,53 @@ test('W8: with an automatic count, a 1 mm cut move keeps the knots, angles and r
   await cuts(-20, 20);
 });
 
+// A1 (plan after P0): the fibula guide's slot was the kerf (1.0 mm) and the slot check measured the play against the
+// kerf, so it said 0°; the saw's blade (S.g.blade 0.6 mm) tilts atan(0.4 / 2.5) = 9.1° in it. Now the play is measured
+// against the blade, an old plan is critical with a one-click fix, and a new plan has a blade-fit slot and a slot rim.
+const meshVol = m => { const a = m.geometry.attributes.position.array, ix = m.geometry.index ? m.geometry.index.array : null, n = ix ? ix.length : a.length / 3; let v = 0;
+  for (let i = 0; i < n; i += 3) { const [p, q, r] = [0, 1, 2].map(k => (ix ? ix[i + k] : i + k) * 3); v += a[p] * (a[q + 1] * a[r + 2] - a[q + 2] * a[r + 1]) - a[p + 1] * (a[q] * a[r + 2] - a[q + 2] * a[r]) + a[p + 2] * (a[q] * a[r + 1] - a[q + 1] * a[r]); }
+  return Math.abs(v) / 6; };
+test('A1: a new fibula plan has a blade-fit slot and a slot rim; an old one (slot = kerf 1.0) is critical, the fix fits it', async () => {
+  const fresh = W.Fibula.plan();
+  near(fresh.slotW, St.slotDefault(), 1e-9, 'new plan: slot = blade + tolerance'); assert.equal(fresh.boss, St.G_DEFAULT.boss);
+  const play = () => W.Fibula.checks().filter(c => /Fibula guide yuvasında testere/.test(c[2]));
+  const built = (f) => until(() => S.fib.guide && S.fib.guide.result && !W.Fibula.pending() && f(S.fib.guide.ctx), 60000);
+  await built(x => x.g.boss === St.G_DEFAULT.boss);
+  assert.equal(play().length, 0, 'no play critical on a new plan');
+  const vNew = meshVol(S.fib.guide.mesh);
+  // the cut takes the kerf (1.0 mm, wider than the 0.8 mm slot): the slot is centred in it, half the kerf outside the face
+  S.fib.guide.ctx.pls.forEach(q => { near(q.w, St.slotDefault(), 1e-9); near(q.pSlot.distanceTo(q.p), fresh.kerf / 2, 1e-9); });
+  const old = St.clone(fresh); delete old.slotW; delete old.boss; old.kerf = 1.0;
+  await W.Fibula.apply(old); await built(x => !x.g.boss && Math.abs(x.pls[0].w - 1.0) < 1e-9);
+  const r = play(); assert.equal(r.length, 1, JSON.stringify(W.Fibula.checks().map(c => c[2])));
+  assert.equal(r[0][0], 'crit'); assert.match(r[0][2], /9,1° eğilebilir \(yuva 1,00 mm, bıçak 0,60 mm, kılavuz derinliği 2,5 mm\)/);
+  assert.equal(JSON.stringify(r[0][4]), JSON.stringify([['fibSlotFit', 'Yuvayı bıçağa uydur']]));
+  const vOld = meshVol(S.fib.guide.mesh);
+  assert.ok(vNew > vOld + 20, `the slot rim adds material (${vOld.toFixed(0)} -> ${vNew.toFixed(0)} mm³)`);
+  // the fix: slot to the blade, rim to the default; the play is under the limit
+  await St.runFix('fibSlotFit'); await built(x => x.g.boss === St.G_DEFAULT.boss);
+  near(W.Fibula.plan().slotW, St.slotDefault(), 1e-9); assert.equal(W.Fibula.plan().boss, St.G_DEFAULT.boss);
+  assert.equal(play().length, 0); assert.ok(!W.Fibula.checks().some(c => /yuvası .* geniş/.test(c[2])));
+  const a = St.slotPlay(W.Fibula.slotOf(), S.g.blade, St.slotDepth(S.fib.guide.ctx.g)); assert.ok(a <= St.SLOT_PLAY_MAX, a + '°');
+  // the production request carries the rim
+  assert.equal(St.guideRequest(Object.assign({ vol: W.Fibula.state().F.vol, red: W.Fibula.state().F.red, F: W.Fibula.state().F.c.Fm, thr: W.Fibula.state().F.thr }, S.fib.guide.ctx)).g.boss, St.G_DEFAULT.boss);
+});
+
+test('A2: the guide on the round synthetic fibula turns about its axis before the screws: a warning, the fix deepens the wrap', async () => {
+  const built = f => until(() => S.fib.guide && S.fib.guide.result && !W.Fibula.pending() && f(S.fib.guide.ctx), 60000);
+  await built(() => true);
+  const rot = () => W.Fibula.checks().filter(c => /Fibula guide'ı vidalar takılmadan önce kemik ekseni/.test(c[2]));
+  const r = rot(); assert.equal(r.length, 1, JSON.stringify(W.Fibula.checks().map(c => c[2])));
+  assert.equal(r[0][0], 'warn'); assert.match(r[0][2], /etrafında dönebilir/);
+  const rep = W.Fibula.guideReport(); assert.ok(rep.seat && rep.seat.rotU < 0.05, JSON.stringify(rep.seat));
+  if (r[0][4]) {
+    assert.equal(r[0][4][0][0], 'fibWrapUp'); const w0 = S.fib.guide.ctx.g.wrap;
+    await St.runFix('fibWrapUp'); await built(x => Math.abs(x.g.wrap - (w0 + 1)) < 1e-9);
+    assert.equal(W.Fibula.plan().fg.wrap, w0 + 1);
+    const p = W.Fibula.plan(); p.fg = null; await W.Fibula.apply(St.clone(p)); await built(x => Math.abs(x.g.wrap - w0) < 1e-9);
+  }
+});
+
 test('D-6: the fibula approval follows the guide angle; W20: a plan without slotW / nAuto keeps them absent', async () => {
   S.g.rot = 0;
   fire('fibApprove', 'click'); assert.equal(W.Fibula.approved(), true);

@@ -88,6 +88,17 @@ class SlotBoss(unittest.TestCase):
         same = Y.build_guide(flat_request(2.0))      # boss 2 = wall 2: no rim
         self.assertEqual(same["stl_b64"], self.plain["stl_b64"])
 
+    def test_flange_carries_the_rim_past_the_edge(self):
+        """plan A3: g.slotFlange carries the rim 3 mm past the body edge (W/2 = 6), the slot open through it; the same
+        field as the preview kernel (gkernel.js)."""
+        q = flat_request(5.0); q["g"]["slotFlange"] = 3.0
+        out = Y.build_guide(q); tm = mesh(out)
+        self.assertTrue(tm.is_watertight)
+        past = [[1.2, 8.0, 0.3 + 2.0], [-1.2, -8.0, 0.3 + 2.0]]
+        self.assertFalse(solid_at(mesh(self.boss), past).any())
+        self.assertTrue(solid_at(tm, past).all())
+        self.assertFalse(solid_at(tm, [[1.2, 10.0, 2.3], [8.0, 8.0, 2.3], [0.0, 8.0, 1.5], [0.0, 8.0, 3.5]]).any())
+
     def test_bad_boss_is_a_400(self):
         q = flat_request(5.0)
         q["g"]["boss"] = "high"

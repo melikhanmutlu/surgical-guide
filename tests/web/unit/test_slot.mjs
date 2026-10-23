@@ -57,6 +57,19 @@ test('guide kernel: the rim stands boss mm over the inner surface beside the slo
   assert.equal(same.result.volume, off.result.volume);
 });
 
+test('A3: the slot flange carries the rim past the body edge across the guide; the slot stays open in it; off by default', async () => {
+  // (a body 8 mm wide on the 16 mm bar, so the flange past its edge still lies over bone)
+  const W2 = 4, c = 0.3;
+  assert.equal(St.G_DEFAULT.slotFlange, 0, 'off by default (a design option, Lohn 2025)');
+  const off = await build({ boss: 5, W: 8 }), on = await build({ boss: 5, W: 8, slotFlange: 3 });
+  // 2 mm past the body edge, beside the slot, 2 mm over the inner surface: flange only
+  for (const sv of [1, -1]) { assert.equal(occ(off.grid, 1.2, sv * (W2 + 2), c + 2), 0); assert.equal(occ(on.grid, 1.2, sv * (W2 + 2), c + 2), 1, 'flange at v ' + sv); }
+  // not past the flange (4 mm out), not away from the slot (8 mm along), and the slot open in it
+  assert.equal(occ(on.grid, 1.2, W2 + 4, c + 2), 0); assert.equal(occ(on.grid, 8, W2 + 2, c + 2), 0);
+  for (const nn of [0.8, 2, 3.2, 4.4]) assert.equal(occ(on.grid, 0, W2 + 2, nn), 0, 'slot open at ' + nn);
+  assert.equal(on.result.pieces, 1); assert.ok(on.result.volume > off.result.volume);
+});
+
 test('production request carries boss / bossW (the server builds the same rim)', () => {
   Object.assign(S.g, St.G_DEFAULT, { boss: 5, bossW: 2 });
   const vol = { hu: new Int16Array(40 * 40 * 40).fill(-1000), nx: 40, ny: 40, nz: 40, sp: [1, 1, 1], origin: [-20, -20, -20], axes: [[1, 0, 0], [0, 1, 0], [0, 0, 1]] };
