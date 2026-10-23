@@ -234,6 +234,7 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
       if (e.shiftKey) { st.drag = { kind: 'wl', v, X, Y, L: st.win.L, W: st.win.W }; return; }
       if (v.custom) { const T = xf(v); st.drag = { kind: 'custom', v }; v.custom.pick(v, T.ix(X), T.iy(Y)); return; }
       if (S.mode === 'anchor' && St.anchorFromSlice) { const T = xf(v); if (St.anchorFromSlice(toWorld(imgToIdx(v, T.ix(X), T.iy(Y))))) return; }
+      if (window.Canal && Canal.active()) { const T = xf(v); Canal.pick(toWorld(imgToIdx(v, T.ix(X), T.iy(Y)))); return; }
       if (window.Measure && Measure.active()) { const T = xf(v); Measure.pick(V(...toWorld(imgToIdx(v, T.ix(X), T.iy(Y)))), null); return; }
       const hd = handleAt(v, X, Y); if (hd) { st.drag = { kind: 'handle', v, h: hd }; c.style.cursor = 'grabbing'; return; }
       const P = painter(); if (P) { const T = xf(v); st.drag = { kind: 'paint', v, P }; P.paint(toWorld(imgToIdx(v, T.ix(X), T.iy(Y))), v.axis, true); return; }
