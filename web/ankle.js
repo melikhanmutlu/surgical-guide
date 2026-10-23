@@ -124,15 +124,15 @@ window.Ankle = (function () {
   }
   // trilinear sample of a piece's distance at a world point in the piece's own (CT) position; far away = +Infinity
   function sdfAt(p, q) {
-    const s = p.sdf, x = G.indexOf(S.red, [q.x, q.y, q.z]), f = [x[0] - s.lo[0], x[1] - s.lo[1], x[2] - s.lo[2]], n = [s.nx, s.ny, s.nz];
-    if (f.some((v, k) => v < 0 || v > n[k] - 1)) return Infinity;
-    const i0 = f.map((v, k) => Math.min(n[k] - 2, Math.floor(v))), w = f.map((v, k) => v - i0[k]);
-    let out = 0;
-    for (let dz = 0; dz < 2; dz++) for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) {
-      const wt = (dx ? w[0] : 1 - w[0]) * (dy ? w[1] : 1 - w[1]) * (dz ? w[2] : 1 - w[2]);
-      if (wt) out += wt * s.d[i0[0] + dx + s.nx * (i0[1] + dy + s.ny * (i0[2] + dz))];
-    }
-    return out;
+    // scalar code (no arrays per call): the guide samples this a million times
+    const s = p.sdf, r = S.red, o = r.origin, a = r.axes, sp = r.sp, dx = q.x - o[0], dy = q.y - o[1], dz = q.z - o[2];
+    const fx = (dx * a[0][0] + dy * a[0][1] + dz * a[0][2]) / sp[0] - s.lo[0], fy = (dx * a[1][0] + dy * a[1][1] + dz * a[1][2]) / sp[1] - s.lo[1], fz = (dx * a[2][0] + dy * a[2][1] + dz * a[2][2]) / sp[2] - s.lo[2];
+    if (!(fx >= 0 && fy >= 0 && fz >= 0 && fx <= s.nx - 1 && fy <= s.ny - 1 && fz <= s.nz - 1)) return Infinity;
+    const ix = Math.min(s.nx - 2, Math.floor(fx)), iy = Math.min(s.ny - 2, Math.floor(fy)), iz = Math.min(s.nz - 2, Math.floor(fz));
+    const wx = fx - ix, wy = fy - iy, wz = fz - iz, nx = s.nx, nxy = s.nx * s.ny, d = s.d, b = ix + nx * iy + nxy * iz;
+    const c00 = d[b] * (1 - wx) + d[b + 1] * wx, c10 = d[b + nx] * (1 - wx) + d[b + nx + 1] * wx;
+    const c01 = d[b + nxy] * (1 - wx) + d[b + nxy + 1] * wx, c11 = d[b + nxy + nx] * (1 - wx) + d[b + nxy + nx + 1] * wx;
+    return (c00 * (1 - wy) + c10 * wy) * (1 - wz) + (c01 * (1 - wy) + c11 * wy) * wz;
   }
 
   // ---------- the rigid motion of a piece ----------
@@ -376,17 +376,19 @@ window.Ankle = (function () {
     else { if (!red.ok) why.push(xl('redüksiyon onayı')); const A = window.Audit, h = A ? A.planHash() : ''; if (A && !A.status('eng', h).ok) why.push(xl('mühendis onayı')); if (A && !A.status('sur', h).ok) why.push(xl('cerrah onayı')); if (S.crit) why.push(xl(`${S.crit} kritik kontrol`)); }
     box.innerHTML = `<ol class="deliver">
       <li><div><b>${xl('Redükte model STL\'i')}</b><p class="hint">${xl('Bütün parçalar planlanan konumda, tek dosya. Plak ön bükme için basılabilir; onay gerektirmez.')}</p></div><button id="ankStl" ${pieces.length ? '' : 'disabled'}><svg class="i"><use href="#i-download"/></svg>${xl('İndir')}</button></li>
+      ${window.AnkGuide && AnkGuide.ready() ? `<li><div><b>${xl('Kesi guide\'ı ve kama')}</b><p class="hint">${xl('Önizleme STL\'leri (tarayıcıda, 0,4 mm ızgara). Pakete de girer.')}</p></div><button id="ankGStl">${xl('İndir')}</button></li>` : ''}
       <li><div><b>${xl('Parça STL\'leri')}</b><p class="hint">${xl('Her parça ayrı dosya (redükte konumda), .zip içinde.')}</p></div><button id="ankParts" ${pieces.length ? '' : 'disabled'}>${xl('İndir')}</button></li>
       <li><div><b>${xl('Rapor')}</b><p class="hint">${xl('Parçalar, ölçümler, kontroller ve onaylar.')}</p></div><button id="ankRep" ${pieces.length ? '' : 'disabled'}>HTML</button></li>
       <li><div><b>${xl('Paket')}</b><p class="hint" id="ankPackMsg">${ready ? xl('Plan onaylı; paket hazır.') : `${xl('Paket için:')} ${why.join(', ')}.`}</p></div><button class="primary" id="ankPack" ${ready ? '' : 'disabled'}><svg class="i"><use href="#i-download"/></svg>${xl('İndir')}</button></li></ol>`;
     const name = () => fileName($('caseName').value.trim() || 'malleol');
     $('ankStl').addEventListener('click', () => St.offer(`${name()}_redukte_model.stl`, new Blob([reducedStl()])));
+    if ($('ankGStl')) $('ankGStl').addEventListener('click', () => St.offer(`${name()}_guide.zip`, St.zip(AnkGuide.files())));
     $('ankParts').addEventListener('click', () => St.offer(`${name()}_parcalar.zip`, St.zip(pieceFiles())));
     $('ankRep').addEventListener('click', () => St.offer(`${name()}_rapor.html`, new Blob([reportHTML()], { type: 'text/html' })));
     $('ankPack').addEventListener('click', () => { if (!packReady()) return; St.offer(`${name()}_paket.zip`, St.zip(packFiles())); St.emit('exported'); });
   }
   function packFiles() {
-    const files = [{ name: 'redukte_model.stl', data: reducedStl() }, ...pieceFiles(), { name: 'plan.json', data: JSON.stringify(St.planOf(), null, 2) }, { name: 'rapor.html', data: reportHTML() }];
+    const files = [{ name: 'redukte_model.stl', data: reducedStl() }, ...pieceFiles(), ...(window.AnkGuide ? AnkGuide.files() : []), { name: 'plan.json', data: JSON.stringify(St.planOf(), null, 2) }, { name: 'rapor.html', data: reportHTML() }];
     // the approval log (audit.js); the other export hooks write mandible files (navigation of cuts and screws)
     const extra = []; (window.ExportHooks || []).forEach(f => { try { f(extra); } catch (e) { /* optional */ } });
     extra.filter(f => f.name === 'onay_kaydi.json').forEach(f => files.push(f));
@@ -446,14 +448,14 @@ window.Ankle = (function () {
   bus.addEventListener('caseType', () => { if (on()) { renderMeta(); build(); } else { drop(); const b = St.parts.bone; if (b) { b.visible = true; b.obj.visible = true; St.renderParts(); } } render(); renderOut(); });
   let tmo = null;
   ['changed', 'planApplied', 'lock'].forEach(ev => bus.addEventListener(ev, () => { if (!on()) return; clearTimeout(tmo); tmo = setTimeout(() => { renderAppr(); renderOut(); renderChecks(); }, 120); }));
-  ['st2', 'stRed', 'st7', 'stAnkOut'].forEach(id => $(id) && $(id).addEventListener('toggle', () => { if (!on()) return; show(); if (id === 'stAnkOut') renderOut(); }));
+  ['st2', 'stRed', 'stAnkG', 'st7', 'stAnkOut'].forEach(id => $(id) && $(id).addEventListener('toggle', () => { if (!on()) return; show(); if (id === 'stAnkOut') renderOut(); }));
   renderMeta(); render(); renderOut();
 
   const planned = () => on() && pieces.length > 0;
   // for ui.js: step completion and the top bar while the case is an ankle
   function status() {
     const A = window.Audit, h = A && pieces.length ? A.planHash() : '', both = !!(A && pieces.length && A.status('eng', h).ok && A.status('sur', h).ok);
-    return { done: { stRed: pieces.length > 0 && pieces.some(moved) && !checks().some(c => c[0] === 'crit'), st7: red.ok && both && !S.crit, stAnkOut: false }, ready: red.ok && both && !S.crit, pend: (red.ok ? 0 : 1) + (A && pieces.length && !A.status('eng', h).ok ? 1 : 0) + (A && pieces.length && !A.status('sur', h).ok ? 1 : 0) };
+    return { done: { stRed: pieces.length > 0 && pieces.some(moved) && !checks().some(c => c[0] === 'crit'), stAnkG: !!(window.AnkGuide && AnkGuide.ready()), st7: red.ok && both && !S.crit, stAnkOut: false }, ready: red.ok && both && !S.crit, pend: (red.ok ? 0 : 1) + (A && pieces.length && !A.status('eng', h).ok ? 1 : 0) + (A && pieces.length && !A.status('sur', h).ok ? 1 : 0) };
   }
-  return { on, planned, status, renderChecks, checks, pieces: () => pieces, metrics: () => metrics, select: choose, rename, _names: names, setMotion, reset, measure, reducedStl, pieceFiles, reportHTML, packFiles, packReady, approve, build, meta: () => meta, approved: () => red.ok, LIM };
+  return { on, planned, status, renderChecks, checks, pieces: () => pieces, metrics: () => metrics, select: choose, rename, _names: names, sdfAt, toWorld, toOwn, moved, setMotion, reset, measure, reducedStl, pieceFiles, reportHTML, packFiles, packReady, approve, build, meta: () => meta, approved: () => red.ok, LIM };
 })();

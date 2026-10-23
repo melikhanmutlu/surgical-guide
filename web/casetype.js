@@ -24,8 +24,8 @@ window.CaseType = (function () {
     // malleolar fracture (ankle.js): the pieces of the fracture are reduced by hand, the reduced model is the output
     ankle: {
       label: 'Malleol kırığı',
-      hint: 'Ayak bileği kırığı: parçaları ayırma, sanal redüksiyon, ölçümler ve redükte model STL\'i.',
-      steps: ['st1', 'st2', 'stRed', 'st7', 'stAnkOut'],
+      hint: 'Ayak bileği kırığı: parçaları ayırma, sanal redüksiyon, ölçümler, redükte model STL\'i, kesi guide\'ı ve kama.',
+      steps: ['st1', 'st2', 'stRed', 'stAnkG', 'st7', 'stAnkOut'],
       titles: { st2: ['Anatomi ve parçalar', 'Anatomi'] },
       hide: ['#upFib', '#sampleM', '#sampleMct', '#sampleL', '#hMand', '#itemAppr', '#segModeBox', '#refBox'],
     },

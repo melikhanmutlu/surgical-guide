@@ -3,7 +3,8 @@
 // H3 bilinen yer değiştirmenin tersiyle redüksiyon: çakışma yok, aralık kapanır; H4 aşırı redüksiyon kritik;
 // H5 onaylar (redüksiyon + mühendis + cerrah) ve paket; H6 sayfa yenilenip plan açılınca parça konumları ve onay geri gelir;
 // H7 çene tipine dönünce çene örneği, kondil işaretleri ve 8 adım geri gelir; H8 açılış (?ornek yok) malleol tipiyle anonim
-// gerçek ayak bileği BT örneğini açar: tibia, fibula, talus bulunur, atel parça sayılmaz.
+// gerçek ayak bileği BT örneğini açar: tibia, fibula, talus bulunur, atel parça sayılmaz; H9 gerçek örnekte distal tibia ön
+// yüzüne kesi guide'ı: gövde, yarık, iki K-teli, kama, sunucudan su geçirmez üretim STL'i, pakette guide dosyaları.
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -18,14 +19,14 @@ const H = require('./lib');
   const pieces = () => page.waitForFunction(() => window.Ankle && Ankle.pieces().length > 0 && !(Studio.loadBusy && Studio.loadBusy()), null, { timeout: 180000 });
   await h.goto(); await h.idle();
 
-  await h.run('H1', 'Vaka tipi', 'Çene → malleol → çene → malleol', 'Adımlar: st1, st2, stRed, st7, stAnkOut; çene tipinde st1..st8; örnek vaka tipe göre değişir', async () => {
+  await h.run('H1', 'Vaka tipi', 'Çene → malleol → çene → malleol', 'Adımlar: st1, st2, stRed, stAnkG, st7, stAnkOut; çene tipinde st1..st8; örnek vaka tipe göre değişir', async () => {
     await page.selectOption('#caseType', 'ankle'); await pieces(); await h.idle();
     const a = await order(), srcA = await h.ev(() => Studio.S.source.name);
     await page.selectOption('#caseType', 'mandible'); await page.waitForFunction(() => Studio.S.source && Studio.S.source.name === 'mandible' && !Studio.loadBusy(), null, { timeout: 180000 }); await h.idle();
     const m = await order();
     await page.selectOption('#caseType', 'ankle'); await pieces(); await h.idle();
     const b = await order();
-    const wantA = ['st1', 'st2', 'stRed', 'st7', 'stAnkOut'], wantM = ['st1', 'st2', 'st3', 'st4', 'st5', 'st6', 'st7', 'st8'];
+    const wantA = ['st1', 'st2', 'stRed', 'stAnkG', 'st7', 'stAnkOut'], wantM = ['st1', 'st2', 'st3', 'st4', 'st5', 'st6', 'st7', 'st8'];
     const ok = JSON.stringify(a) === JSON.stringify(wantA) && JSON.stringify(b) === JSON.stringify(wantA) && JSON.stringify(m) === JSON.stringify(wantM) && srcA === 'ankle';
     return { pass: ok, actual: JSON.stringify({ a, m, b, srcA }), evidence: await h.shot('H1_tip') };
   });
@@ -106,6 +107,20 @@ const H = require('./lib');
     const ok = ['Tibia', 'Fibula', 'Talus'].every(n => r.names.includes(n)) && r.outShown === 0 && r.crit === 0 && r.btn;
     await page.evaluate(() => { document.getElementById('stRed').open = true; }); await h.sleep(600);
     return { pass: ok, actual: JSON.stringify(r), evidence: await h.shot('H8_gercek') };
+  });
+
+  await h.run('H9', 'Kesi guide\'ı', 'Gerçek örnekte distal tibia ön yüzüne yerleştir, oluştur, üretim STL\'i al', 'Tek parça guide, iki tel kemikte, kama açılması derinlik × tan 8°, üretim STL\'i su geçirmez tek gövde, kritik yok', async () => {
+    await page.evaluate(() => { document.getElementById('stAnkG').open = true; }); await h.sleep(500);
+    await h.ev(() => {
+      const T = THREE, tib = Ankle.pieces().find(p => p.name === 'Tibia'), tal = Ankle.pieces().find(p => p.name === 'Talus'), z = tal.c.z + 45; let P = null;
+      for (let t = 3; t < 60; t += 0.2) { const q = new T.Vector3(tib.c.x, tib.c.y - t, z); if (Ankle.sdfAt(tib, q) > 0) { P = q; break; } }
+      AnkGuide.place(tib, P, new T.Vector3(0, -1, 0));
+    });
+    const t0 = Date.now(); await h.ev(() => AnkGuide.make()); const ms = Date.now() - t0; await h.idle();
+    await h.ev(() => AnkGuide.production()); await h.idle(300000);
+    const r = await h.ev(() => { const i = AnkGuide.info(), p = AnkGuide.parts().prod; return { pieces: i.pieces, vol: Math.round(i.volume), pins: i.pins.map(x => x.ok && !x.crosses ? Math.round(x.inBone) : -1), open: +i.wedge.open.toFixed(2), depth: +i.wedge.depth.toFixed(1), prod: p && { ok: p.productionOk, wt: p.watertight, bodies: p.bodies, vol: Math.round(p.volume) }, crit: Ankle.checks().filter(c => c[0] === 'crit').length + AnkGuide.checks().filter(c => c[0] === 'crit').length }; });
+    const ok = r.pieces === 1 && r.pins.every(x => x >= 10) && Math.abs(r.open - r.depth * Math.tan(8 * Math.PI / 180)) < 0.1 && r.prod && r.prod.ok && r.prod.wt && r.prod.bodies === 1 && Math.abs(r.prod.vol - r.vol) / r.vol < 0.15 && r.crit === 0 && ms < 15000;
+    return { pass: ok, actual: JSON.stringify({ ...r, ms }), evidence: await h.shot('H9_guide') };
   });
 
   await h.done();
