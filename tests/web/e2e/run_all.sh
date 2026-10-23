@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Denetim 3 · e2e: yerel sunucuyu başlatır, tüm senaryoları sırayla (tek tarayıcı) çalıştırır, kanit/tablo.md üretir.
 #   REPO=/home/user/surgical-guide PORT=8840 bash run_all.sh            # hepsi (gerçek BT dahil, ~60-90 dk)
-#   ONLY="A1 A2" bash run_all.sh                                         # seçili senaryolar (A1 A2 A3 C D F G H E Y3 B)
+#   ONLY="A1 A2" bash run_all.sh                                         # seçili senaryolar (A1 A2 A3 K C D F G H E Y3 B)
 #   D_LIVE=0 bash run_all.sh                                              # canlı site duman testini atla
 #   KANIT=/başka/yer bash run_all.sh                                      # kanıt klasörü (varsayılan ../kanit, depoda yok sayılır)
 #   YOLMED_TOKEN=gizli bash run_all.sh                                    # sunucu erişim anahtarıyla; tarayıcı anahtarı diyaloğa yazar
@@ -23,11 +23,11 @@ start_server() {
   bash -c "$SERVER_CMD" & export SERVER_PID=$!
   for i in $(seq 1 30); do curl -s -o /dev/null "$BASE/health" && break; sleep 0.5; done
 }
-ONLY="${ONLY:-A1 A2 A3 C D F G H E Y3 B}"
+ONLY="${ONLY:-A1 A2 A3 K C D F G H E Y3 B}"
 for s in $ONLY; do
   start_server
   case $s in
-    A1) f=A1_flow.js ;; A2) f=A2_persist.js ;; A3) f=A3_i18n_ui.js ;; B) f=B_real.js ;; C) f=C_edge.js ;; D) f=D_small_live.js ;; F) f=F_small_screen.js ;; E) f=E_roll.js ;; Y3) f=Y3_plate_undo.js ;; G) f=G_view_layers.js ;; H) f=H_ankle.js ;;
+    A1) f=A1_flow.js ;; A2) f=A2_persist.js ;; A3) f=A3_i18n_ui.js ;; B) f=B_real.js ;; C) f=C_edge.js ;; D) f=D_small_live.js ;; F) f=F_small_screen.js ;; E) f=E_roll.js ;; Y3) f=Y3_plate_undo.js ;; G) f=G_view_layers.js ;; H) f=H_ankle.js ;; K) f=K_default_real.js ;;
     *) echo "bilinmeyen senaryo $s"; continue ;;
   esac
   echo "=== $s ($f) ==="

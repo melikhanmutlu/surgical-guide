@@ -54,18 +54,19 @@ const VERI = process.env.VERI || '/mnt/project-files/surgical-guide-prototype/au
 
   // ---------- C7: fibula view vs mandible interactions ----------
   await h.run('C7', '3 · Rezeksiyon (fibula yüklü)', 'Örnek fibulayı yükle; 3. adımda "Bölgeyi modelde seç" + 3B görünüme tıkla', 'Görünüm mandibulaya döner ya da seçim yapılır', async () => {
-    await page.click('#fibSample'); await h.fibReady();
+    await page.click('#fibSample'); await h.fibLoaded();          // no resection yet: the fibula is loaded, not planned
     const view = await h.ev(() => Fibula.view());
     await h.openStep(3); await page.click('#pickAnchor'); await h.sleep(300);
     const badge = await page.$eval('#modeBadge', e => e.hidden ? '' : e.textContent);
     const view2 = await h.ev(() => Fibula.view());
+    const msg = await page.$eval('#caseMsg', e => e.hidden ? '' : e.textContent);   // the switch message, before the pick's own messages replace it
     const pts = await h.hits('bone', 24);                          // a bone point of the (now shown) mandible
     if (pts.length) { const p = pts[Math.floor(pts.length / 2)]; await h.click3d(p.x, p.y); }
     await h.settle();
     const s = await st(), step = await h.ev(() => [...document.querySelectorAll('details.step')].find(d => d.open).id);
     const ev = await h.shot('C7_fibula_gorunumu');
     await page.keyboard.press('Escape');
-    return { pass: view2 === 'm' && s.planes.length > 0 && /mandibulaya alındı/.test(await page.$eval('#caseMsg', e => e.hidden ? '' : e.textContent)), actual: `fibula sonrası sahne=${view}; "Bölgeyi seç" sonrası sahne=${view2}; rozet "${badge}"; tık sonrası kesi ${s.planes.length}, açık adım ${step}`, evidence: ev };
+    return { pass: view2 === 'm' && s.planes.length > 0 && /mandibulaya alındı/.test(msg), actual: `fibula sonrası sahne=${view}; "Bölgeyi seç" sonrası sahne=${view2}; mesaj "${msg}"; rozet "${badge}"; tık sonrası kesi ${s.planes.length}, açık adım ${step}`, evidence: ev };
   });
   await h.run('C7b', '2 · Anatomi (fibula yüklü)', 'Fibula görünümünde adım 2 silgisini seç, 3B görünüme tıkla', 'Görünüm mandibulaya döner, adım 4 açılmaz, silgi mandibulaya uygulanır', async () => {
     await page.click('#scF'); await h.sleep(500);
@@ -87,6 +88,9 @@ const VERI = process.env.VERI || '/mnt/project-files/surgical-guide-prototype/au
 
   // ---------- C2: reopen an old plan with a different threshold ----------
   await h.run('C2', 'Yeniden açma', 'Planı eşik 250 ile kaydet (sürüm), eşiği 400 yap, sürümü yükle', 'Eşik 250\'ye döner, guide ve rezeke hacim aynı', async () => {
+    // a fresh sample first: the plan JSON carries the threshold and the component picks, not brush strokes, so the eraser
+    // strokes of C7b (where they land depends on the view) would make the reloaded version's bone differ from the record
+    await h.openStep(1); await page.click('#sampleM'); await h.idle(); await h.settle();
     await h.openStep(3); await page.click('#autoPrep'); await h.settle();
     const a = await h.ev(() => ({ thr: document.getElementById('thr').value, vol: Math.round(Studio.S.resectedVolume || 0), pieces: Studio.S.result && Studio.S.result.pieces, bone: Studio.parts.bone.obj.geometry.attributes.position.count }));
     await page.click('#tab-pVer'); await page.fill('#verNote', 'esik250'); await page.click('#verSave');
@@ -159,8 +163,8 @@ const VERI = process.env.VERI || '/mnt/project-files/surgical-guide-prototype/au
   // ---------- C5: very short segment ----------
   await h.run('C5', '4 · Fibula', 'Dar rezeksiyon (−2…2, pay 3 → 10 mm) ve 3 segment', 'Kısa segmentler kritik olarak işaretlenir, onay engellenir', async () => {
     await h.openStep(1); await page.click('#sampleM'); await h.settle();
-    await page.click('#fibSample'); await h.fibReady(); await page.click('#scM').catch(() => {});
-    await h.openStep(3); await page.click('#autoPrep'); await h.settle();
+    await page.click('#fibSample'); await h.fibLoaded(); await page.click('#scM').catch(() => {});
+    await h.openStep(3); await page.click('#autoPrep'); await h.fibReady();
     await page.evaluate(() => { const d = document.getElementById('secBounds'); if (!d.open) d.querySelector('summary').click(); });
     await h.setRange('#l_from', -2); await h.setRange('#l_to', 2); await h.setRange('#l_margin', 3);
     await page.click('#suggest'); await h.settle();

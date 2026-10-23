@@ -62,7 +62,8 @@ const layout = () => {
   if (process.env.D_LIVE === '0') return;
   {
     // read-only smoke test of the deployed site: GETs only (fetched through curl), every POST/PUT/DELETE is blocked
-    const LIVE = 'https://sguide.up.railway.app/?ornek=sentetik';
+    // the page URL (synthetic sample) and the site root for its files (Denetim 6: LIVE + 'app.js' fetched the page itself)
+    const LIVE = 'https://sguide.up.railway.app/?ornek=sentetik', ROOT = 'https://sguide.up.railway.app/';
     const h = await H.start({ name: 'D_live', dir: 'D', external: 'live' });
     const { page, context } = h;
     const blocked = [];
@@ -80,8 +81,8 @@ const layout = () => {
     await h.run('D3.0', 'Canlı site', 'sguide.up.railway.app aç (salt okunur; POST/PUT engelli), örnek mandibula yüklenir, konsol', 'Sayfa açılır, örnek vaka görünür, konsol hatası yok, hiçbir yazma isteği gönderilmez', async () => {
       const t = Date.now();
       await page.goto(LIVE, { waitUntil: 'domcontentloaded' }); await h.waitReady(); await h.sleep(2000);
-      const s = await h.state(), hl = execFileSync('curl', ['-sS', '--max-time', '30', LIVE + 'health']).toString().slice(0, 200);
-      const cfg = execFileSync('curl', ['-sS', '--max-time', '30', LIVE + 'config.js']).toString().slice(0, 200);
+      const s = await h.state(), hl = execFileSync('curl', ['-sS', '--max-time', '30', ROOT + 'health']).toString().slice(0, 200);
+      const cfg = execFileSync('curl', ['-sS', '--max-time', '30', ROOT + 'config.js']).toString().slice(0, 200);
       const ver = await page.evaluate(() => [...document.scripts].map(s => s.src).filter(Boolean).length);
       const ev = await h.shot('D3.0_canli');
       const errs = h.errors.filter(e => e.scenario === 'D3.0');
@@ -91,7 +92,7 @@ const layout = () => {
       const crypto = require('crypto'), md5 = b => crypto.createHash('md5').update(b).digest('hex');
       const out = [];
       for (const f of ['index.html', 'app.js', 'i18n_en.js', 'fibula.js']) {
-        const live = execFileSync('curl', ['-sS', '--max-time', '30', LIVE + (f === 'index.html' ? '' : f)]);
+        const live = execFileSync('curl', ['-sS', '--max-time', '30', ROOT + (f === 'index.html' ? '' : f)]);
         const loc = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'web', f));
         out.push(`${f}: ${md5(live) === md5(loc) ? 'aynı' : 'FARKLI'} (${live.length}/${loc.length} B)`);
       }

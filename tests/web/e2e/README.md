@@ -3,7 +3,7 @@
 Tek komut (yerel sunucuyu kendisi başlatır, tüm senaryoları sırayla tek tarayıcıyla çalıştırır, sonunda `../kanit/tablo.md` üretir):
 
 ```bash
-REPO=/home/user/surgical-guide PORT=8840 bash run_all.sh       # A1 A2 A3 C D F E Y3 B (gerçek BT dahil ~60-90 dk)
+REPO=/home/user/surgical-guide PORT=8840 bash run_all.sh       # A1 A2 A3 K C D F G H E Y3 B (gerçek BT dahil ~60-90 dk)
 ONLY="A1 A2 A3 C D F E Y3" bash run_all.sh                       # gerçek BT olmadan (~45 dk)
 D_LIVE=0 bash run_all.sh                                          # canlı site duman testi olmadan
 KANIT=/scratch/kanit E2E_SCRATCH=/scratch/e2e bash run_all.sh     # kanıt ve geçici dosyalar depo dışında
@@ -25,6 +25,7 @@ Gerçek BT zip'leri `VERI` (varsayılan `../../veri/`) altında: `mandibula_anon
 | `A2_persist.js` | Kaydet → yenile → yeniden aç, vaka listesi, geri al/ileri al ×3, geçmiş paneli, sürüm yükleme, yeni vaka temizliği, onaylı planın yeniden açılması / geri alınması |
 | `A3_i18n_ui.js` | Ayarlar, yardım, TR→EN her adım + sağ panel + diyaloglar (görünür Türkçe metin taraması), EN'de dinamik metinler, EN→TR, dil tercihinin kalıcılığı |
 | `B_real.js` | Gerçek anonim BT: bozuk zip / rastgele zip / .txt / sahte .dcm, mandibula zip (6 seri), seri seçici (0.625mm Bone), Kontroller sekmesi QC, fibula zip, gerçek veride lateral gövde rezeksiyonu, fibula 1-3 segment, plak, onay, sunucuda üretim STL'i, paket; guide STL'leri + plan → `kanit/real/` |
+| `K_default_real.js` | Varsayılan gerçek BT akışı, kutudan çıktığı gibi: parametresiz açılış (anonim gerçek BT mandibula), Otomatik planla, gerçek BT fibula örneği + fibula guide, onaylar, sunucuda üretim STL'i (ilerleme çubuğu geri gitmez), paket (3MF üçgen sayısı = üretim STL'leri), tek STL indirme |
 | `C_edge.js` | Yükleme sırasında iptal / ikinci dosya / sayfa yenileme, fibula görünümünde mandibula etkileşimi, farklı eşikle eski planı açma, ramusa yakın 46 mm rezeksiyon, kondil dahil rezeksiyon + yeniden açma, çok kısa segment, önceki denetim bulgularının yeniden kontrolü, sunucu kapalıyken üretim STL'i |
 | `E_roll.js` | Guide kemik etrafında −180…180° kaydırılınca her vida kemikte ≥ 4 mm ve gövde altında |
 | `Y3_plate_undo.js` | Guide 50 mm + plak + "Vidaları plağa hizala" + onaylar → kesi değişikliği → geri al: plate bayrakları, onaylar ve paketteki plak dosyaları geri gelir |

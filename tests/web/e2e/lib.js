@@ -157,6 +157,11 @@ async function start(opt = {}) {
       }
       return false;
     },
+    // the fibula CT is loaded and separated (Fibula.active, the busy layer gone); no fibula plan is needed for this, so it
+    // is the wait after a fibula load while the mandible has no resection yet (Denetim 6: C7 and C5 waited for a plan there)
+    async fibLoaded(timeout = 240000) {
+      await page.waitForFunction(() => window.Fibula && Fibula.active() && Studio.S.fib && !(Studio.loadBusy && Studio.loadBusy()), null, { timeout }); await h.idle(timeout);
+    },
     // the fibula plan has been computed (segments exist) and every rebuild has settled
     async fibReady(timeout = 240000) {
       await page.waitForFunction(() => window.Fibula && Fibula.state().last, null, { timeout }); await h.settle(timeout);
@@ -252,7 +257,7 @@ async function start(opt = {}) {
 
 // zip contents through Python's zipfile (no external unzip binary, so the suites also run on Windows)
 const ZPY = "import zipfile, sys\nz = zipfile.ZipFile(sys.argv[2])\nif sys.argv[1] == 'list': print('\\n'.join(z.namelist()))\nelif sys.argv[1] == 'read': sys.stdout.buffer.write(z.read(sys.argv[3]))\nelse: [z.extract(n, sys.argv[3]) for n in sys.argv[4:]]";
-const py = args => require('child_process').execFileSync(process.platform === 'win32' ? 'python' : 'python3', ['-I', '-c', ZPY, ...args]);
+const py = args => require('child_process').execFileSync(process.platform === 'win32' ? 'python' : 'python3', ['-I', '-c', ZPY, ...args], { maxBuffer: 256 * 1024 * 1024 });   // a production STL is well over the 1 MB default
 const zipList = p => py(['list', p]).toString().trim().split(/\r?\n/);
 const zipRead = (p, name) => py(['read', p, name]);
 const zipExtract = (p, names, dir) => py(['extract', p, dir, ...names]);

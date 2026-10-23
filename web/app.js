@@ -3453,9 +3453,11 @@
       lesion = { from: -1, to: 3, margin: 3 };
       g = { rot: 0, L: 44, W: 20, wrap: 6, wall: 2.5, clear: 0.3, bridge: 4, side: 1 };
     } else if (S.source && S.source.type === 'sample' && S.source.name === 'mandible_ct') {
-      // real CT sample: from the right side onto the front of the right body (about a third back, a fifth up)
+      // real CT sample: from the right side onto the right body, about halfway back and a fifth up, where the arch runs
+      // straight. A third back (the parasymphysis) gave the automatic plan a 45 mm curved defect: one fibula segment
+      // deviated 9.8 mm from it (critical) and the guide's rim fell under the print check (Denetim 6, scenario K).
       const sz = box.getSize(V());
-      from = V(box.min.x - 40, box.min.y + 0.35 * sz.y, box.min.z + 0.2 * sz.z); dirv = V(1, 0, 0);
+      from = V(box.min.x - 40, box.min.y + 0.5 * sz.y, box.min.z + 0.2 * sz.z); dirv = V(1, 0, 0);
       S.presetRay = { from, dirv }; setTimeout(() => fitTo(parts.bone.obj), 50); return;
     } else return;
     // sample defaults only; the region is picked on the model (or by 'Otomatik hazırla', which uses this spot)

@@ -5,7 +5,7 @@ const K = process.env.KANIT || path.resolve(__dirname, '..', 'kanit');   // same
 const files = [];
 for (const d of fs.readdirSync(K)) { const dd = path.join(K, d); if (!fs.statSync(dd).isDirectory()) continue; for (const f of fs.readdirSync(dd)) if (/^results.*\.json$/.test(f)) files.push(path.join(dd, f)); }
 let rows = [], errs = [];
-const order = ['A1_flow', 'A2_persist', 'A3_i18n_ui', 'B_real', 'C_edge', 'D_1024', 'D_1440_header', 'D_live', 'F_1024x768', 'F_1280x720', 'E_roll', 'Y3_plate_undo'];
+const order = ['A1_flow', 'A2_persist', 'A3_i18n_ui', 'K_default_real', 'B_real', 'C_edge', 'D_1024', 'D_1440_header', 'D_live', 'F_1024x768', 'F_1280x720', 'E_roll', 'Y3_plate_undo'];
 const runs = files.map(f => JSON.parse(fs.readFileSync(f))).sort((a, b) => order.indexOf(a.name) - order.indexOf(b.name));
 // several runs write into the same folder: results.json is per run, so keep a copy per run name
 for (const r of runs) { rows.push(...r.results.map(x => Object.assign({ run: r.name }, x))); errs.push(...r.errors.map(e => Object.assign({ run: r.name }, e))); }

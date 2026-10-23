@@ -109,6 +109,19 @@ test('dictionary hygiene: no empty values, no value still containing Turkish let
   assert.ok(bad.filter(([, v]) => !v || !String(v).trim()).length === 0, 'empty English values');
 });
 
+// Denetim 6 (A3.3): a dictionary key written with a literal number ("sunucu yoksa 0,4 mm önizleme") is never found, because
+// the lookup lifts every number of the page text to "#" first; the English stays Turkish at run time while the coverage
+// tests, which compare keys to keys, pass. Every number a key could carry must be written as "#".
+test('dictionary keys hold no bare number: every number is a # placeholder (the lookup lifts numbers before it looks)', () => {
+  const NUM = /(?<![A-Za-z0-9ÇĞİÖŞÜçğıöşü])[-−+]?\d+(?:[.,]\d+)*(?![A-Za-zÇĞİÖŞÜçğıöşü])/;
+  const bad = Object.keys(EN.D).filter(k => NUM.test(k) && !/^[\d.,%#\s\-−+]*$/.test(k));
+  if (bad.length) console.log('    keys with literal numbers:', bad.slice(0, 10).join(' | '));
+  assert.equal(bad.length, 0, `${bad.length} dictionary keys with a literal number`);
+  // the title that stayed Turkish in the browser (index.html, step 8) comes out in English with its number
+  assert.equal(EN.t('Sunucuda üretilen su geçirmez STL (gerekirse şimdi üretilir); sunucu yoksa 0.4 mm önizleme'),
+    'The watertight STL made on the server (made now if needed); without a server, the 0.4 mm preview');
+});
+
 const html = coverage(fromHtml(src('index.html'))), app = coverage(fromJs(src('app.js')));
 test(`index.html: every Turkish text node / title / aria-label / placeholder has an English entry (${html.missing.length} of ${html.total} missing)`, () => {
   console.log(`    index.html: ${html.total} distinct Turkish strings, ${html.missing.length} without English`);

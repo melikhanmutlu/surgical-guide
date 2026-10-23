@@ -103,16 +103,23 @@ const fs = require('fs'), path = require('path'), { execFileSync } = require('ch
   });
   const dragCut = async (id, mode, du) => h.run(id, '3 · Rezeksiyon', `Kesi 1'i 3B modelde fareyle sürükle (${mode === 'bone' ? 'Kemik boyunca' : 'Guide ekseni'}, ~${du} mm)`, 'Kesi konumu değişir, onayı kalkar, geçmişe yazılır, guide yeniden üretilir', async () => {
     await page.keyboard.press('Escape'); await h.sleep(200);
+    // A1.3a2 loaded the fibula sample, which turns the 3D view to the leg; the cut is dragged on the mandible scene
+    await page.click('#scM').catch(() => {}); await h.sleep(300);
     await page.evaluate(m => { document.getElementById('dragAxis').value = m; }, mode);
     const g = await h.ev(du => { const S = Studio.S, pw = Studio.planesWorld()[0], f = Studio.frameAxes(), v = x => [x.x, x.y, x.z]; return { a: v(pw.p.clone().add(f.n.clone().multiplyScalar(6))), b: v(S.anchor.p.clone().add(f.u.clone().multiplyScalar(pw.off + du))), off: pw.off, hist: CaseStore.history.list.length }; }, du);
     const vis = await page.isVisible('#dragAxis').catch(() => false);
     const A = await h.proj(g.a), B = await h.proj(g.b);
+    // what is under the two pointer positions (the pick needs the plane at A, the bone/guide at B): kept for diagnosis
+    const under = await page.evaluate(([A, B]) => [A, B].map(q => { const St = Studio, el = St.renderer.domElement, r = el.getBoundingClientRect(), top = document.elementFromPoint(q.x, q.y); const view = window.Fibula && Fibula.view ? Fibula.view() : '-';
+      const rw = St.S.split ? r.width / 2 : r.width, m = new THREE.Vector2(((q.x - r.left) / rw) * 2 - 1, -((q.y - r.top) / r.height) * 2 + 1), rc = new THREE.Raycaster(); rc.setFromCamera(m, St.camera);
+      const els = Object.values(St.parts).filter(pt => pt.visible && pt.obj); const hit = rc.intersectObjects(els.map(pt => pt.obj), true)[0];
+      return { view, el: top ? (top.id || top.tagName) : null, hit: hit ? els.find(pt => pt.obj === hit.object || pt.obj.children.includes(hit.object)) && els.find(pt => pt.obj === hit.object || pt.obj.children.includes(hit.object)).id : null }; }), [A, B]);
     await h.drag3d(A, B, 14);
     await h.sleep(600); await h.idle();
     const s = await st();
     const after = await h.ev(() => ({ off: Studio.S.planes[0].off, yaw: Studio.S.planes[0].yaw, ok: Studio.S.planes[0].ok, hist: CaseStore.history.list.slice(-1)[0].label, n: CaseStore.history.list.length }));
     const ev = await h.shot(id + '_drag_' + mode);
-    return { pass: Math.abs(after.off - g.off) >= 1 && s.pieces >= 1, actual: `dragAxis görünür=${vis}; off ${g.off} → ${after.off}, yaw ${after.yaw}, onay=${after.ok}; geçmiş "${after.hist}"; parça ${s.pieces}, kritik ${s.crit} ${s.critList.join(' | ')}`, evidence: ev };
+    return { pass: Math.abs(after.off - g.off) >= 1 && s.pieces >= 1, actual: `dragAxis görünür=${vis}; A altında ${JSON.stringify(under[0])}, B altında ${JSON.stringify(under[1])}; off ${g.off} → ${after.off}, yaw ${after.yaw}, onay=${after.ok}; geçmiş "${after.hist}"; parça ${s.pieces}, kritik ${s.crit} ${s.critList.join(' | ')}`, evidence: ev };
   });
   await dragCut('A1.3b', 'bone', -4);
   await dragCut('A1.3c', 'guide', 3);
@@ -214,11 +221,16 @@ const fs = require('fs'), path = require('path'), { execFileSync } = require('ch
     const s = await st();
     return { pass: s.screws === n0 - 1 && !s.nullScrews, actual: `vida ${n0} → ${s.screws}, null vida ${s.nullScrews}, kritik ${s.crit}` };
   });
-  await h.run('A1.6d', '3 · Guide', 'Taraf başına vida 1 ↔ 2', '2 / 4 vida, null yok', async () => {
+  await h.run('A1.6d', '3 · Guide', 'Taraf başına vida 1 ↔ 2', 'Elle konan vidalar kalır; otomatik vidalar her ucu taraf başına sayıya tamamlar (en çok 2 / 4), null yok', async () => {
     await h.openStep(3);
-    await seg('perSide', '1'); await h.sleep(400); await h.idle(); const a = await st();
-    await seg('perSide', '2'); await h.sleep(400); await h.idle(); const b = await st();
-    return { pass: a.screws === 2 && b.screws === 4 && !a.nullScrews && !b.nullScrews, actual: `1/taraf → ${a.screws} vida (parça ${a.pieces}); 2/taraf → ${b.screws} vida (parça ${b.pieces}), kritik ${b.crit}` };
+    // screws the surgeon placed or moved (hand) stay through a per-side change (Denetim 4 W13); a hand screw on an end
+    // counts towards that end's quota (placeScrews `have`), so the automatic ones number at most 2 per end × ends
+    const cnt = () => h.ev(() => ({ hand: Studio.S.screws.filter(s => s && s.hand).length, auto: Studio.S.screws.filter(s => s && !s.hand).length }));
+    const hand = (await cnt()).hand;
+    await seg('perSide', '1'); await h.sleep(400); await h.idle(); const a = await st(), ca = await cnt();
+    await seg('perSide', '2'); await h.sleep(400); await h.idle(); const b = await st(), cb = await cnt();
+    const ok = ca.hand === hand && cb.hand === hand && ca.auto >= 2 - hand && ca.auto <= 2 && cb.auto >= 4 - hand && cb.auto <= 4 && cb.auto > ca.auto && !a.nullScrews && !b.nullScrews;
+    return { pass: ok, actual: `elle ${hand}; 1/taraf → ${a.screws} vida (${ca.auto} otomatik + ${ca.hand} elle, parça ${a.pieces}); 2/taraf → ${b.screws} vida (${cb.auto} otomatik + ${cb.hand} elle, parça ${b.pieces}), kritik ${b.crit}` };
   });
 
   // ---------- step 4: fibula ----------
@@ -334,6 +346,8 @@ const fs = require('fs'), path = require('path'), { execFileSync } = require('ch
     const locked = await page.$eval('#expZip', b => b.disabled), pill = (await st()).pill;
     await page.keyboard.press('Escape'); await page.click('#stage', { position: { x: 30, y: 30 } }).catch(() => {});
     await page.keyboard.press('Control+z'); await h.sleep(1000); await h.idle();
+    // the approvals come back as the rebuilt guide's checks finish; wait for the unlock itself (up to 60 s) instead of a fixed pause
+    await page.waitForFunction(() => !document.getElementById('expZip').disabled, null, { timeout: 60000 }).catch(() => {}); await h.settle();
     const un = await page.$eval('#expZip', b => b.disabled), pill2 = (await st()).pill;
     return { pass: locked && !un, actual: `değişiklik sonrası paket kilitli=${locked} (durum "${pill}"); Ctrl+Z sonrası kilitli=${un} (durum "${pill2}")` };
   });
