@@ -578,7 +578,8 @@
     return out;
   }
   // image quality checks + checks of the chosen planning bone (is it really only a mandible?)
-  function syncQC() { S.qc = (S.qcBase || []).concat(S.segWarn || []); renderQC(); }
+  // (S.legQc: the fibula's leg CT checks, fibula.js; they count like the mandible's)
+  function syncQC() { S.qc = (S.qcBase || []).concat(S.segWarn || [], S.legQc || []); renderQC(); }
   function segChecks() {
     const out = [], inf = S.segInfo, w = (t, ...a) => out.push(['warn', 'Uyarı', t(...a)]);
     if (!S.mask || !S.red) return out;
@@ -1056,19 +1057,21 @@
   // grid's box first), kept while the box, the bone and the threshold stay; a point outside the box (or a box too large
   // to hold) reads the work field as before.
   const FINE_MAX = 30e6;
-  function fineField(vol, red, F, thr) {
+  function fineField(vol, red, F, thr, ed) {
     if (!vol || !vol.hu || !red || !F) return q => fieldAt(red, F, [q.x, q.y, q.z]);
     let C = null;   // { lo: [i, j, k], n: [nx, ny, nz], f: Float32Array }
     const coarse = q => fieldAt(red, F, [q.x, q.y, q.z]);
     function build(lo, hi) {
       const [nx, ny, nz] = [0, 1, 2].map(a => hi[a] - lo[a] + 1), N = nx * ny * nz, nxy = nx * ny;
       if (N > FINE_MAX || nx < 2 || ny < 2 || nz < 2) return null;
-      const m = new Uint8Array(N), cut = thr == null ? 0.5 : 0.05;
+      const m = new Uint8Array(N), cut = thr == null ? 0.5 : 0.05, E = editsAt(ed, red);
       for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) {
         const r = nx * (j + ny * k), src = lo[0] + vol.nx * (lo[1] + j + vol.ny * (lo[2] + k));
         for (let i = 0; i < nx; i++) {
-          if (thr != null && vol.hu[src + i] < thr) continue;
-          if (fieldAt(red, F, G.worldOf(vol, lo[0] + i, lo[1] + j, lo[2] + k)) > cut) m[r + i] = 1;
+          if (thr != null && vol.hu[src + i] < thr) { if (E && E.add(G.worldOf(vol, lo[0] + i, lo[1] + j, lo[2] + k))) m[r + i] = 1; continue; }
+          const w = G.worldOf(vol, lo[0] + i, lo[1] + j, lo[2] + k);
+          if (E && E.del(w)) continue;
+          if (fieldAt(red, F, w) > cut) m[r + i] = 1;
         }
       }
       const ext = G.exterior(m, nx, ny, nz);       // (binary_fill_holes: what the outside cannot reach is bone)
@@ -1110,11 +1113,11 @@
   }
   // one per bone and threshold: the mandible's guide field (boneField for the guide); the fibula module asks for its own
   const fineCache = new Map();
-  function guideField(vol = S.vol, red = S.red, F = S.maskF, thr = segThr()) {
-    const hit = fineCache.get(F);
-    if (hit && hit.vol === vol && hit.red === red && hit.thr === thr) return hit.fn;
+  function guideField(vol = S.vol, red = S.red, F = S.maskF, thr = segThr(), ed = F === S.maskF ? segEdits() : null) {
+    const hit = fineCache.get(F), ek = ed && window.SegEdit ? SegEdit.key() : '';
+    if (hit && hit.vol === vol && hit.red === red && hit.thr === thr && hit.ek === ek) return hit.fn;
     if (fineCache.size > 3) fineCache.clear();
-    const fn = fineField(vol, red, F, thr); fineCache.set(F, { vol, red, thr, fn }); return fn;
+    const fn = fineField(vol, red, F, thr, ed); fineCache.set(F, { vol, red, thr, ek, fn }); return fn;
   }
   function boneAt(q) { return boneAtIn(S.red, S.maskF, q); }
   function boneField(q) { return fieldAt(S.red, S.maskF, [q.x, q.y, q.z]); }
@@ -1513,8 +1516,10 @@
     const w = screwWorld(sc); if (!w.entry) return;
     let exit = null;
     for (let t = 1; t <= sc.len + 1e-9; t += 0.25) if (!boneAt(w.entry.clone().addScaledVector(w.dir, t))) { exit = t; break; }
-    if (exit === null) return;
-    const L = Math.floor(exit - 1);
+    let L = exit === null ? sc.len : Math.floor(exit - 1);
+    // a marked inferior alveolar canal (canal.js): the screw ends Canal.SAFE mm short of its wall
+    const lc = window.Canal && Canal.maxLen ? Canal.maxLen(w.entry, w.dir, sc.len, sc.d / 2) : null;
+    if (lc != null) L = Math.min(L, lc);
     if (L >= SCREW_LEN_MIN && L < sc.len) sc.len = L;
   }
   // the drops still open: the cut is still there and its end holds fewer screws than the placement wanted
@@ -2395,10 +2400,12 @@
     const dims = [vol.nx, vol.ny, vol.nz], lo = [0, 1, 2].map(a => Math.max(0, Math.floor(Math.min(...ix.map(q => q[a]))))), hi = [0, 1, 2].map(a => Math.min(dims[a] - 1, Math.ceil(Math.max(...ix.map(q => q[a])))));
     const [nx, ny, nz] = [0, 1, 2].map(a => hi[a] - lo[a] + 1), req = { kind: 'bar', resolution: 0.2, bar: { path: spec.path.map(arr), r: spec.r, pads: spec.pads.map(p => ({ c: arr(p.c), axis: arr(p.axis), R: p.R, T: p.T, hole: p.hole })) } };
     if (nx < 2 || ny < 2 || nz < 2 || nx * ny * nz > 60e6) return req;
-    const mask = new Uint8Array(nx * ny * nz), cut = c.thr == null ? 0.5 : 0.05;
+    const mask = new Uint8Array(nx * ny * nz), cut = c.thr == null ? 0.5 : 0.05, E = editsAt(c.F === S.maskF ? segEdits() : null, c.red);
     for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
-      if (c.thr != null && vol.hu[lo[0] + i + vol.nx * (lo[1] + j + vol.ny * (lo[2] + k))] < c.thr) continue;
-      if (fieldAt(c.red, c.F, G.worldOf(vol, lo[0] + i, lo[1] + j, lo[2] + k)) > cut) mask[i + nx * (j + ny * k)] = 1;
+      const w = G.worldOf(vol, lo[0] + i, lo[1] + j, lo[2] + k);
+      if (c.thr != null && vol.hu[lo[0] + i + vol.nx * (lo[1] + j + vol.ny * (lo[2] + k))] < c.thr) { if (E && E.add(w)) mask[i + nx * (j + ny * k)] = 1; continue; }
+      if (E && E.del(w)) continue;
+      if (fieldAt(c.red, c.F, w) > cut) mask[i + nx * (j + ny * k)] = 1;
     }
     let bin = ''; for (let i = 0; i < mask.length; i += 0x8000) bin += String.fromCharCode.apply(null, mask.subarray(i, i + 0x8000));
     return Object.assign(req, { crop: { nx, ny, nz, sp: vol.sp.slice(), origin: G.worldOf(vol, ...lo), axes: vol.axes.map(q => q.slice()) }, mask_b64: btoa(bin) });
@@ -2638,6 +2645,9 @@
         const a = slotPlay(p.w, S.g.blade, depth);
         if (a > SLOT_PLAY_MAX + 1e-6) out.push(['crit', 'Kritik', xl(`Kesi ${i + 1} yuvasında testere ${fmt(a, 1)}° eğilebilir (yuva ${fmt(p.w, 2)} mm, bıçak ${fmt(S.g.blade, 2)} mm, kılavuz derinliği ${fmt(depth, 1)} mm); en çok ${SLOT_PLAY_MAX}° olmalı.`) + ' ' + xl('Yuvayı bıçağa göre daraltın ya da yuva kılavuzunu yükseltin.'), 'p' + i, [['slotFit', 'Yuvayı bıçağa uydur']]]);
       });
+      // the bone of the production STL (plan 1.2): a threshold segmentation gives the CT at full resolution; an AI or
+      // hand mask has only the 0.8 mm working grid, so the guide's contact surface follows its steps
+      if (S.mask && segThr() == null) out.push(['info', 'Bilgi', xl('Kemik modeli eşikle değil yapay zekâ ya da elle maskeyle çıkarıldı: üretim guide\'ının kemiğe oturan yüzeyi 0,8 mm ızgaradan gelir (eşik segmentasyonunda BT\'nin tam çözünürlüğü kullanılır).'), 'guide']);
       // screws the automatic placement could not put anywhere, and a guide with none
       liveDrops().forEach(d => out.push(['crit', 'Kritik', (DROP_MSG[d.why] || DROP_MSG.none)(d.cut + 1), 'p' + d.cut]));
       if (S.guideOn && !S.screws.length) out.push(['crit', 'Kritik', 'Guide\'da vida yok; guide kemiğe sabitlenemez. Vida ekleyin.', 'guide']);
@@ -2817,6 +2827,8 @@
       syncGuideInputs(); emit('changed'); schedule(true); return;
     }
     if (id === 'fibOpt') { const b = $('fibOpt'); if (b) b.click(); return; }
+    // fixes of the modules (canal.js canalLen, ...)
+    if (window.FixHooks && FixHooks[id]) { await FixHooks[id](); return; }
   }
   // Checks that hold the approval and the package back on what goes to the printer (E1, E3): a production STL the server
   // reports as not watertight or in more pieces than the layout has, and a plate whose path could not be completed
@@ -3719,11 +3731,12 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     const lo = [0, 1, 2].map(a => Math.max(0, Math.floor(ic[a] - R / vol.sp[a]))), hi = [0, 1, 2].map(a => Math.min(dims[a] - 1, Math.ceil(ic[a] + R / vol.sp[a])));
     const [nx, ny, nz] = [0, 1, 2].map(a => hi[a] - lo[a] + 1);
     if (nx < 2 || ny < 2 || nz < 2) throw new Error('Guide bölgesi hacmin dışında.');
-    const mask = new Uint8Array(nx * ny * nz), cut = c.thr == null ? 0.5 : 0.05;
+    const mask = new Uint8Array(nx * ny * nz), cut = c.thr == null ? 0.5 : 0.05, E = editsAt(c.ed === undefined && c.F === S.maskF ? segEdits() : c.ed || null, c.red);
     for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
-      const hu = vol.hu[lo[0] + i + vol.nx * (lo[1] + j + vol.ny * (lo[2] + k))];
-      if (c.thr != null && hu < c.thr) continue;
-      if (fieldAt(c.red, c.F, G.worldOf(vol, lo[0] + i, lo[1] + j, lo[2] + k)) > cut) mask[i + nx * (j + ny * k)] = 1;
+      const hu = vol.hu[lo[0] + i + vol.nx * (lo[1] + j + vol.ny * (lo[2] + k))], w = G.worldOf(vol, lo[0] + i, lo[1] + j, lo[2] + k), v = i + nx * (j + ny * k);
+      if (c.thr != null && hu < c.thr) { if (E && E.add(w)) mask[v] = 1; continue; }
+      if (E && E.del(w)) continue;
+      if (fieldAt(c.red, c.F, w) > cut) mask[v] = 1;
     }
     // a threshold mask goes as the CT values themselves, a ramp around the threshold (mask_scale 255, 128 and up is bone):
     // the server's surface then lies where the CT crosses the threshold, between cells, instead of on the cell faces
@@ -3737,6 +3750,8 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
         const hu = vol.hu[lo[0] + i + vol.nx * (lo[1] + j + vol.ny * (lo[2] + k))];
         if (mask[v]) { out[v] = Math.max(128, ramp(hu)); continue; }
         if (hu >= c.thr) continue;
+        // (a cell an edit erased stays 0, it is no ramp neighbour of the bone)
+        if (E && E.del(G.worldOf(vol, lo[0] + i, lo[1] + j, lo[2] + k))) continue;
         if ((i > 0 && mask[v - 1]) || (i < nx - 1 && mask[v + 1]) || (j > 0 && mask[v - nx]) || (j < ny - 1 && mask[v + nx]) || (k > 0 && mask[v - nxy]) || (k < nz - 1 && mask[v + nxy])) out[v] = Math.min(127, ramp(hu));
       }
       mask.set(out);
@@ -3808,7 +3823,18 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     return { stl: u8, watertight: js.watertight, bodies: js.bodies, volume: js.volume_mm3, clear: js.bone_clear_mm, inBone: js.in_bone_verts };
   }
   const prodKey = () => JSON.stringify([S.source && S.source.fp, S.g, S.anchor && vec(S.anchor.p), S.anchor && vec(S.anchor.n), S.planes.map(p => [p.off, p.yaw, p.pitch, p.w]), S.screws.map(s => [s.u, s.v, s.tiltU, s.tiltV, s.d, s.D, s.sleeveH, s.part || 0]), S.segMethod, $('thr').value, [...S.selected].sort((a, b) => a - b), window.SegEdit ? SegEdit.key() : '']);
-  const segThr = () => (/^Eşik/.test(S.segMethod) && !(window.SegEdit && SegEdit.edited()) ? +$('thr').value : null);
+  // the bone of the production STL and of the guide preview (plan 1.2): on a threshold segmentation the CT itself at full
+  // resolution (HU >= threshold inside the planning bone), also after brush / eraser edits: the edits (segEdits, on the
+  // 0.8 mm grid) then add the painted cells and take out the erased ones, and only there the surface is the 0.8 mm
+  // grid's. (It used to fall back to the 0.8 mm mask everywhere once anything was painted: p99 1.5-2 mm off the CT.)
+  const segThr = () => (/^Eşik/.test(S.segMethod) ? +$('thr').value : null);
+  const segEdits = () => (segThr() != null && window.SegEdit && SegEdit.masks ? SegEdit.masks() : null);
+  // whether the production bone at a full-resolution cell is the edits' (add: painted, del: erased) rather than the CT's
+  function editsAt(ed, red) {
+    if (!ed) return null;
+    const cell = w => { const ix = G.indexOf(red, w), i = Math.round(ix[0]), j = Math.round(ix[1]), k = Math.round(ix[2]); return i < 0 || j < 0 || k < 0 || i >= red.nx || j >= red.ny || k >= red.nz ? -1 : i + red.nx * (j + red.ny * k); };
+    return { add: w => { const c = cell(w); return c >= 0 && ed.add[c] === 1; }, del: w => { const c = cell(w); return c >= 0 && ed.del[c] === 1; } };
+  }
   async function productionSTL() {
     if (!parts.guide || !S.anchor) return;
     const ac = new AbortController();
@@ -4082,7 +4108,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   function serverUrl() { return ($('aiUrl').value || '').trim().replace(/\/+$/, ''); }
   function select(sel) { if (sel) S.guideSel = false; S.sel = sel; emit('select', sel); renderElements(); rebuildElementParts(S.result ? S.result.pls : planesWorld(), S.result ? S.result.screwInfo : []); applyExplode(); render(); }
   window.Studio = { bg: bgCall, loadSample, sampleFor, SAMPLES, chooseAxis, nearestPiece, netsOf, blurNetsOf, renamePart, partName, guideBuilds: () => guideBuilds, mandibleView, endModes, onEndModes, startLoad, loadStopped, loadBusy: () => committing, LOAD_CANCELLED, renderComps, setGuideRot, setGuideRoll, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, resEnds, splitGap, cutMisses, evalScrew, resectedAt, resectedNear, resPiece, boneTrack, cutAlongBone, bestScrew,
-    boneSections, sizeBody, autoBody, buildGuideSet, cutsAngle, cutFrame, pieceFrames, pieceBody, screwBodyOn, pieceWrapTop, frameAt, stumpGap, mergeStl, mergeMeshes, AUTO_DEFAULT, G_DEFAULT, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, busyFrac, busySpan, busyText, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume, boneField, simplifyMesh, BAR, barPlan, barSdf, buildBarMesh, placeLug, longCase, axisOffBone, ramusAxis, stopSides, LONG_MM, CUT_OFF_MAX, prodKey, productionSTL, exportOne, softOcc, boneDoubt, boneKey, runFix, printIssues, printLine, serverBar, guideField, lockState: () => lock, bonelessCut, slotDefault, slotDepth, slotPlay, SLOT_PLAY_MAX, reframe, exclusive, settled, makeGuide, prodReply, prodWhy, gateChecks, swInfo, swLine, sfetch, reportHTML, lesionMargins, anchorFromSlice, ramusAxis };
+    boneSections, sizeBody, autoBody, buildGuideSet, cutsAngle, cutFrame, pieceFrames, pieceBody, screwBodyOn, pieceWrapTop, frameAt, stumpGap, mergeStl, mergeMeshes, AUTO_DEFAULT, G_DEFAULT, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, busyFrac, busySpan, busyText, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume, boneField, simplifyMesh, BAR, barPlan, barSdf, buildBarMesh, placeLug, longCase, axisOffBone, ramusAxis, stopSides, LONG_MM, CUT_OFF_MAX, prodKey, productionSTL, exportOne, softOcc, boneDoubt, boneKey, runFix, printIssues, printLine, serverBar, guideField, lockState: () => lock, bonelessCut, qualityCheck, syncQC, segEdits, editsAt, slotDefault, slotDepth, slotPlay, SLOT_PLAY_MAX, reframe, exclusive, settled, makeGuide, prodReply, prodWhy, gateChecks, swInfo, swLine, sfetch, reportHTML, lesionMargins, anchorFromSlice, ramusAxis };
   bus.addEventListener('planeDragged', () => { renderElements(); schedule(true, 'drag'); });
   // messages assembled at run time are written in the language that was active: write them again when it changes
   if (window.addEventListener) window.addEventListener('langchange', () => { try { renderChecks(); renderAppr(); syncLesion(); } catch (e) { /* no case open yet */ } });

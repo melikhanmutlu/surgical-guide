@@ -697,6 +697,7 @@ button.ghost.danger { color: var(--crit); }
             <div class="ctl"><label for="fibCand" class="lbl2">Fibula</label><select id="fibCand"></select></div>
             <div class="ctl"><label for="fibSide" class="lbl2">Bacak tarafı</label><select id="fibSide"><option value="">Otomatik</option><option value="L">Sol bacak</option><option value="R">Sağ bacak</option></select></div>
             <p class="hint" id="fibSideMsg"></p>
+            <div class="ctl"><div class="ctl-row"><label for="fibThr">Bacak kemik eşiği</label><output id="fibThrO">250 HU</output></div><input type="range" id="fibThr" min="120" max="800" step="10" value="250"><p class="hint more" data-for="fibThr">Fibula BT'sinin kemik eşiği; mandibulanınkinden ayrıdır. Kontrastlı ya da gürültülü seride yükseltin, ince korteks kayboluyorsa düşürün.</p></div>
             <div class="btns"><button id="fibPick" aria-pressed="false"><svg class="i"><use href="#i-target"/></svg>Modelde seç</button><button id="fibSplit" aria-pressed="false"><svg class="i"><use href="#i-scissors"/></svg>Tibiadan ayır</button></div>
             <p class="hint" id="fibPickMsg" hidden></p>
             <h3 class="sub">Segmentler</h3>
@@ -783,6 +784,7 @@ button.ghost.danger { color: var(--crit); }
         <div class="body">
           <div class="el-row"><div class="el-list" id="scList" role="group" aria-label="Vidalar"></div><button id="addScrew" class="ghost sm" title="Vida ekle"><svg class="i"><use href="#i-plus"/></svg>Vida</button></div>
           <div id="scProps" class="col"></div>
+          <div id="canalBox" class="col"></div>
           <div class="stepwarn" data-for="scr"></div>
           <div class="nav"><button class="primary next" data-next="st7">İnceleme ve onay<svg class="i"><use href="#i-next"/></svg></button></div>
         </div>
@@ -966,6 +968,8 @@ button.ghost.danger { color: var(--crit); }
 <script src="osteo.js"></script>
 <script src="implant.js"></script>
 <script src="mfg.js"></script>
+<script src="metalqc.js"></script>
+<script src="canal.js"></script>
 <script src="fit.js"></script>
 <script src="audit.js"></script>
 <script src="dates.js"></script>

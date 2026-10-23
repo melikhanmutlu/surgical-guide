@@ -234,5 +234,5 @@ window.SegEdit = (function () {
   status();
 
   return { active: () => !!tool && tool !== 'scissors', tool: () => tool, paint, strokeEnd, applyTo(m) { if (!add || add.length !== m.length) return; for (let v = 0; v < m.length; v++) { if (del[v]) m[v] = 0; else if (add[v]) m[v] = 1; } },
-    hasAdditions: () => !!(add && add.indexOf(1) >= 0), edited, key: () => edited() ? hash(rle(add)) + ':' + hash(rle(del)) : '', setTool, off: () => { if (tool) setTool(tool); }, metal, fragments, reset };
+    hasAdditions: () => !!(add && add.indexOf(1) >= 0), edited, masks: () => (edited() ? { add, del } : null), key: () => edited() ? hash(rle(add)) + ':' + hash(rle(del)) : '', setTool, off: () => { if (tool) setTool(tool); }, metal, fragments, reset };
 })();

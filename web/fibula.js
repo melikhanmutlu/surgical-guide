@@ -8,6 +8,9 @@ window.Fibula = (function () {
   const St = window.Studio; if (!St) return null;
   const { S, V, G, fmt, bus } = St, $ = id => document.getElementById(id);
   const MIN_LEN = 20, MAX_N = 4, DEV_WARN = 3, ANGLE_WARN = 35, PROX_KEEP = 60, DISTAL_MIN = 60, THR = 250, DBL_GAP = 15;
+  // leg CT threshold range (the mandible's control) and the contrast check: HU above which a voxel is cortex, the upper
+  // HU of contrast in a vessel, and the volume (cm³, sample value) of such voxels away from bone that is reported
+  const THR_RANGE = [120, 800], CORTEX_HU = 700, CONTRAST_HU = 600, CONTRAST_CM3 = 0.5, VESSEL_LEN = 40, VESSEL_AREA = 28;
   // segment length bands (literature: >= 15 mm keeps the periosteal supply, ~20 mm is the usual floor; the segments at the
   // stumps carry the fixation and heal less well, so >= 25 mm there): < SEG_ERR critical, SEG_ERR..MIN_LEN a warning,
   // a stump segment of a multi-segment graft under STUMP_MIN a warning. DEV_TIE: deviations this close count as equal
@@ -103,7 +106,7 @@ window.Fibula = (function () {
     if (ctl.byUser) St.alertMsg('Yükleme iptal edildi.');
     return true;
   }
-  async function load(kind, files) {
+  async function load(kind, files, thrV) {
     St.busy(true, 'Fibula BT\'si okunuyor…'); await St.sleep();
     let vol, source, label;
     // a DICOM / zip read can be cancelled; a newer fibula load replaces it. The fibula has its own controller: the
@@ -117,10 +120,59 @@ window.Fibula = (function () {
       if (loadCtl === ctl) loadCtl = null;
       St.busy(false); msg('Fibula BT\'si açılamadı: ' + e.message); return false;
     }
+    return analyze({ vol, source, label }, thrV == null ? thrWanted() : thrV);
+  }
+  // the bone threshold of the leg CT (plan 1.1): its own control, 250 HU by default; a plan stores it only when it
+  // differs (a plan saved before keeps its approval signature)
+  const thrWanted = () => { const v = +($('fibThr') && $('fibThr').value); return Number.isFinite(v) && v >= THR_RANGE[0] && v <= THR_RANGE[1] ? v : THR; };
+  // the leg CT's own image quality checks (the mandible's rules) and the contrast check, shown with the mandible's in
+  // step 1 under "Bacak BT'si:" and holding the approval and the package back the same way
+  function legQC(vol, red, thrV) {
+    const out = (St.qualityCheck ? St.qualityCheck(vol) : []).filter(q => q[0] !== 'info' || /Kapsam/.test(q[2])).map(q => [q[0], q[1], `${xl('Bacak BT\'si:')} ${q[2]}`]);
+    const cv = contrastVolume(red, thrV);
+    if (cv >= CONTRAST_CM3) out.push(['warn', 'Uyarı', `${xl('Bacak BT\'si:')} ${xl(`Kemik dışında ${fmt(cv, 1)} cm³ damar biçiminde (uzun ve ince), kemik eşiği üstü yoğunluk var (${thrV}–${CONTRAST_HU} HU); kontrastlı (anjiyo) BT olabilir. Damarlar fibula modeline karışabilir; eşiği ve fibula modelini kontrol edin.`)}`]);
+    return out;
+  }
+  // contrast-filled vessels in a CT angiogram of the leg are 250-500 HU tubes beside the fibula (the peroneal artery):
+  // above the bone threshold but far from any cortex (> CORTEX_HU). The volume of such voxels more than 2 mm from the
+  // filled cortical shell; a native CT has next to none (muscle 40-60 HU, cancellous bone sits inside the shell).
+  function contrastVolume(red, thrV) {
+    const { nx, ny, nz } = red, N = nx * ny * nz, hi = new Uint8Array(N);
+    for (let i = 0; i < N; i++) if (red.hu[i] >= CORTEX_HU) hi[i] = 1;
+    // filled slice by slice: a long bone cut off by the scan's ends is an open tube in 3D (its core reaches the outside)
+    // but closed in every axial slice
+    const solid = new Uint8Array(N), q = new Int32Array(nx * ny), seen = new Uint8Array(nx * ny);
+    for (let k = 0; k < nz; k++) {
+      const o = nx * ny * k; seen.fill(0); let head = 0, tail = 0;
+      const push = (i, j) => { const c = i + nx * j; if (seen[c] || hi[o + c]) return; seen[c] = 1; q[tail++] = c; };
+      for (let i = 0; i < nx; i++) { push(i, 0); push(i, ny - 1); } for (let j = 0; j < ny; j++) { push(0, j); push(nx - 1, j); }
+      while (head < tail) { const c = q[head++], i = c % nx, j = (c / nx) | 0; if (i > 0) push(i - 1, j); if (i < nx - 1) push(i + 1, j); if (j > 0) push(i, j - 1); if (j < ny - 1) push(i, j + 1); }
+      for (let c = 0; c < nx * ny; c++) if (!seen[c]) solid[o + c] = 1;
+    }
+    const D = G.edt(solid, nx, ny, nz), h = Math.min(...red.sp), cand = new Uint8Array(N);
+    for (let i = 0; i < N; i++) { const v = red.hu[i]; if (v >= thrV && v < CONTRAST_HU && !solid[i] && D[i] * h > 2) cand[i] = 1; }
+    // only vessel-like pieces count: long (≥ 40 mm) and thin (mean cross-section ≤ 28 mm², a 3 mm radius). Cancellous
+    // bone where the scan cuts a bone end and partial-volume rims are short, thick blobs (the real leg sample: 51 cm³ of
+    // them, 0 contrast tubes but one, a 304 mm long 9 mm² tube)
+    const { labels, comps } = G.components(cand, nx, ny, nz, 8), vox = red.sp[0] * red.sp[1] * red.sp[2];
+    const box = new Map(comps.map(c => [c.label, [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity]]));
+    for (let k = 0, id = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++, id++) {
+      const b = labels[id] && box.get(labels[id]); if (!b) continue;
+      if (i < b[0]) b[0] = i; if (j < b[1]) b[1] = j; if (k < b[2]) b[2] = k; if (i > b[3]) b[3] = i; if (j > b[4]) b[4] = j; if (k > b[5]) b[5] = k;
+    }
+    let mm3 = 0;
+    for (const c of comps) {
+      const b = box.get(c.label), len = Math.max((b[3] - b[0] + 1) * red.sp[0], (b[4] - b[1] + 1) * red.sp[1], (b[5] - b[2] + 1) * red.sp[2]);
+      if (len >= VESSEL_LEN && c.size * vox / len <= VESSEL_AREA) mm3 += c.size * vox;
+    }
+    return mm3 / 1000;
+  }
+  async function analyze({ vol, source, label }, thrV) {
     St.busy(true, 'Fibula ayrıştırılıyor…'); await St.sleep();
     // (a yield between the stages: each is 0.5-1.5 s on a real leg CT, together they held the page for several seconds)
     const red = G.reduce(vol, 0.8); await St.sleep();
-    const thr = G.threshold(red, THR); await St.sleep();
+    S.legQc = legQC(vol, red, thrV); if (St.syncQC) St.syncQC();
+    const thr = G.threshold(red, thrV); await St.sleep();
     const { labels, comps, count } = G.components(thr, red.nx, red.ny, red.nz, 200); await St.sleep();
     const top = comps.slice(0, 6), longOf = st => st.filter(c => c.len >= 80 && c.elong >= 3);
     let stats = boneStats(red, labels, top), long = longOf(stats), strict = fibulaCands(long);
@@ -162,7 +214,7 @@ window.Fibula = (function () {
       fibs.forEach(c => { const others = long.filter(o => o !== c && o.rad > c.rad * 1.25); c.tibia = others.sort((a, b) => a.C.distanceTo(c.C) - b.C.distanceTo(c.C))[0] || null; });
       const withT = fibs.filter(c => c.tibia); if (withT.length) fibs = withT;
     }
-    F = { source, label, vol, red, labels, cands: fibs, c: null, warn };
+    F = { source, label, vol, red, labels, cands: fibs, c: null, warn, thr: thrV };
     $('fibCand').innerHTML = fibs.map((c, i) => `<option value="${i}" title="Taraf tahminidir">Aday ${i + 1} · ${fmt(c.len, 0)} mm · Ø${fmt(2 * c.rad, 0)} · ${c.C.x > 0 ? 'sol' : 'sağ'}</option>`).join('');
     if (!fibs.some(c => c.rad <= FIB_R[1])) warn.push(`En ince aday bile Ø${fmt(2 * fibs[0].rad, 0)} mm; bu fibula değil, tibia ya da tüm alt bacak. Fibula planı güvenilmez.`);
     St.busy(false); msg(warn[0] || (fibs[0].tibia ? '' : xl('Tibia ayırt edilemedi; fibula guide\'ının yanal yönü tahmini.')));
@@ -628,7 +680,7 @@ window.Fibula = (function () {
     // placed by autoScrews (two on a segment of STUMP_MIN mm or more, at least three on the guide, clear of every slot)
     const fsc = guideScrews(c);
     const scs = fsc.map(f => { const st = screwAt(c, f); return { sc: { d: f.d, D: f.D, sleeveH: f.sleeveH, len: f.len }, dir: st.dir, entry: st.entry }; });
-    return { g, P: Pg, u: u.clone(), v, n, pls, scs, fsc, bone: fibBone, field: St.guideField ? St.guideField(F.vol, F.red, F.c.Fm, THR) : q => St.fieldAt(F.red, F.c.Fm, [q.x, q.y, q.z]) };   // (the production server's bone: Studio.guideField)
+    return { g, P: Pg, u: u.clone(), v, n, pls, scs, fsc, bone: fibBone, field: St.guideField ? St.guideField(F.vol, F.red, F.c.Fm, F.thr) : q => St.fieldAt(F.red, F.c.Fm, [q.x, q.y, q.z]) };   // (the production server's bone: Studio.guideField)
   }
   // effective slot width: the plan's slot (never narrower than the blade), else the blade itself (the old single value)
   const slotOf = P0 => Math.max(P0.kerf, P0.slotW == null ? P0.kerf : P0.slotW);
@@ -870,7 +922,7 @@ window.Fibula = (function () {
     const key = JSON.stringify([ctx.g, ctx.pls.map(p => [p.p.toArray(), p.N.toArray(), p.w].flat().map(x => Math.round(x * 100))), ctx.scs.map(s => s.entry && s.entry.toArray().map(x => Math.round(x * 100)))]);
     // (the approve button was greyed while the rebuild was due: render the step again, or it stays greyed)
     if (key === guideKey && S.fib.guide) { guideStale = false; renderStep(); St.updatePanels(); pairView(); return; }
-    building = true;
+    building = true; const fib0 = S.fib;
     // the first build fills the bar (its own progress from the guide kernel); a guide that needs further tries (another
     // rib side, shallower wraps: how many is not known beforehand) shows the try number and the elapsed time instead
     const t0 = Date.now();
@@ -893,11 +945,14 @@ window.Fibula = (function () {
         if (lowest !== null) out.result.adapt = { from: w0, to: adapt == null ? lowest : adapt, ok: !bad(out.result) };
       }
       if (flip) out.result.sideFlip = true;
+      // the fibula was unloaded or replaced while the guide was being built (a plan opened, the leg removed): drop it
+      if (S.fib !== fib0 || !active()) { out.mesh.geometry.dispose(); return; }
       leg.children.filter(o => o.userData.guide).forEach(o => { leg.remove(o); St.mat && o.material.dispose(); o.geometry.dispose(); });
       out.mesh.material = mat(FGUIDE); out.mesh.userData.guide = true; onLeg(out.mesh); St.simplifyMesh(out.mesh);
       S.fib.guide = { mesh: out.mesh, result: out.result, ctx, key, grid: out.grid }; guideKey = key;
       pairView();
-    } finally { building = false; St.busy(false); if (!guideTimer || S.fib.guide && S.fib.guide.key === key) guideStale = false; }
+    } finally { building = false; St.busy(false); if (!guideTimer || (S.fib && S.fib.guide && S.fib.guide.key === key)) guideStale = false; }
+    if (!S.fib) return;
     renderStep(); St.updatePanels(); St.render(); St.emit('fibGuide');
   }
 
@@ -1026,6 +1081,7 @@ window.Fibula = (function () {
     $('fibYaw').value = P0.yaw[jv] || 0; $('fibPitch').value = P0.pitch[jv] || 0;
     $('fibYawO').textContent = fmt(P0.yaw[jv] || 0, 0) + '°'; $('fibPitchO').textContent = fmt(P0.pitch[jv] || 0, 0) + '°';
     $('fibKerf').value = P0.kerf; $('fibKerfO').textContent = fmt(P0.kerf) + ' mm';
+    if (F) { $('fibThr').value = F.thr; $('fibThrO').textContent = F.thr + ' HU'; }
     $('fibSlot').value = slotOf(P0); $('fibSlotO').textContent = fmt(slotOf(P0), 2) + ' mm';
     $('fibDistal').value = P0.distal; $('fibDistalO').textContent = fmt(P0.distal, 0) + ' mm';
     $('fibVOff').value = P0.vOff || 0; $('fibVOffO').textContent = fmt(P0.vOff || 0) + ' mm';
@@ -1151,6 +1207,7 @@ window.Fibula = (function () {
     if ('rollAuto' in q) q.rollAuto = q.rollAuto ? 1 : 0;
     if ('rev' in q) { if (q.rev) q.rev = 1; else delete q.rev; }
     if ('rules' in q) { const r = cleanRules(q.rules); if (r) q.rules = r; else delete q.rules; }
+    if ('thr' in q) { const t = Math.round(cl(q.thr, THR_RANGE[0], THR_RANGE[1], THR) / 10) * 10; if (t === THR) delete q.thr; else q.thr = t; }
     return { plan: q, warn };
   }
   // profile overrides: known keys inside their range, only those that differ from the default; null when none is left
@@ -1164,10 +1221,10 @@ window.Fibula = (function () {
     if (!p) { if (S.fib) unload(); return; }
     const sn = sanitize(p); p = sn.plan; if (sn.warn.length) setTimeout(() => St.alertMsg(sn.warn.join(' ')), 0);
     if (!F || !F.source || F.source.fp !== p.source.fp) {
-      if (p.source && p.source.type === 'sample') { if (!(await load(p.source.name === 'leg_ct' ? 'sample_ct' : 'sample'))) return; }
+      if (p.source && p.source.type === 'sample') { if (!(await load(p.source.name === 'leg_ct' ? 'sample_ct' : 'sample', null, p.thr || THR))) return; }
       else { pending = p; msg(`${xl('Bu planın fibula serisi')} "${p.source ? p.source.name : '?'}". ${xl('Fibula planını açmak için aynı seriyi ilk adımda yükleyin.')}`); if (window.UI) UI.openStep('st1'); return; }
       F.c = null;
-    }
+    } else if ((p.thr || THR) !== F.thr) { if (!(await analyze(F, p.thr || THR))) return; F.c = null; }
     if (p.legSplit && !F.split && Array.isArray(p.legSplit.f) && Array.isArray(p.legSplit.t)) { const c = splitLeg(V(...p.legSplit.f), V(...p.legSplit.t)); if (c) F.cands.push(c); }
     let best = 0, bd = Infinity; F.cands.forEach((c, i) => { const d = c.C.distanceTo(V(...(p.cand || [0, 0, 0]))); if (d < bd) { bd = d; best = i; } });
     if (!F.c || F.c.i !== best || (!F.cands[best].tibia && p.side && F.c.FA[1].x * (p.side === 'L' ? 1 : -1) < 0)) setCandidate(best, p.side);
@@ -1180,7 +1237,7 @@ window.Fibula = (function () {
     update(); syncUI();
   }
   function unload() {
-    S.fib = null; F = null; last = null; guideKey = '';
+    S.fib = null; F = null; last = null; guideKey = ''; S.legQc = null; if (St.syncQC) St.syncQC();
     clearLeg(); St.setPart('grafts', null, null); grafts = null;
     if (view === 'f') setView('m');
     $('sceneSeg').hidden = true; $('fibBody').hidden = true; $('tag6').hidden = true; msg('');
@@ -1232,7 +1289,7 @@ window.Fibula = (function () {
   async function production(signal, onProgress) {
     if (!active() || !S.fib.guide || guideStale) return;
     const x = S.fib.guide.ctx;
-    const r = await St.serverGuide({ vol: F.vol, red: F.red, F: F.c.Fm, thr: THR, g: x.g, P: x.P, u: x.u, v: x.v, n: x.n, pls: x.pls, scs: x.scs, wrapProfile: S.fib.guide.result.wrapProfile, seatDir: S.fib.guide.result.seatDir }, signal, onProgress);
+    const r = await St.serverGuide({ vol: F.vol, red: F.red, F: F.c.Fm, thr: F.thr, g: x.g, P: x.P, u: x.u, v: x.v, n: x.n, pls: x.pls, scs: x.scs, wrapProfile: S.fib.guide.result.wrapProfile, seatDir: S.fib.guide.result.seatDir }, signal, onProgress);
     S.fib.prod = Object.assign(r, { key: S.fib.guide.key });
     $('prodMsg').textContent += ' ' + xl(`Fibula guide'ı: ${r.watertight ? 'su geçirmez' : 'SU GEÇİRMEZ DEĞİL'}, ${r.bodies} parça${r.bodies > 1 ? ' (BİRDEN FAZLA PARÇA)' : ''}.`);
     const why = St.prodWhy ? St.prodWhy(r) : ''; if (why) $('prodMsg').textContent += ' ' + why;   // (the server's reasons not to print it, P5/P6/E3)
@@ -1342,7 +1399,7 @@ window.Fibula = (function () {
         const v = i + r.nx * (j + r.ny * k); if (dom[v] && ((i - c[0]) * r.sp[0]) ** 2 + ((j - c[1]) * r.sp[1]) ** 2 + ((k - c[2]) * r.sp[2]) ** 2 <= 25) seeds[v] = val;
       }
     });
-    const { lab } = G.splitSeeds(r, dom, seeds, THR);
+    const { lab } = G.splitSeeds(r, dom, seeds, F.thr);
     // sizes first: a failed split must leave the labels as they were (the joined candidate keeps its voxels)
     let nf = 0, nt = 0; for (let v = 0; v < n; v++) { if (lab[v] === 1) nf++; else if (lab[v] === 2) nt++; }
     if (nf < 100 || nt < 100) return null;
@@ -1401,6 +1458,18 @@ window.Fibula = (function () {
   $('fibSampleCt').addEventListener('click', () => start('sample_ct'));
   $('fibDicom').addEventListener('change', e => { if (e.target.files.length) start('dicom', [...e.target.files]); e.target.value = ''; });
   $('fibFiles').addEventListener('change', e => { if (e.target.files.length) start('dicom', [...e.target.files]); e.target.value = ''; });
+  // the leg CT's bone threshold: the bone is separated again and the candidate nearest the current one kept
+  $('fibThr').addEventListener('input', e => { $('fibThrO').textContent = e.target.value + ' HU'; });
+  $('fibThr').addEventListener('change', async e => {
+    if (!F || !active()) return;
+    const v = Math.round(+e.target.value / 10) * 10, was = F.c && F.c.centroid ? V(...F.c.centroid) : null;
+    if (v === F.thr) return;
+    if (!(await analyze(F, v))) { $('fibThr').value = F ? F.thr : THR; return; }
+    let best = 0, bd = Infinity; if (was) F.cands.forEach((c, i) => { const d = c.C.distanceTo(was); if (d < bd) { bd = d; best = i; } });
+    setCandidate(best, planSide()); $('fibCand').value = best;
+    const P0 = plan(); if (v === THR) delete P0.thr; else P0.thr = v;
+    P0.cand = F.c.centroid.map(x => Math.round(x * 10) / 10); guideKey = ''; edited(false, true); setView(view);
+  });
   $('fibCand').addEventListener('change', e => { if (setCandidate(+e.target.value, planSide()) === false) { if (F.c) e.target.value = F.c.i; return; } plan().cand = F.c.centroid.map(x => Math.round(x * 10) / 10); guideKey = ''; edited(false, true); setView(view); });
   document.querySelectorAll('#fibN button').forEach(b => b.addEventListener('click', () => { if (!active()) return; plan().nAuto = 0; setN(+b.dataset.n); update(); optimizeKnots(); edited(false, true); }));
   $('fibOpt').addEventListener('click', () => { if (!active()) return; optimizeKnots(); edited(false, true); });
