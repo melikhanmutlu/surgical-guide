@@ -178,6 +178,8 @@ if (require.main === module) (async () => {
     await page.click('#resRemove').catch(() => {}); await h.idle();
     const t2 = Date.now();
     if (await page.isEnabled('#guideMake') && await page.isVisible('#guideMake')) { await page.click('#guideMake'); await h.sleep(500); await h.idle(900000); }
+    // the canal gate (plan A): the surgeon checks the screws against the canal on the slices and says so with the row's fix
+    { const b = page.locator('.checks li [data-fix="canalOk"]').first(); if (await b.count()) { await b.click(); await h.sleep(300); await h.idle(); } }
     const tG = Date.now() - t2, s = await st(), stat = await page.textContent('#guideStat'), fz = await freezes(h), mem = await h.mem();
     const vol = await h.ev(() => Math.round(Studio.S.resectedVolume || 0));
     const bb = await h.ev(() => { const r = Studio.parts.resected; if (!r) return null; const b = new THREE.Box3().setFromObject(r.obj); return [b.min.toArray().map(Math.round), b.max.toArray().map(Math.round)]; });
@@ -214,7 +216,9 @@ if (require.main === module) (async () => {
     return { pass: /delik/.test(sum) && !!pl && !pl.crit.length && pl.L <= maxL, actual: `"${sum.slice(0, 200)}" ${msg}; plak ${JSON.stringify(pl)}, rezeksiyon ${res} mm, üst sınır ${maxL} mm`, evidence: await h.shot('B2.4_plak_gercek') };
   });
   await h.run('B2.5', '7 · Onay (gerçek)', 'Cerrah adı, öğe onayları, fibula, mühendis + cerrah onayı', 'Paket etkin', async () => {
-    await h.openStep(7); await page.fill('#surgeon', 'Dr. E2E Cerrah'); await page.press('#surgeon', 'Tab');
+    await h.openStep(7);
+    { const b = page.locator('.checks li [data-fix="canalOk"]').first(); if (await b.count()) { await b.click(); await h.sleep(300); await h.idle(); } }   // screws moved since (plate): checked again
+    await page.fill('#surgeon', 'Dr. E2E Cerrah'); await page.press('#surgeon', 'Tab');
     for (let k = 0; k < 30; k++) { const b = page.locator('#appr button[data-ap]', { hasText: 'Onayla' }).first(); if (!(await b.count())) break; await b.click(); await h.sleep(300); await h.idle(60000, 300); }
     const am = await page.textContent('#apprMsg');
     await page.fill('#au_eng_n', 'Müh. E2E'); await page.click('#auditBox button[data-a="onay"][data-r="eng"]'); await h.sleep(300);
