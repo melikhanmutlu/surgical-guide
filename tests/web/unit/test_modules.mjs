@@ -146,7 +146,7 @@ test('fibula guide: built on the fibula, slots of kerf width, one piece', async 
 });
 test('fibula: slot width separate from the blade; slots open at slotW outside each face, segments spaced by slot + 1 mm', async () => {
   const keep = St.clone(W.Fibula.plan()), p = St.clone(keep);
-  p.kerf = 0.6; p.slotW = 0.8; await W.Fibula.apply(p);
+  p.kerf = 0.6; p.slotW = 0.8; await W.Fibula.apply(p)
   await until(() => S.fib.guide && S.fib.guide.ctx && Math.abs(S.fib.guide.ctx.pls[0].w - 0.8) < 1e-9 && Math.abs(S.fib.guide.ctx.pls[0].pSlot.distanceTo(S.fib.guide.ctx.pls[0].p) - 0.4) < 1e-9, 60000);
   near(W.Fibula.slotOf(), 0.8, 1e-12);
   S.fib.guide.ctx.pls.forEach(q => { near(q.w, 0.8, 1e-12); near(q.pSlot.distanceTo(q.p), 0.4, 1e-9, 'slot centre w/2 outside the face'); });
@@ -157,7 +157,7 @@ test('fibula: slot width separate from the blade; slots open at slotW outside ea
   p.slotW = 0.3; await W.Fibula.apply(p); near(W.Fibula.plan().slotW, 0.6, 1e-9, 'never narrower than the blade');
   p.slotW = 9; await W.Fibula.apply(p); near(W.Fibula.plan().slotW, 2.5, 1e-9, 'clamped to the slider range');
   await W.Fibula.apply(keep);
-  await until(() => S.fib.guide && S.fib.guide.result && Math.abs(S.fib.guide.ctx.pls[0].w - keep.kerf) < 1e-9, 60000);
+  await until(() => S.fib.guide && S.fib.guide.result && Math.abs(S.fib.guide.ctx.pls[0].w - (keep.slotW == null ? keep.kerf : keep.slotW)) < 1e-9 && Math.abs(S.fib.guide.ctx.pls[0].pSlot.distanceTo(S.fib.guide.ctx.pls[0].p) - Math.max(keep.kerf, keep.slotW || 0) / 2) < 1e-9, 60000);
 });
 test('fguide: editing the body wall writes plan.fg, unapproves the fibula plan and rebuilds', async () => {
   const p = W.Fibula.plan(); p.ok = true; p.by = 'x';
@@ -233,7 +233,8 @@ test('fibula rules: a changed threshold is stored in the plan (only if it differ
 test('fibula bridge: two segments leave both saw slots and the bone bridge between them over the whole section', async () => {
   const keep = St.clone(W.Fibula.plan()), q = St.clone(keep); q.n = 2; q.nAuto = 0; q.knots = [0.5]; q.yaw = [0, 20, 0]; q.pitch = [0, 0, 0]; q.roll = [0, 0]; q.fsc = null;
   await W.Fibula.apply(q); await sleep(30);
-  const st = W.Fibula.state(), [a, b] = st.last.segs, sw = W.Fibula.slotOf(), FR = st.F.c.FR, tilt = v => Math.hypot(v.y, v.z) / Math.abs(v.x);
+  const st = W.Fibula.state(), [a, b] = st.last.segs, sw = Math.max(W.Fibula.plan().kerf, W.Fibula.slotOf()),   // (the cut: the wider of the kerf and the slot)
+    FR = st.F.c.FR, tilt = v => Math.hypot(v.y, v.z) / Math.abs(v.x);
   // (Denetim 5 F4: the closure uses the thickest section radius, and each slot is as thick along the axis as its face is oblique)
   const FRm = st.F.c.FRm, slx = v => sw / Math.max(0.5, Math.abs(v.x));
   near(b.s0 - a.s1, slx(a.n1) + slx(b.n0) + W.Fibula.RULES.wedgeBridge + FRm * (tilt(a.n1) + tilt(b.n0)), 1e-9);

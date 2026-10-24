@@ -925,7 +925,7 @@ window.Fibula = (function () {
     if (building) { scheduleGuide(); return; }
     if (!active() || !last) { guideStale = false; return; }
     const ctx = guideCtx(last); S.fib.guideFail = !ctx; if (!ctx) { dropGuide(); guideStale = false; renderStep(); St.updatePanels(); return; }
-    const key = JSON.stringify([ctx.g, ctx.pls.map(p => [p.p.toArray(), p.N.toArray(), p.w].flat().map(x => Math.round(x * 100))), ctx.scs.map(s => s.entry && s.entry.toArray().map(x => Math.round(x * 100)))]);
+    const key = JSON.stringify([ctx.g, ctx.pls.map(p => [p.p.toArray(), (p.pSlot || p.p).toArray(), p.N.toArray(), p.w].flat().map(x => Math.round(x * 100))), ctx.scs.map(s => s.entry && s.entry.toArray().map(x => Math.round(x * 100)))]);
     // (the approve button was greyed while the rebuild was due: render the step again, or it stays greyed)
     if (key === guideKey && S.fib.guide) { guideStale = false; renderStep(); St.updatePanels(); pairView(); return; }
     building = true; const fib0 = S.fib;
