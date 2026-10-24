@@ -611,6 +611,9 @@
       if (x.code === 'big' && !(inf && inf.status === 'failed')) w(v => `Planlama kemiği ${v} cm³; bir mandibula için fazla büyük (250 cm³ üstü). Kafatası, üst çene ya da omurga da seçili olabilir; planı bu kemikle kurmayın.`, fmt(x.vol, 0));
       if (x.code === 'edge') w(() => 'Planlama kemiği tarama alanının üst ya da alt kenarına dayanıyor; kafatası ya da omurga seçili olabilir.');
     });
+    // B3: bone on the midline above a symphysis with its incisors: the maxilla joined through closed teeth
+    const mx = window.Bones && Bones.maxillaSuspect && !(window.CaseType && CaseType.get() === 'ankle') ? Bones.maxillaSuspect(S.red, S.mask) : null;
+    if (mx) w(h => `Planlama kemiğinde orta hatta, kemiğin altından ${h} mm yukarıda kemik var; dişler kapalıyken üst çene (maksilla) mandibulaya bağlı kalmış olabilir. Anatomi adımında "Bitişik kemikleri ayır" altında "Üst çeneyi ayır" ile ayırın.`, fmt(mx.top, 0));
     return out;
   }
   function renderQC() { $('qc').innerHTML = S.qc.map(([c, t, m]) => `<li class="${esc(c)}"><b>${esc(t)}</b><span>${esc(m)}</span></li>`).join(''); }

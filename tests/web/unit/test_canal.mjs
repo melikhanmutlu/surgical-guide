@@ -45,6 +45,20 @@ test('A5: no canal marked, screws in bone: the package is locked until the canal
   P.eval('PlanExt').canal.set(null);
 });
 
+test('B1: the canal is suggested as the long thin dark tube inside the bone; it counts only once accepted', () => {
+  const c = C(), t = c.tubes();
+  assert.ok(t.length >= 1, 'a tube found'); assert.ok(t[0].len > 70 && t[0].area < 15, JSON.stringify(t[0]));
+  const r = c.suggest(); assert.equal(r.suggestions, 1, 'one canal (the roots and the marrow are no tubes)');
+  const sg = S.canalSuggest[0], mid = sg.pts.filter(p => Math.abs(p[0]) < 30);
+  const off = Math.max(...mid.map(p => Math.hypot(p[1] - v.expect.canal.y, p[2] - v.expect.canal.z)));
+  assert.ok(off < 1, `the suggestion leaves the canal by ${off.toFixed(2)} mm`);
+  // not a canal yet: the gate still asks, no canal rows
+  assert.equal(S.canals.length, 0); assert.equal(rows(/sinir kanalı işaretlenmedi/).length, 1);
+  c.acceptSuggest(); assert.equal(S.canals.length, 1); assert.equal(S.canalSuggest.length, 0);
+  assert.equal(rows(/sinir kanalı işaretlenmedi/).length, 0);
+  S.canals = []; c.dropSuggest();
+});
+
 test('tracing: two clicks off the canal axis, the path between them runs in the canal (within 1 mm of its axis)', () => {
   const c = C(); c.setMode('canal');
   assert.ok(c.active());

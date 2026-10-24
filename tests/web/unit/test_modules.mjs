@@ -136,9 +136,10 @@ test('osteo: straight bar -> graft axis within 5Â° of the stump axis, contact â‰
 test('fibula guide: built on the fibula, slots of kerf width, one piece', async () => {
   await until(() => S.fib.guide && S.fib.guide.result, 60000);
   const R = S.fib.guide.result; assert.equal(R.pieces, 1);
-  // no slot width set: the slot is the blade, as before the two were separate
-  assert.equal(W.Fibula.plan().slotW, null); near(W.Fibula.slotOf(), W.Fibula.plan().kerf, 1e-12);
-  S.fib.guide.ctx.pls.forEach(p => near(p.w, W.Fibula.plan().kerf, 1e-12));
+  // A1: a new plan gets the mandible's slot (blade + tolerance) and rim, not the 1.0 mm kerf
+  near(W.Fibula.plan().slotW, St.slotDefault(), 1e-12); assert.equal(W.Fibula.plan().boss, St.G_DEFAULT.boss);
+  near(W.Fibula.slotOf(), St.slotDefault(), 1e-12);
+  S.fib.guide.ctx.pls.forEach(p => near(p.w, St.slotDefault(), 1e-12));
   // automatic screws keep every rule: on bone, clear of the slots (no drill path through a slot)
   assert.ok(R.screwInfo.length >= 1);
   R.screwInfo.forEach((si, i) => { assert.ok(si.ok, 'screw ' + i + ' on bone'); assert.ok(!si.crossesPlane, 'screw ' + i + ' clear of the slots'); });
@@ -146,7 +147,7 @@ test('fibula guide: built on the fibula, slots of kerf width, one piece', async 
 test('fibula: slot width separate from the blade; slots open at slotW outside each face, segments spaced by slot + 1 mm', async () => {
   const keep = St.clone(W.Fibula.plan()), p = St.clone(keep);
   p.kerf = 0.6; p.slotW = 0.8; await W.Fibula.apply(p);
-  await until(() => S.fib.guide && S.fib.guide.ctx && Math.abs(S.fib.guide.ctx.pls[0].w - 0.8) < 1e-9, 60000);
+  await until(() => S.fib.guide && S.fib.guide.ctx && Math.abs(S.fib.guide.ctx.pls[0].w - 0.8) < 1e-9 && Math.abs(S.fib.guide.ctx.pls[0].pSlot.distanceTo(S.fib.guide.ctx.pls[0].p) - 0.4) < 1e-9, 60000);
   near(W.Fibula.slotOf(), 0.8, 1e-12);
   S.fib.guide.ctx.pls.forEach(q => { near(q.w, 0.8, 1e-12); near(q.pSlot.distanceTo(q.p), 0.4, 1e-9, 'slot centre w/2 outside the face'); });
   const st = W.Fibula.state(); st.last.segs.forEach((g, i, a) => { if (i) assert.ok(g.s0 >= a[i - 1].s1 + 0.8 + 1 - 1e-6, 'segments spaced by slot + 1 mm'); });

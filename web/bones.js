@@ -199,5 +199,52 @@ window.Bones = (function () {
     if (b[5] >= nz - 1 || b[2] <= 0) out.push({ code: 'edge', vol, ext });   // cut off by the scan range: skull / spine, not a mandible
     return out;
   }
-  return { LIM, RATIOS, assess, pickMandible, boneWarnings, mandibleLike, tooBig, extMm, boxOf, midPlane, mirrorRecover };
+  // ---------- the upper jaw joined through closed teeth (plan B3) ----------
+  // With the teeth closed the threshold mask runs from the mandible through the teeth into the maxilla; the neck cut
+  // above keeps it (on the real sample CT the "mandible" held ~38 cm³ of maxilla, palate and nasal walls). A watershed
+  // alone cuts the wrong teeth (an upper incisor overlaps the lower one). The surgeon sets the occlusal plane (the height
+  // where the upper and lower teeth meet, from the lowest point of the bone); the bone below it marks the mandible,
+  // the bone on the midline above it the maxilla, and Masks splits the rest along the contact (G.splitSeeds).
+  // Heights are up-down along the grid (an axial scan), the midline is the left-right middle of the lowest JAW.slab mm
+  // (the chin and both lower borders). Example values, not validated thresholds.
+  const JAW = { band: 3, mid: 20, slab: 15, suspectMid: 6, suspectH: 58, suspectVol: 0.5, guess: 0.48, min: 25, max: 70 };
+  function jawFrame(red, mask) {
+    const { nx, ny, nz, sp } = red, nxy = nx * ny, up = red.axes && red.axes[2] && red.axes[2][2] < 0 ? -1 : 1;
+    let k0 = nz, k1 = -1;
+    for (let k = 0; k < nz; k++) { const o = k * nxy; for (let v = 0; v < nxy; v++) if (mask[o + v]) { if (k < k0) k0 = k; if (k > k1) k1 = k; break; } }
+    if (k1 < 0) return null;
+    const h = k => (up > 0 ? k - k0 : k1 - k) * sp[2], H = (k1 - k0) * sp[2];
+    let sx = 0, n = 0;
+    for (let k = k0; k <= k1; k++) { if (h(k) > JAW.slab) continue; const o = k * nxy; for (let v = 0; v < nxy; v++) if (mask[o + v]) { sx += v % nx; n++; } }
+    return { up, k0, k1, H, h, cx: sx / n };
+  }
+  // the occlusal plane to start from (the user moves it): JAW.guess of the bone's height (the real sample: 47 of 98 mm)
+  function jawGuess(red, mask) { const f = jawFrame(red, mask); return f ? Math.round(Math.min(JAW.max, Math.max(JAW.min, JAW.guess * f.H)) * 2) / 2 : null; }
+  // seeds for Masks: 1 = mandible (below occ - band), 2 = maxilla (above occ + band, within JAW.mid mm of the midline)
+  function jawSeeds(red, mask, occ, opt = {}) {
+    const f = jawFrame(red, mask); if (!f) return null;
+    const { nx, ny, sp } = red, nxy = nx * ny, band = opt.band ?? JAW.band, mid = opt.mid ?? JAW.mid, seeds = new Uint8Array(mask.length);
+    let n1 = 0, n2 = 0;
+    for (let k = f.k0; k <= f.k1; k++) {
+      const hk = f.h(k), o = k * nxy, lo = hk < occ - band, hi = hk > occ + band; if (!lo && !hi) continue;
+      for (let v = 0; v < nxy; v++) {
+        if (!mask[o + v]) continue;
+        if (lo) { seeds[o + v] = 1; n1++; } else if (Math.abs(v % nx - f.cx) * sp[0] < mid) { seeds[o + v] = 2; n2++; }
+      }
+    }
+    return n1 && n2 ? { seeds, n1, n2, H: f.H } : null;
+  }
+  // bone on the midline higher than a mandible's symphysis with its incisors: the maxilla is probably still attached
+  function maxillaSuspect(red, mask) {
+    const f = jawFrame(red, mask); if (!f) return null;
+    const { nx, ny, sp } = red, nxy = nx * ny; let n = 0, top = 0;
+    for (let k = f.k0; k <= f.k1; k++) {
+      const hk = f.h(k); if (hk <= JAW.suspectH) continue;
+      const o = k * nxy; for (let v = 0; v < nxy; v++) if (mask[o + v] && Math.abs(v % nx - f.cx) * sp[0] < JAW.suspectMid) { n++; if (hk > top) top = hk; }
+    }
+    const vol = n * cm3(sp);
+    return vol >= JAW.suspectVol ? { vol, top } : null;
+  }
+
+  return { LIM, RATIOS, assess, pickMandible, boneWarnings, mandibleLike, tooBig, extMm, boxOf, midPlane, mirrorRecover, JAW, jawFrame, jawGuess, jawSeeds, maxillaSuspect };
 })();

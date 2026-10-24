@@ -291,10 +291,43 @@ window.Masks = (function () {
     <div class="btns grid2"><button class="primary" id="mkRun" disabled><svg class="i"><use href="#i-scissors"/></svg>Ayır</button><button id="mkAdd"><svg class="i"><use href="#i-plus"/></svg>Etiket ekle</button></div>
     <div class="btns end"><button id="mkClear" class="ghost danger sm" disabled>İşaretleri temizle</button></div>
     <p class="hint" id="mkStat"></p>
-    <p class="hint more">"Seç": 3B modelde ya da kesitte bir kemiğe tıklayınca o parça planlama kemiği olur (bölge büyütme). Shift ile birden fazla parça seçilir.</p>`;
+    <p class="hint more">"Seç": 3B modelde ya da kesitte bir kemiğe tıklayınca o parça planlama kemiği olur (bölge büyütme). Shift ile birden fazla parça seçilir.</p>
+    <h3 class="sub">Üst çene (kapalı dişler)</h3>
+    <p class="hint more">Dişler kapalıyken maksilla mandibulaya dişlerden bağlı kalır. Kapanış düzlemini (alt ve üst dişlerin buluştuğu yükseklik) kesitlerdeki turuncu çizgiyle ayarlayın: düzlemin altındaki kemik mandibula, üstünde orta hattaki kemik üst çene olarak işaretlenir ve maske temas yüzeyinden ayrılır. Sonucu kesitlerde kontrol edin.</p>
+    <div class="ctl"><div class="ctl-row"><label for="mkOcc">Kapanış düzlemi (kemiğin altından)</label><output id="mkOccO"></output></div><input type="range" id="mkOcc" min="25" max="70" step="0.5" value="47"></div>
+    <div class="btns"><button id="mkJaw"><svg class="i"><use href="#i-scissors"/></svg>Üst çeneyi ayır</button></div>`;
   document.querySelectorAll('#mkTools [data-t]').forEach(b => b.addEventListener('click', () => setTool(b.dataset.t)));
   $('mkRad').addEventListener('input', e => { radius = +e.target.value; $('mkRadO').textContent = `${fmt(radius, 1)} mm`; });
   $('mkRun').addEventListener('click', run);
+  // ---------- the upper jaw: seeds from the occlusal plane (Bones.jawSeeds), then the usual split ----------
+  let occ = null;   // the plane shown in the slices (mm above the bone's lowest point) while it is being set
+  const occShow = v => { occ = v; $('mkOcc').value = v; $('mkOccO').textContent = `${fmt(v, 1)} mm`; if (window.MPR) MPR.redraw(); };
+  $('mkOcc').addEventListener('input', e => occShow(+e.target.value));
+  $('secMask').addEventListener('toggle', () => { if ($('secMask').open && S.mask && window.Bones && occ == null) occShow(Bones.jawGuess(S.red, S.mask) || 47); });
+  async function jawRun() {
+    if (!S.red || !S.mask || !window.Bones) return;
+    const v = occ == null ? Bones.jawGuess(S.red, S.mask) : occ, r = Bones.jawSeeds(S.red, S.mask, v);
+    if (!r) { msg = 'Düzlemin üstünde orta hatta kemik yok; üst çene planlama kemiğine bağlı görünmüyor.'; status(); return; }
+    layers = [{ name: 'Mandibula', color: PALETTE[0] }, { name: 'Üst çene', color: PALETTE[1] }];
+    seeds = r.seeds; seedRed = S.red; planIdx = new Set([1]); cur = 1;
+    if (St.unapproveAll) St.unapproveAll();
+    if ($('segMode').value !== 'thr') { $('segMode').value = 'thr'; $('aiBox').hidden = true; $('thrBox').hidden = false; }
+    await St.segment(false);
+    const mx = S.comps.find(c => c.label === BASE + 2), vox = S.red.sp[0] * S.red.sp[1] * S.red.sp[2] / 1000;
+    occ = null; msg = mx ? `${xl('Üst çene ayrıldı:')} ${fmt(mx.size * vox, 1)} cm³. ${xl('Kesitlerde kontrol edin; gerekirse fırçayla düzeltip "Ayır"a basın.')}` : msg;
+    status(); renderList(); St.emit('changed'); if (window.MPR) MPR.redraw();
+  }
+  $('mkJaw').addEventListener('click', jawRun);
+  // the plane in the sagittal and coronal slices
+  (window.SliceOverlays = window.SliceOverlays || []).push((v, ctx, T, dpr, A) => {
+    if (occ == null || v.axis === 2 || !S.mask || !S.vol) return;
+    const f = Bones.jawFrame(S.red, S.mask); if (!f) return;
+    const kf = f.up > 0 ? f.k0 + occ / S.red.sp[2] : f.k1 - occ / S.red.sp[2], z = G.worldOf(S.red, 0, 0, kf)[2];
+    const a = G.worldOf(S.vol, 0, 0, 0), b = G.worldOf(S.vol, S.vol.nx - 1, S.vol.ny - 1, 0);
+    const p = A.idxToImg(v, A.toIdx([a[0], a[1], z])), q = A.idxToImg(v, A.toIdx([b[0], b[1], z]));
+    ctx.strokeStyle = '#f0a040'; ctx.lineWidth = 1.5 * dpr; ctx.beginPath(); ctx.moveTo(T.fx(p[0]), T.fy(p[1])); ctx.lineTo(T.fx(q[0]), T.fy(q[1])); ctx.stroke();
+    A.label(ctx, 'Kapanış düzlemi', T.fx(p[0]) + 6 * dpr, T.fy(p[1]) - 6 * dpr, '#f0a040', dpr);
+  });
   $('mkClear').addEventListener('click', clearAll);
   $('mkAdd').addEventListener('click', () => {
     if (layers.length >= MAXL) return;
@@ -305,6 +338,7 @@ window.Masks = (function () {
   bus.addEventListener('volume', e => {
     if (tool) setTool(tool);
     if (!(e.detail && e.detail.restoring)) { seeds = null; active = false; layers = defaults(); cur = 1; planIdx = new Set([1]); ctxOn.clear(); }
+    occ = null;
     status(); renderList();
   });
 
@@ -327,5 +361,5 @@ window.Masks = (function () {
   };
   status();
 
-  return { relabel, renderList, run, active: () => active, tool: () => tool, paint, strokeEnd, setTool, pickAt, showCtx, off: () => { if (tool) setTool(tool); }, layers: () => layers };
+  return { relabel, renderList, run, jawRun, occ: () => occ, setOcc: occShow, active: () => active, tool: () => tool, paint, strokeEnd, setTool, pickAt, showCtx, off: () => { if (tool) setTool(tool); }, layers: () => layers };
 })();

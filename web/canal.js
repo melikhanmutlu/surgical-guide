@@ -113,6 +113,65 @@ window.Canal = (function () {
     return L;
   }
 
+  // ---------- suggestion (plan B1): the canal found as a long thin dark tube inside the bone ----------
+  // Inside the planning bone (0.8 mm grid: cells the bone encloses) the canal is a run of dark cells (under TUBE_HU: soft
+  // tissue, where cancellous bone is brighter). Dark groups that
+  // are long (TUBE_LEN mm or more end to end) and thin (volume / length at most TUBE_AREA mm²) are canal candidates;
+  // blobs of marrow are neither. The two longest give a suggestion each: the path is traced between the group's two
+  // farthest cells like a hand-marked canal. A suggestion is shown apart and counts for nothing until the surgeon
+  // accepts it. (Sample values, set on the phantom.)
+  const TUBE_HU = 300, TUBE_LEN = 20, TUBE_AREA = 15;
+  S.canalSuggest = S.canalSuggest || [];
+  function tubes() {
+    const r = S.red, m = S.mask; if (!r || !r.hu || !m) return [];
+    const { nx, ny, nz } = r, nxy = nx * ny, at = (i, j, k) => i + nx * (j + ny * k), vox = r.sp[0] * r.sp[1] * r.sp[2];
+    // the inside of the bone: cells the bone encloses in a slice of any of the three orientations (the canal is a hole
+    // in the threshold mask that opens at the foramina, so it is enclosed across its course, not along it)
+    const inside = new Uint8Array(nx * ny * nz), dims = [nx, ny, nz];
+    for (const ax of [0, 1, 2]) {
+      const [p, q] = [0, 1, 2].filter(k => k !== ax), np = dims[p], nq = dims[q], seen = new Uint8Array(np * nq), qu = new Int32Array(np * nq);
+      for (let s2 = 0; s2 < dims[ax]; s2++) {
+        seen.fill(0); let h = 0, t = 0;
+        const cell = (u, w) => { const c = [0, 0, 0]; c[ax] = s2; c[p] = u; c[q] = w; return at(c[0], c[1], c[2]); };
+        const push = (u, w) => { const c = u + np * w; if (seen[c] || m[cell(u, w)]) return; seen[c] = 1; qu[t++] = c; };
+        for (let u = 0; u < np; u++) { push(u, 0); push(u, nq - 1); } for (let w = 0; w < nq; w++) { push(0, w); push(np - 1, w); }
+        while (h < t) { const c = qu[h++], u = c % np, w = (c / np) | 0; if (u > 0) push(u - 1, w); if (u < np - 1) push(u + 1, w); if (w > 0) push(u, w - 1); if (w < nq - 1) push(u, w + 1); }
+        for (let c = 0; c < np * nq; c++) if (!seen[c]) { const e = cell(c % np, (c / np) | 0); if (!m[e]) inside[e] = 1; }
+      }
+    }
+    const dark = new Uint8Array(nx * ny * nz), list = [];
+    for (let id = 0; id < dark.length; id++) if (inside[id] && r.hu[id] < TUBE_HU) { dark[id] = 1; list.push(id); }
+    const seen = new Uint8Array(dark.length), out = [];
+    for (const s0 of list) {
+      if (seen[s0]) continue; const q = [s0]; seen[s0] = 1; const cells = [];
+      while (q.length) { const c = q.pop(); cells.push(c); const i = c % nx, j = ((c / nx) | 0) % ny, k = (c / nxy) | 0;
+        for (let c2 = -1; c2 <= 1; c2++) for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) { const x = i + a, y = j + b, z = k + c2; if (x < 0 || y < 0 || z < 0 || x >= nx || y >= ny || z >= nz) continue; const e = at(x, y, z); if (dark[e] && !seen[e]) { seen[e] = 1; q.push(e); } } }
+      if (cells.length * vox < 10) continue;
+      // the two farthest cells: from any cell the farthest, then the farthest from that one
+      const W = cells.map(c => G.worldOf(r, c % nx, ((c / nx) | 0) % ny, (c / nxy) | 0)), far = p => W.reduce((b, w) => (Math.hypot(w[0] - p[0], w[1] - p[1], w[2] - p[2]) > Math.hypot(b[0] - p[0], b[1] - p[1], b[2] - p[2]) ? w : b), p);
+      const a = far(W[0]), b = far(a), L = Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+      if (L < TUBE_LEN || cells.length * vox / L > TUBE_AREA) continue;
+      out.push({ a: a.map(r2), b: b.map(r2), len: r2(L), area: r2(cells.length * vox / L) });
+    }
+    return out.sort((x, y) => y.len - x.len);
+  }
+  function suggest() {
+    const cand = tubes(); S.canalSuggest = [];
+    // the longest tube on each side of the bone's left-right middle (one canal per side; a second tube on a side is
+    // usually a piece of the same canal)
+    const r = S.red; let sx = 0, n = 0;
+    for (let v = 0; v < S.mask.length; v++) if (S.mask[v]) { sx += v % r.nx; n++; }
+    const cxW = G.worldOf(r, n ? sx / n : r.nx / 2, 0, 0)[0], seen = new Set();
+    for (const t of cand) {
+      const side = (t.a[0] + t.b[0]) / 2 < cxW ? -1 : 1; if (seen.has(side)) continue;
+      const pts = trace(t.a, t.b); if (pts.length >= 3) { S.canalSuggest.push({ keys: [t.a, t.b], pts }); seen.add(side); }
+      if (seen.size === 2) break;
+    }
+    draw(); render(); return { candidates: cand, suggestions: S.canalSuggest.length };
+  }
+  function acceptSuggest() { S.canalSuggest.forEach(c => S.canals.push({ keys: c.keys, pts: c.pts })); S.canalSuggest = []; changed(); }
+  function dropSuggest() { S.canalSuggest = []; draw(); render(); }
+
   // ---------- picking ----------
   function pick(p) {
     if (!mode) return false;
@@ -148,6 +207,7 @@ window.Canal = (function () {
   const group = new THREE.Group(); group.name = 'canal'; scene.add(group);
   const cMat = new THREE.MeshStandardMaterial({ color: COLOR, roughness: 0.5, transparent: true, opacity: 0.85 });
   const rMat = new THREE.MeshStandardMaterial({ color: ROOT_COLOR, roughness: 0.6, transparent: true, opacity: 0.7 });
+  const sMat = new THREE.MeshStandardMaterial({ color: 0x7fb3ff, roughness: 0.5, transparent: true, opacity: 0.6 });
   function draw() {
     while (group.children.length) { const c = group.children.pop(); c.geometry.dispose(); }
     for (const c of S.canals) {
@@ -160,6 +220,7 @@ window.Canal = (function () {
       m.position.copy(a).add(b).multiplyScalar(0.5); m.quaternion.setFromUnitVectors(V(0, 1, 0), b.clone().sub(a).normalize()); group.add(m);
     }
     for (const k of keys) { const m = new THREE.Mesh(new THREE.SphereGeometry(0.8, 10, 8), rMat); m.position.set(...k); group.add(m); }
+    for (const c of S.canalSuggest || []) { const curve = new THREE.CatmullRomCurve3(c.pts.map(q => V(...q))); group.add(new THREE.Mesh(new THREE.TubeGeometry(curve, Math.max(8, c.pts.length * 2), R_CANAL * 0.7, 8, false), sMat)); }
     if (window.MPR) MPR.redraw();
     St.render();
   }
@@ -168,6 +229,8 @@ window.Canal = (function () {
     const pt = p => { const [x, y] = A.idxToImg(v, A.toIdx(p)); return [T.fx(x), T.fy(y)]; };
     ctx.fillStyle = '#f2c94c';
     for (const c of S.canals) c.pts.forEach(p => { if (!near(p)) return; const [x, y] = pt(p); ctx.beginPath(); ctx.arc(x, y, 2.5 * dpr, 0, 2 * Math.PI); ctx.fill(); });
+    ctx.strokeStyle = '#7fb3ff'; ctx.lineWidth = 1.5 * dpr;
+    for (const c of S.canalSuggest || []) c.pts.forEach(p => { if (!near(p)) return; const [x, y] = pt(p); ctx.beginPath(); ctx.arc(x, y, 3 * dpr, 0, 2 * Math.PI); ctx.stroke(); });
     ctx.strokeStyle = '#f4efe2'; ctx.lineWidth = 2 * dpr;
     for (const rt of S.roots) { const a = pt(rt.a), b = pt(rt.b); ctx.setLineDash(near(rt.a) || near(rt.b) ? [] : [4 * dpr, 3 * dpr]); ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.stroke(); }
     ctx.setLineDash([]);
@@ -178,10 +241,13 @@ window.Canal = (function () {
     const host = $('canalBox'); if (!host) return;
     host.innerHTML = `<h3 class="sub">${xl('Sinir kanalı ve kökler')}</h3>
       <p class="hint more">${xl(`Kanalı işaretleyin: mental foramene, sonra mandibular foramene tıklayın; yol aradaki koyu tüpü izler. Kanala ${SAFE} mm'den yakın ya da kökü geçen vida kritiktir.`)}</p>
-      <div class="btns"><button id="cnCanal" aria-pressed="${mode === 'canal'}">${xl('Kanal işaretle')}</button><button id="cnRoot" aria-pressed="${mode === 'root'}">${xl('Kök işaretle')}</button></div>
+      <div class="btns"><button id="cnCanal" aria-pressed="${mode === 'canal'}">${xl('Kanal işaretle')}</button><button id="cnRoot" aria-pressed="${mode === 'root'}">${xl('Kök işaretle')}</button><button id="cnSuggest">${xl('Kanal öner')}</button></div>
+      ${(S.canalSuggest || []).length ? `<p class="hint">${xl(`Önerilen kanal (mavi): ${S.canalSuggest.length} taraf. Kesitlerde kontrol edin; kabul edilmeden kontrol sayılmaz.`)}</p><div class="btns"><button id="cnAccept">${xl('Öneriyi kabul et')}</button><button id="cnDrop" class="link">${xl('Öneriyi sil')}</button></div>` : ''}
       ${S.canals.length || S.roots.length ? `<div class="tbl"><table><tbody>${S.canals.map((c, i) => `<tr><td>${xl('Kanal')} ${i + 1}</td><td>${fmt(pathLen(c.pts), 0)} mm</td><td><button class="link" data-cdel="${i}">${xl('Sil')}</button></td></tr>`).join('')}${S.roots.map((rt, i) => `<tr><td>${xl('Kök')} ${i + 1}</td><td>${fmt(Math.hypot(rt.b[0] - rt.a[0], rt.b[1] - rt.a[1], rt.b[2] - rt.a[2]), 0)} mm</td><td><button class="link" data-rdel="${i}">${xl('Sil')}</button></td></tr>`).join('')}</tbody></table></div>` : `<p class="empty">${xl('Kanal işaretlenmedi; vidalar kanala karşı kontrol edilmiyor.')}</p>`}`;
     $('cnCanal').addEventListener('click', () => setMode('canal'));
     $('cnRoot').addEventListener('click', () => setMode('root'));
+    $('cnSuggest').addEventListener('click', async () => { St.busy(true, xl('Kanal aranıyor…')); await St.sleep(); try { const r = suggest(); if (!r.suggestions) St.alertMsg(xl('Bu BT\'de kanal biçiminde (uzun, ince, koyu) bir yol bulunamadı; kanalı elle işaretleyin.')); } finally { St.busy(false); } });
+    if ($('cnAccept')) { $('cnAccept').addEventListener('click', acceptSuggest); $('cnDrop').addEventListener('click', dropSuggest); }
     host.querySelectorAll('[data-cdel]').forEach(b => b.addEventListener('click', () => { S.canals.splice(+b.dataset.cdel, 1); cur = -1; changed(); }));
     host.querySelectorAll('[data-rdel]').forEach(b => b.addEventListener('click', () => { S.roots.splice(+b.dataset.rdel, 1); changed(); }));
   }
@@ -255,7 +321,7 @@ window.Canal = (function () {
       mode = null; keys = []; cur = -1; draw(); render();
     },
   };
-  bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring)) { S.canals = []; S.roots = []; S.canalChecked = null; mode = null; keys = []; cur = -1; draw(); render(); } });
+  bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring)) { S.canals = []; S.roots = []; S.canalChecked = null; S.canalSuggest = []; mode = null; keys = []; cur = -1; draw(); render(); } });
 
   // ---------- wiring: 3D clicks (the Tools chain), slices (mpr.js), Esc ----------
   const prevTools = window.Tools;
@@ -271,5 +337,5 @@ window.Canal = (function () {
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && mode) setMode(mode); });
   St.onEndModes(() => { if (mode) setMode(mode); });
   render();
-  return { active: () => !!mode, mode: () => mode, setMode, pick, trace, segSeg, canalClear, rootsHit, maxLen, findings, gate, screwKey, R_CANAL, SAFE, R_ROOT };
+  return { active: () => !!mode, mode: () => mode, setMode, pick, trace, segSeg, canalClear, rootsHit, maxLen, findings, gate, screwKey, tubes, suggest, acceptSuggest, dropSuggest, R_CANAL, SAFE, R_ROOT };
 })();
