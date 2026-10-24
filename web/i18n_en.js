@@ -2533,4 +2533,10 @@ window.I18N_EN = {
 "her parça ayrı": "each piece on its own",
 "kesi guide'ı ve kama, \"#\" parçasının hareketiyle taşınmış": "cutting guide and wedge, moved with the \"#\" piece",
 "+ eklem ayırma": "+ joint separation",
+"# segmentle greft defekt hattından # mm sapar (şimdi # mm); en kısa segment # mm olur: önerilen # mm'nin altında, kritik sınır # mm'nin üstünde.": "With # segments the graft deviates # mm from the defect line (now # mm); the shortest segment would be # mm: under the recommended # mm, above the critical limit of # mm.",
+"Kanlanma ve tespit için cerrahla değerlendirin; seçerseniz bu planda en kısa segment kuralı buna göre düşürülür.": "Assess blood supply and fixation with the surgeon; if you choose it, this plan's shortest segment rule is lowered to match.",
+"Kısa segmentli planı seç": "Choose the plan with the short segment",
+"En kısa segment kuralı bu plan için # mm yapıldı; segment sayısı #.": "The shortest segment rule for this plan is now # mm; segment count #.",
+"Rezeke edilen kemiğin hattı sağlam tarafın ayna görüntüsünden en çok # mm (ortalama # mm) ayrılıyor; tümör kemiği genişletmiş olabilir ve greftler bu bozuk konturu izler.": "The resected bone's line is up to # mm (mean # mm) away from the healthy side's mirror image; the tumour may have expanded the bone, and the grafts follow that distorted contour.",
+"Hedef konturu sağlam taraftan almak için \"Sağlam tarafı aynala\"yı açın; asimetri doğalsa böyle bırakabilirsiniz.": "To take the target contour from the healthy side, turn on \"Mirror healthy side\"; if the asymmetry is natural, you can leave it as it is.",
 };

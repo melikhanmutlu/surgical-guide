@@ -15,6 +15,8 @@ window.Fibula = (function () {
   // stumps carry the fixation and heal less well, so >= 25 mm there): < SEG_ERR critical, SEG_ERR..MIN_LEN a warning,
   // a stump segment of a multi-segment graft under STUMP_MIN a warning. DEV_TIE: deviations this close count as equal
   const SEG_ERR = 15, STUMP_MIN = 25, DEV_TIE = 0.5, DEV_ERR = 2 * DEV_WARN;
+  // mm: the resected bone's line this far from the healthy side's mirror image offers the mirror (C9, sample value)
+  const MIRROR_GAP = 3;
   // Clinical thresholds as one profile: the defaults below (most are our engineering assumptions where the literature has
   // no single number), overridden per plan by plan.rules (only the keys that differ, so a plan without overrides keeps
   // its approval signature). [min, max, step] is the range a stored or edited value is kept in.
@@ -72,17 +74,32 @@ window.Fibula = (function () {
     const r = rows.find(x => x.n === 1) || rows[0];
     return { n: r.n, reason: 'short', dev: r.dev, lens: r.lens };
   }
+  // C8 (plan after P0): on a curved defect the rule "never a segment under minLen" can keep one straight segment that
+  // misses the arch by ~10 mm while two segments, one of them short (above the critical SEG_ERR), would follow it. When
+  // the choice missed the deviation target ('len'), the count with the smallest deviation whose segments are all at
+  // least segErr is offered, if it follows the defect at least 1 mm better. Nothing changes until the surgeon takes it.
+  function shortAlternative(table, choice, segErr = SEG_ERR) {
+    if (!choice || choice.reason !== 'len') return null;
+    let best = null;
+    for (const r of table) {
+      const min = Math.min(...r.lens);
+      if (r.n === choice.n || min < segErr - 1e-9 || !(r.dev < choice.dev - 1)) continue;
+      if (!best || r.dev < best.dev - DEV_TIE || (Math.abs(r.dev - best.dev) <= DEV_TIE && r.n < best.n)) best = { n: r.n, dev: r.dev, min };
+    }
+    return best;
+  }
   // try 1..MAX_N segments on the defect D (knots optimised for each) and pick with segmentChoice; the plan's n / knots are set
   function chooseSegments(D) {
     const P0 = plan(), table = [], R = rules();
     for (let n = 1; n <= MAX_N; n++) {
-      if (n > 1 && D.L / n < R.segMin - 1) break;                     // more segments can only be shorter
+      if (n > 1 && D.L / n < Math.min(R.segMin, R.segErr) - 1) break;   // more segments can only be shorter (C8: down to segErr, for the offer)
       setN(n); last = compute(D); optimizeKnots(); const c = compute(D);
       table.push({ n, lens: c.segs.filter(g => !g.barrel).map(g => g.L), dev: c.dev, knots: P0.knots.slice() });
     }
     const pick = segmentChoice(table, D.L, R.segMin, R.devWarn, R.stumpMin);
     setN(pick.n); P0.knots = table.find(r => r.n === pick.n).knots;
-    S.fib.choice = Object.assign(pick, { L: D.L, table: table.map(r => ({ n: r.n, dev: +r.dev.toFixed(2), min: +Math.min(...r.lens).toFixed(1) })) });
+    const alt = shortAlternative(table, pick, R.segErr);
+    S.fib.choice = Object.assign(pick, { L: D.L, alt: alt ? { n: alt.n, dev: +alt.dev.toFixed(2), min: +alt.min.toFixed(1) } : null, table: table.map(r => ({ n: r.n, dev: +r.dev.toFixed(2), min: +Math.min(...r.lens).toFixed(1) })) });
     return pick;
   }
 
@@ -419,8 +436,11 @@ window.Fibula = (function () {
     mid = mid.map((q, i) => (i > 0 && i < mid.length - 1 ? q.clone().add(mid[i - 1]).add(mid[i + 1]).multiplyScalar(1 / 3) : q));
     // target shape from the healthy side: each point of the defect line is replaced by the mirror image of the bone
     // centre found at its mirrored position (the tumour may have deformed the resected bone)
-    let mirrored = 0;
+    let mirrored = 0, mirrorGap = null;
     if (S.fib && S.fib.plan && S.fib.plan.mirror) { const m = mirrorLine(mid); mid = m.pts; mirrored = m.n; }
+    // C9: with the mirror off, how far the healthy side's mirror image lies from the resected bone's line (an expansile
+    // tumour moves it): offered as a check, the plan keeps what it has
+    else if (S.fib && S.fib.plan) { const m = mirrorLine(mid); if (m.n >= 3) mirrorGap = { n: m.n, max: m.gapMax, mean: m.gapMean }; }
     // vertical position: the whole line moves along vup; its ends stay in their cut planes
     const vo = (S.fib && S.fib.plan && S.fib.plan.vOff) || 0, inPlane = N => { const w = vup.clone().sub(N.clone().multiplyScalar(vup.dot(N))); return w.multiplyScalar(1 / Math.max(w.dot(vup), 0.3)); };
     if (vo) { PA.addScaledVector(inPlane(NA), vo); PB.addScaledVector(inPlane(NB), vo); mid.forEach(q => q.addScaledVector(vup, vo)); }
@@ -429,7 +449,7 @@ window.Fibula = (function () {
     for (let b = 1; b < nb; b++) if (crest[b] === -Infinity) crest[b] = crest[b - 1];
     for (let b = nb - 2; b >= 0; b--) if (crest[b] === -Infinity) crest[b] = crest[b + 1];
     const crestAt = q => crest[Math.min(nb - 1, Math.max(0, Math.floor(q.clone().sub(A.p).dot(dir) / bw)))];
-    const D = { pts, s, L: s[s.length - 1], NA, NB, up: S.anchor.n.clone(), vup, crestAt, inPlane, A, B, mirrored, nmid: mid.length };
+    const D = { pts, s, L: s[s.length - 1], NA, NB, up: S.anchor.n.clone(), vup, crestAt, inPlane, A, B, mirrored, mirrorGap, nmid: mid.length };
     return S.fib && S.fib.plan && S.fib.plan.rev ? reverseDefect(D) : D;
   }
   // Graft order reversed (plan.rev): segment 0 (distal fibula) goes to the other end of the defect, so the proximal end,
@@ -451,7 +471,7 @@ window.Fibula = (function () {
   function mirrorLine(mid) {
     const P = symPlane(); if (!P || !S.mask) return { pts: mid, n: 0 };
     const refl = q => q.clone().addScaledVector(P.N, -2 * q.clone().sub(P.p).dot(P.N)), r = S.red, R = 9;
-    let n = 0;
+    let n = 0, gs = 0, gm = 0;
     const out = mid.map(q => {
       const m = refl(q);
       if (Math.abs(q.clone().sub(P.p).dot(P.N)) < 12) return q;        // at the midline the mirror is the defect itself
@@ -462,9 +482,9 @@ window.Fibula = (function () {
         sx += w[0]; sy += w[1]; sz += w[2]; cnt++;
       }
       if (cnt < 20) return q;
-      n++; return refl(V(sx / cnt, sy / cnt, sz / cnt));
+      const t = refl(V(sx / cnt, sy / cnt, sz / cnt)), g = t.distanceTo(q); n++; gs += g; if (g > gm) gm = g; return t;
     });
-    return { pts: out.map((q, i) => (i > 0 && i < out.length - 1 ? q.clone().add(out[i - 1]).add(out[i + 1]).multiplyScalar(1 / 3) : q)), n };
+    return { pts: out.map((q, i) => (i > 0 && i < out.length - 1 ? q.clone().add(out[i - 1]).add(out[i + 1]).multiplyScalar(1 / 3) : q)), n, gapMax: gm, gapMean: n ? gs / n : 0 };
   }
   // while a mandible cut is dragged: move the graft ends into the cut planes as they are now (the resected piece is
   // rebuilt on release, then the full plan follows)
@@ -1004,6 +1024,14 @@ window.Fibula = (function () {
     // twice the warning threshold holds the approval back (sample value, like DEV_WARN: the clinical team sets both)
     if (c.dev > DEV_ERR) out.push(['crit', 'Kritik', xl(`Greftler defekt hattından ${fmt(c.dev)} mm sapıyor (hata eşiği ${DEV_ERR} mm); rekonstrüksiyon çene hattını tutmaz. Segment ekleyin ya da "Kesileri öner"i kullanın.`), 'fib', [['fibOpt', 'Kesileri öner']]]);
     else if (c.dev > DEV_WARN) out.push(['warn', 'Uyarı', xl(`Greftler defekt hattından ${fmt(c.dev)} mm sapıyor (eşik ${DEV_WARN} mm). Segment ekleyin ya da "Kesileri öner"i kullanın.`), 'fib', [['fibOpt', 'Kesileri öner']]]);
+    // C8: a count that follows the defect better with a short (not critical) segment, offered with its numbers
+    if (c.dev > DEV_WARN && ch && ch.alt && P0.nAuto && Math.abs(ch.L - c.D.L) < 0.5 && ch.n === P0.n)
+      out.push(['warn', 'Uyarı', xl(`${ch.alt.n} segmentle greft defekt hattından ${fmt(ch.alt.dev)} mm sapar (şimdi ${fmt(c.dev)} mm); en kısa segment ${fmt(ch.alt.min)} mm olur: önerilen ${MIN_LEN} mm'nin altında, kritik sınır ${SEG_ERR} mm'nin üstünde.`) + ' ' + xl('Kanlanma ve tespit için cerrahla değerlendirin; seçerseniz bu planda en kısa segment kuralı buna göre düşürülür.'), 'fib', [['fibShortSeg', 'Kısa segmentli planı seç']]]);
+    // C9: the resected bone's line is far from the healthy side's mirror image: an expansile tumour may have bent it, and
+    // the grafts would copy that contour (MIRROR_GAP is a sample value)
+    const mg = c.D.mirrorGap;
+    if (!P0.mirror && mg && mg.max >= MIRROR_GAP)
+      out.push(['warn', 'Uyarı', xl(`Rezeke edilen kemiğin hattı sağlam tarafın ayna görüntüsünden en çok ${fmt(mg.max)} mm (ortalama ${fmt(mg.mean)} mm) ayrılıyor; tümör kemiği genişletmiş olabilir ve greftler bu bozuk konturu izler.`) + ' ' + xl('Hedef konturu sağlam taraftan almak için "Sağlam tarafı aynala"yı açın; asimetri doğalsa böyle bırakabilirsiniz.'), 'fib', [['fibMirrorOn', 'Sağlam tarafı aynala']]]);
     if (P0.distal < DISTAL_MIN) out.push(['crit', 'Kritik', xl(`Distal korunan fibula ${fmt(P0.distal, 0)} mm; ayak bileği stabilitesi için en az ${DISTAL_MIN} mm.`)]);
     // pedicle side on the neo-mandible: lingual or inferior, never buccal (under the skin and the plate) and not towards
     // the crest (implants, occlusion). Only where the segment has an outer side (a curved arch).
@@ -1557,6 +1585,22 @@ window.Fibula = (function () {
     const P0 = plan(), w = S.fib.guide.ctx.g.wrap; P0.fg = Object.assign({}, P0.fg || {}, { wrap: Math.min(wrapMax(), w + 1) });
     edited(false);
   };
+  // C9: the mirror offer taken (the same as ticking "Sağlam tarafı aynala")
+  (window.FixHooks = window.FixHooks || {}).fibMirrorOn = async () => {
+    if (!active() || plan().mirror) return;
+    plan().mirror = 1; guideKey = ''; edited(false, true);
+  };
+  // C8: take the offered count: the plan's minimum segment rule goes down to its shortest segment (never under segErr),
+  // the count is chosen again with it; the rule change is in the plan, so the report and the approval show it
+  (window.FixHooks = window.FixHooks || {}).fibShortSeg = async () => {
+    if (!active() || !S.fib.choice || !S.fib.choice.alt) return;
+    const P0 = plan(), R = rules(), [lo, hi] = RULE_RANGE.segMin, alt = S.fib.choice.alt;
+    const v = Math.max(lo, R.segErr, Math.min(hi, Math.floor(alt.min)));
+    P0.rules = Object.assign({}, P0.rules || {}, { segMin: v }); if (Math.abs(v - RULES.segMin) < 1e-9) delete P0.rules.segMin;
+    P0.nAuto = 1; S.fib.choice = null;
+    edited(false, true);
+    msg(xl(`En kısa segment kuralı bu plan için ${fmt(v, 0)} mm yapıldı; segment sayısı ${plan().n}.`));
+  };
   // the slot play fix (plan A1): the slot to the blade plus the tolerance, the slot rim to at least the default height
   // (the same as the mandible guide's "Fit slot to blade"); the plan changes, so its approval goes
   (window.FixHooks = window.FixHooks || {}).fibSlotFit = async () => {
@@ -1567,5 +1611,5 @@ window.Fibula = (function () {
     edited(false);
   };
   return { pending: () => !!(active() && guideStale), setActive, activePane: () => activePane, summary: () => (active() ? summary() : null), view: () => view, active, approved, checks, apply, exportFiles, reportHTML, guideReport, production, setView, state: () => ({ F, last, view }),
-    graftBone, fibBone: q => (F && F.c ? fibBone(q) : false), guideInfo, guideEdited, plan: () => (active() ? plan() : null), rules, RULES, legSide: () => (F && F.c ? legSide() : null), building: () => building, segmentChoice, lensOk, choice: () => (S.fib && S.fib.choice) || null, defect, MIN_LEN, MAX_N, DEV_WARN, DEV_ERR, SEG_ERR, STUMP_MIN, DEV_TIE, slotOf: () => (active() ? slotOf(plan()) : null) };
+    graftBone, fibBone: q => (F && F.c ? fibBone(q) : false), guideInfo, guideEdited, plan: () => (active() ? plan() : null), rules, RULES, legSide: () => (F && F.c ? legSide() : null), building: () => building, segmentChoice, shortAlternative, MIRROR_GAP, lensOk, choice: () => (S.fib && S.fib.choice) || null, defect, MIN_LEN, MAX_N, DEV_WARN, DEV_ERR, SEG_ERR, STUMP_MIN, DEV_TIE, slotOf: () => (active() ? slotOf(plan()) : null) };
 })();
