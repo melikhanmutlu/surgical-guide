@@ -121,8 +121,13 @@ test('a plan saved before the rim existed opens without one; one saved with it k
   await bar({ boss: 5, blade: 0.6 }, 0.8);
   const p = St.planOf(); assert.equal(p.g.boss, 5); assert.equal(p.g.blade, 0.6);
   const old = JSON.parse(JSON.stringify(p)); delete old.g.boss; delete old.g.blade; delete old.g.bossW;
+  $('toast') && ($('toast').hidden = true);
   await St.applyPlan(old); assert.equal(S.g.boss, 0); assert.equal(S.g.blade, 0.6);
+  // C1: a plan with the old slot design (0.8 mm slot, no rim: 4.6°) says so once, with the fix
+  assert.match($('toast').textContent, /eski yuva tasarımıyla/); assert.equal($('toast').hidden, false);
+  $('toast').hidden = true;
   await St.applyPlan(p); assert.equal(S.g.boss, 5);
+  assert.equal($('toast').hidden, true, 'the new design opens without the message');
   const bad = JSON.parse(JSON.stringify(p)); bad.g.boss = 99; bad.g.blade = -3;
   await St.applyPlan(bad); assert.equal(S.g.boss, 10); assert.equal(S.g.blade, 0.3);
 });

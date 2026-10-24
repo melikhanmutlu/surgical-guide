@@ -53,7 +53,18 @@ window.Lesion = (function () {
   }
   function strokeEnd() {
     const s = stroke; stroke = null; lastPaint = null;
-    if (s && s.n) changed(); else if (window.MPR) MPR.redraw();
+    if (s && s.n) { dirty = true; changed(); } else if (window.MPR) MPR.redraw();
+  }
+  // C2: painting is one step. When the brush is put down (Esc, the tool button, another mode) after new paint, the
+  // cuts are planned from the lesion, the resected piece is taken off and the guide is built, as "Hazırla" does.
+  // Not when something is approved (the surgeon re-plans that by hand) or while a plan is being built.
+  let dirty = false;
+  async function autoAfterPaint() {
+    if (!dirty || !count() || planning) return;
+    dirty = false;
+    const approved = (S.lesion && S.lesion.ok) || S.planes.some(p => p.ok) || S.screws.some(c => c.ok);
+    if (approved) { planMsg = ' ' + xl('Onaylı öğeler var: kesileri yeniden önermek için "Lezyondan kesi öner"e basın.'); status(); return; }
+    if (St.autoPrep) await St.autoPrep(); else await plan();
   }
   function changed() { planMsg = ''; build(); status(); St.emit('changed'); if (window.MPR) MPR.redraw(); }
 
@@ -131,6 +142,7 @@ window.Lesion = (function () {
       if (window.innerWidth < 1280 && window.Layout) Layout.setRight(false);
     }
     St.controls.enableRotate = !tool;
+    if (!tool) setTimeout(autoAfterPaint, 0);
     document.querySelectorAll('#lsTools [data-t]').forEach(b => b.setAttribute('aria-pressed', b.dataset.t === tool));
     const b = $('modeBadge');
     if (tool) { b.hidden = false; b.textContent = shown = `Lezyon ${tool === 'erase' ? 'silgisi' : 'fırçası'}: kesitlerde ya da 3B görünümde sürükleyin · döndürmek için Alt · Esc ile bitir`; }
@@ -168,7 +180,7 @@ window.Lesion = (function () {
     if (pl.length) planMsg = ` ${xl('Kesiler')} ${pl.map(q => `${fmt(q.off, 1)} mm${ang(q)}`).join(` ${xl('ve')} `)}.${S.guideOn ? xl(` ${S.screws.length} vida yerleştirildi.`) : ''}${wrapNote}`;
     status();
   }
-  $('lesPaint').innerHTML = `<p class="hint more">Fırça lezyonu kırmızıyla boyar: kesitlerde ya da 3B görünümde görünen yüzeyin (cilt, yumuşak doku, kemik) üstünde. Kemiği Anatomi adımındaki Katmanlar'dan kapatabilirsiniz. Silgi boyamayı geri alır. Boyadıktan sonra kesiler lezyonu güvenlik payı kadar dışarıda bırakacak şekilde konur.</p>
+  $('lesPaint').innerHTML = `<p class="hint more">Fırça lezyonu kırmızıyla boyar: kesitlerde ya da 3B görünümde görünen yüzeyin (cilt, yumuşak doku, kemik) üstünde. Kemiği Anatomi adımındaki Katmanlar'dan kapatabilirsiniz. Silgi boyamayı geri alır. Fırçayı bırakınca (Esc) kesiler lezyonu güvenlik payı kadar dışarıda bırakacak şekilde konur, rezeksiyon parçası çıkarılır ve guide oluşturulur.</p>
     <span class="seg tools" id="lsTools" role="group" aria-label="Lezyon aracı">
       <button data-t="paint" aria-pressed="false"><svg class="i"><use href="#i-brush"/></svg>Fırça</button>
       <button data-t="erase" aria-pressed="false"><svg class="i"><use href="#i-eraser"/></svg>Silgi</button>
@@ -180,7 +192,7 @@ window.Lesion = (function () {
   document.querySelectorAll('#lsTools [data-t]').forEach(b => b.addEventListener('click', () => setTool(b.dataset.t)));
   $('lsRad').addEventListener('input', e => { radius = +e.target.value; $('lsRadO').textContent = `${fmt(radius, 1)} mm`; });
   $('lsPlan').addEventListener('click', plan);
-  $('lsClear').addEventListener('click', () => { mask = null; changed(); });
+  $('lsClear').addEventListener('click', () => { mask = null; dirty = false; changed(); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && tool) setTool(tool); });
   St.onEndModes(() => { if (tool) setTool(tool); });
   bus.addEventListener('volume', e => { if (tool) setTool(tool); if (!(e.detail && e.detail.restoring)) { mask = null; St.setPart('lesionPaint', null, null); status(); } });
@@ -199,5 +211,5 @@ window.Lesion = (function () {
   };
   status();
 
-  return { clear: () => { mask = null; planMsg = ''; changed(); }, active: () => !!tool, tool: () => tool, paint, strokeEnd, points, setTool, plan, off: () => { if (tool) setTool(tool); } };
+  return { clear: () => { mask = null; dirty = false; planMsg = ''; changed(); }, autoAfterPaint, active: () => !!tool, tool: () => tool, paint, strokeEnd, points, setTool, plan, off: () => { if (tool) setTool(tool); } };
 })();

@@ -124,6 +124,26 @@ test('a pointer drag of a cut rebuilds nothing until it ends; the end rebuilds o
   assert.ok(S.result !== R0, 'the release rebuilds the guide');
 });
 
+test('C2: putting the brush down after painting plans the cuts and builds the guide; with approved items it only says how', async () => {
+  await St.settled(); const L = W.Lesion;
+  St.unapproveAll(); S.anchor = null; S.planes = []; S.screws = []; S.guideOn = false; L.clear();
+  L.setTool('paint'); for (const x of [-4, 0, 4]) { L.paint([x, 0, -1], 2, true); L.strokeEnd(); }
+  L.setTool('paint');   // the tool off: the plan follows
+  for (let i = 0; i < 400 && !(S.guideOn && S.planes.length && S.result); i++) await sleep(50);
+  await St.settled();
+  assert.ok(S.planes.length >= 2, 'cuts planned: ' + S.planes.length + ' ' + L.points().length + ' ' + !!St.parts.bone + ' ' + $('lsStat').textContent + ' | ' + $('caseMsg').textContent + ' tool ' + L.tool());
+  const offs = S.planes.map(p => p.off).sort((a, b) => a - b);
+  assert.ok(offs[0] < -4 && offs[offs.length - 1] > 4, 'the cuts clear the lesion: ' + offs);
+  assert.equal(S.guideOn, true, 'the guide is built'); assert.ok(S.screws.length > 0);
+  // approved items: nothing is re-planned on its own
+  S.planes[0].ok = true; const before = JSON.stringify(S.planes.map(p => p.off));
+  L.setTool('paint'); L.paint([8, 0, -1], 2, true); L.strokeEnd(); L.setTool('paint');
+  await sleep(100); await St.settled();
+  assert.equal(JSON.stringify(S.planes.map(p => p.off)), before);
+  assert.match($('lsStat').textContent, /Onaylı öğeler var/);
+  S.planes[0].ok = false; L.clear();
+});
+
 test('painted lesion: points, count and the stored mask follow strokes, erasing and a loaded plan', async () => {
   await plan(); const L = W.Lesion, ext = W.PlanExt.lesionPaint;
   L.clear(); assert.equal(L.points().length, 0);
