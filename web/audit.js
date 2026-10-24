@@ -158,7 +158,7 @@ window.Audit = (function () {
     d.text(`Plan özeti (SHA-256): ${h}`, { size: 18, mono: true, color: '#5b646e' });
     d.text(xl(`Onay kaydı: ${log.length} kayıt, zincir ${chain.ok ? 'doğrulandı' : 'BOZUK'}`) + (log.length ? `, ${xl('son özet')} ${log[log.length - 1].hash}` : ''), { size: 18, mono: true, color: '#5b646e' });
   });
-  (window.ExportHooks = window.ExportHooks || []).push(files => { if (planned()) files.push({ name: 'onay_kaydi.json', data: JSON.stringify({ plan_ozeti: planHash(), zincir_dogru: chain.ok, kayitlar: log }, null, 2) }); });
+  (window.ExportHooks = window.ExportHooks || []).push(files => { if (planned()) files.push({ name: 'onay_kaydi.json', data: JSON.stringify(Object.assign({ plan_ozeti: planHash(), zincir_dogru: chain.ok, kayitlar: log }, St.prodRecord && St.prodRecord() ? { uretim_dosyalari: St.prodRecord() } : {}), null, 2) }); });
   const same = (x, y) => JSON.stringify(x) === JSON.stringify(y), isPrefix = (a, b) => a.length <= b.length && a.every((e, i) => same(e, b[i]));
   (window.PlanExt = window.PlanExt || {}).audit = {
     label: 'Onay kaydı',

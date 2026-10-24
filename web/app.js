@@ -521,6 +521,11 @@
     if (r.error) { busy(false); alertMsg(r.error); renderSeries(); return; }
     scan.cur = r.cur; S.source = r.source; await setVolume(r.vol, r.label, 'dicom');
   }
+  // C7: the whole SHA-256 of a file's bytes (the production STL in the plan, the report and the approval record)
+  async function sha256Bytes(b) {
+    const u = b instanceof Uint8Array ? b : new Uint8Array(b instanceof ArrayBuffer ? b : b.buffer || b);
+    const h = await crypto.subtle.digest('SHA-256', u); return [...new Uint8Array(h)].map(x => x.toString(16).padStart(2, '0')).join('');
+  }
   async function sha256(t) {
     try { const h = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t)); return [...new Uint8Array(h)].slice(0, 12).map(b => b.toString(16).padStart(2, '0')).join(''); }
     catch (e) { let h = 2166136261; for (const ch of t) h = Math.imul(h ^ ch.charCodeAt(0), 16777619); return 'f' + (h >>> 0).toString(16); }
@@ -3744,7 +3749,7 @@ ${window.Clinical ? `<h2>Klinik eşikler</h2><p class="small">${esc(xl('Kontroll
 <h2>Kesi düzlemleri</h2><table><tr><th>Kesi</th><th>Konum</th><th>Yatay açı</th><th>Dikey açı</th><th>Yuva</th><th>Durum</th></tr>${S.planes.map((p, i) => `<tr><td>${i + 1}</td><td>${fmt(p.off)} mm</td><td>${fmt(p.yaw)}°</td><td>${fmt(p.pitch)}°</td><td>${fmt(p.w)} mm</td><td>${st(p)}</td></tr>`).join('')}</table>
 <h2>Vidalar</h2><table><tr><th>Vida</th><th>Konum (eksen, yanal)</th><th>Eğim</th><th>Matkap / kovan</th><th>Boy</th><th>Kemik içinde</th><th>Durum</th></tr>${S.screws.map((s, i) => { const si = R && R.screwInfo[i]; return `<tr><td>${i + 1}</td><td>${fmt(s.u)}, ${fmt(s.v)} mm</td><td>${fmt(s.tiltU, 0)}°, ${fmt(s.tiltV, 0)}°</td><td>${fmt(s.d)} / ${fmt(s.D)} mm</td><td>${fmt(s.len, 0)} mm</td><td>${si && si.ok ? fmt(si.inBone) + ' mm' : '-'}</td><td>${st(s)}</td></tr>`; }).join('')}</table>
 <h2>Guide gövdesi</h2><table>${gp.map(([k, v, u]) => `<tr><td>${k}</td><td>${fmt(v)} ${u}</td></tr>`).join('')}${R ? `<tr><td>Temas alanı</td><td>${fmt(R.contact, 0)} mm²</td></tr><tr><td>Hacim</td><td>${fmt(R.volume / 1000, 2)} cm³</td></tr>` : ''}</table>
-${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanlı boolean ile üretildi: ${S.prod.watertight ? 'su geçirmez' : 'su geçirmez değil'}, ${S.prod.bodies} parça, ${fmt(S.prod.volume / 1000, 2)} cm³${S.prod.resolution ? `, ızgara ${fmt(S.prod.resolution, 2)} mm` : ''} (guide_uretim.stl).${S.prod.productionOk === false ? ' <b>Sunucu bu STL\'i basılabilir bulmadı.</b>' : ''}${printLine(S.prod)}</p>` : '<p>Üretim STL\'i alınmadı; guide_onizleme_BASMAYIN.stl 0,4 mm voksel önizlemesidir, baskı için değildir.</p>'}
+${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanlı boolean ile üretildi: ${S.prod.watertight ? 'su geçirmez' : 'su geçirmez değil'}, ${S.prod.bodies} parça, ${fmt(S.prod.volume / 1000, 2)} cm³${S.prod.resolution ? `, ızgara ${fmt(S.prod.resolution, 2)} mm` : ''} (guide_uretim.stl${S.prod.sha256 ? `, SHA-256 <code>${S.prod.sha256}</code>` : ''}${S.prod.version ? `, ${xl('sunucu sürümü')} ${esc(String(S.prod.version))}` : ''}).${S.prod.productionOk === false ? ' <b>Sunucu bu STL\'i basılabilir bulmadı.</b>' : ''}${printLine(S.prod)}</p>` : '<p>Üretim STL\'i alınmadı; guide_onizleme_BASMAYIN.stl 0,4 mm voksel önizlemesidir, baskı için değildir.</p>'}
 <h2>Otomatik kontroller</h2><ul>${checks}</ul>${window.Fibula ? Fibula.reportHTML() : ''}${approvalsHTML()}
 <h2>Koordinatlar</h2><p>Guide merkezi ${S.anchor ? [S.anchor.p.x, S.anchor.p.y, S.anchor.p.z].map(x => fmt(x)).join(', ') : '-'} mm (DICOM hasta koordinatı, LPS). STL dosyaları aynı koordinatlardadır; BT ile üst üste açılabilir.</p>
 <p><small>${esc(swLine(t => t))}</small></p>
@@ -3907,7 +3912,8 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
       } else r = await serverGuide(Object.assign({ vol: S.vol, red: S.red, F: S.maskF, thr: segThr(), g: S.g, P: S.anchor.p, pls: planesWorld(), scs: screwsWorld(), wrapProfile: S.result && S.result.wrapProfile, seatDir: S.result && S.result.seatDir }, frameAxes()), ac.signal, call(1));
       // the connecting bar: a separate part, its own server call (exact solids; the server also measures its bone clearance)
       if (withBar) { stage('Sunucuda bağlantı köprüsü hazırlanıyor…'); const done = call(0.1); r.bar = await serverBar(S.result.bar.spec, ac.signal); done(1); }
-      S.prod = Object.assign(r, { key: prodKey() });
+      S.prod = Object.assign(r, { key: prodKey(), sha256: await sha256Bytes(r.stl) });
+      if (r.bar && r.bar.stl) r.bar.sha256 = await sha256Bytes(r.bar.stl);
       $('prodMsg').textContent = `${xl("Üretim STL'i hazır:")} ${r.watertight ? xl('su geçirmez') : xl('SU GEÇİRMEZ DEĞİL')}, ${xl(`${r.bodies} parça`)}${r.bodies > (S.g.split ? 2 : 1) ? ' ' + xl("(BEKLENENDEN FAZLA PARÇA, guide'ı kontrol edin)") : ''}, ${fmt(r.volume / 1000, 2)} cm³, ${xl(`${r.faces} üçgen`)}. ${xl('Pakete guide_uretim.stl olarak eklenir.')}`;
       const pw = prodWhy(r); if (pw) $('prodMsg').textContent += ' ' + pw;
       if (r.bar) $('prodMsg').textContent += ` ${xl("Köprü STL'i:")} ${r.bar.watertight ? xl('su geçirmez') : xl('SU GEÇİRMEZ DEĞİL')}${r.bar.clear != null ? ', ' + xl(`kemiğe en yakın ${fmt(r.bar.clear)} mm`) : ''}. ${xl('Pakete kopru_uretim.stl olarak eklenir.')}`;
@@ -3916,6 +3922,16 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     if (withFib && !ac.signal.aborted) try { at = W - 1; stage('Sunucuda fibula guide\'ı hazırlanıyor…'); await Fibula.production(ac.signal, call(1)); } catch (e) { S.fib.prod = null; $('prodMsg').textContent += ` Fibula guide'ı: ${e.message}`; }
     busy(false);
     renderChecks(); renderAppr();
+  }
+  // C7: what the production files are (outside the signed plan hash: they are made after the approvals, from the
+  // approved plan): file, SHA-256, server version, grid
+  function prodRecord() {
+    const prod = S.prod && S.prod.key === prodKey() ? S.prod : null, out = [];
+    if (prod) out.push({ dosya: 'guide_uretim.stl', sha256: prod.sha256 || null, sunucu_surumu: prod.version || null, izgara_mm: prod.resolution || null });
+    if (prod && prod.bar && prod.bar.sha256) out.push({ dosya: 'kopru_uretim.stl', sha256: prod.bar.sha256, sunucu_surumu: prod.version || null, izgara_mm: prod.resolution || null });
+    const fp = S.fib && S.fib.guide && S.fib.prod && S.fib.prod.key === S.fib.guide.key ? S.fib.prod : null;
+    if (fp) out.push({ dosya: 'fibula_guide_uretim.stl', sha256: fp.sha256 || null, sunucu_surumu: fp.version || null, izgara_mm: fp.resolution || null });
+    return out.length ? out : null;
   }
   // the server's print checks (thin wall, guide in bone, guide in the bone's shadow along the insertion direction), in words
   function printIssues(r) {
@@ -3977,10 +3993,16 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     if (window.Fibula) Fibula.exportFiles(files);
     (window.ExportHooks || []).forEach(f => { try { f(files); } catch (e) { /* optional files */ } });
     if (parts.resected) files.push({ name: 'rezeke_parca.stl', data: stlOf(parts.resected.obj) });
+    // C7: every production file going out is the one made for this plan, byte for byte (its SHA-256 as recorded)
+    const rec = prodRecord() || [];
+    for (const r of rec) {
+      const f = files.find(x => x.name === r.dosya);
+      if (!f || !r.sha256 || await sha256Bytes(f.data) !== r.sha256) { alertMsg(`${r.dosya}: ${xl("Dosyanın özeti (SHA-256) kaydedilenle eşleşmiyor; paket verilmedi. Üretim STL'ini yeniden alın.")}`); return; }
+    }
     // plan.json is the whole plan (planOf), so the package can be opened again (dropped on the view, D2); the short
     // summary that used to be the file stays in it under `ozet`
     let summary = null; try { summary = JSON.parse($('json').textContent || 'null'); } catch (e) { /* none yet */ }
-    files.push({ name: 'plan.json', data: JSON.stringify(Object.assign(planOf(), { ozet: summary, software: swInfo() }), null, 2) }, { name: 'rapor.html', data: reportHTML() });
+    files.push({ name: 'plan.json', data: JSON.stringify(Object.assign(planOf(), { ozet: summary, software: swInfo(), uretim: prodRecord() }), null, 2) }, { name: 'rapor.html', data: reportHTML() });
     let pdfFailed = false;
     if (window.Report) try { files.push({ name: 'cerrahi_rapor.pdf', data: new Uint8Array(await (await Report.build()).arrayBuffer()) }); } catch (e) { pdfFailed = true; console.warn('pdf report', e); }   // the HTML report is still in the package
     await offer('guide_paketi.zip', zip(files));
@@ -4158,7 +4180,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   function serverUrl() { return ($('aiUrl').value || '').trim().replace(/\/+$/, ''); }
   function select(sel) { if (sel) S.guideSel = false; S.sel = sel; emit('select', sel); renderElements(); rebuildElementParts(S.result ? S.result.pls : planesWorld(), S.result ? S.result.screwInfo : []); applyExplode(); render(); }
   window.Studio = { bg: bgCall, loadSample, sampleFor, SAMPLES, chooseAxis, nearestPiece, netsOf, blurNetsOf, renamePart, partName, guideBuilds: () => guideBuilds, mandibleView, endModes, onEndModes, startLoad, loadStopped, loadBusy: () => committing, LOAD_CANCELLED, renderComps, setGuideRot, setGuideRoll, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, resEnds, splitGap, cutMisses, evalScrew, resectedAt, resectedNear, resPiece, boneTrack, cutAlongBone, bestScrew,
-    boneSections, autoPrep, exportPackage, sizeBody, autoBody, buildGuideSet, cutsAngle, cutFrame, pieceFrames, pieceBody, screwBodyOn, pieceWrapTop, frameAt, stumpGap, mergeStl, mergeMeshes, AUTO_DEFAULT, G_DEFAULT, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, busyFrac, busySpan, busyText, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume, boneField, simplifyMesh, BAR, barPlan, barSdf, buildBarMesh, placeLug, longCase, axisOffBone, ramusAxis, stopSides, LONG_MM, CUT_OFF_MAX, prodKey, productionSTL, exportOne, softOcc, boneDoubt, boneKey, runFix, printIssues, printLine, serverBar, guideField, lockState: () => lock, bonelessCut, qualityCheck, syncQC, segEdits, editsAt, slotDefault, slotDepth, slotPlay, SLOT_PLAY_MAX, reframe, exclusive, settled, makeGuide, prodReply, prodWhy, gateChecks, swInfo, swLine, sfetch, reportHTML, lesionMargins, anchorFromSlice, ramusAxis };
+    boneSections, autoPrep, exportPackage, sha256Bytes, prodRecord, sizeBody, autoBody, buildGuideSet, cutsAngle, cutFrame, pieceFrames, pieceBody, screwBodyOn, pieceWrapTop, frameAt, stumpGap, mergeStl, mergeMeshes, AUTO_DEFAULT, G_DEFAULT, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, busyFrac, busySpan, busyText, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume, boneField, simplifyMesh, BAR, barPlan, barSdf, buildBarMesh, placeLug, longCase, axisOffBone, ramusAxis, stopSides, LONG_MM, CUT_OFF_MAX, prodKey, productionSTL, exportOne, softOcc, boneDoubt, boneKey, runFix, printIssues, printLine, serverBar, guideField, lockState: () => lock, bonelessCut, qualityCheck, syncQC, segEdits, editsAt, slotDefault, slotDepth, slotPlay, SLOT_PLAY_MAX, reframe, exclusive, settled, makeGuide, prodReply, prodWhy, gateChecks, swInfo, swLine, sfetch, reportHTML, lesionMargins, anchorFromSlice, ramusAxis };
   bus.addEventListener('planeDragged', () => { renderElements(); schedule(true, 'drag'); });
   // messages assembled at run time are written in the language that was active: write them again when it changes
   if (window.addEventListener) window.addEventListener('langchange', () => { try { renderChecks(); renderAppr(); syncLesion(); } catch (e) { /* no case open yet */ } });

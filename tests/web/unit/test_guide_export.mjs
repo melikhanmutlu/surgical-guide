@@ -7,6 +7,8 @@
 // Run: node test_guide_export.mjs
 import { test, run, assert } from './lib/t.mjs';
 import { studio, ready } from './lib/harness.mjs';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 // a tetrahedron as binary STL: what the fake server sends back for every /guide call
 function tetraStl() {
@@ -84,6 +86,25 @@ test('no server: the preview leaves as guide_onizleme_BASMAYIN.stl with a not-fo
   assert.match($('oneMsg').textContent, /0,4 mm voksel önizlemesidir, baskı için değildir/);
   const z = new TextDecoder().decode(P.g.Exports.guides3MF());
   assert.ok(z.includes('Mandibula guide (önizleme, BASMAYIN)'), 'the 3MF object is labelled too');
+});
+
+test('C7: the production STL carries its SHA-256 and server version into plan.json, the approval record and the report; one changed byte stops the package', async () => {
+  S.prod = null; saved.length = 0; $('aiUrl').value = 'http://s'; $('expZip').disabled = false;
+  await St.productionSTL();
+  assert.match(S.prod.sha256 || '', /^[0-9a-f]{64}$/);
+  assert.equal(S.prod.sha256, require('node:crypto').createHash('sha256').update(Buffer.from(S.prod.stl)).digest('hex'));
+  await St.exportPackage();
+  const z = saved.find(f => f.filename === 'guide_paketi.zip'); assert.ok(z, JSON.stringify(saved.map(f => f.filename)) + $('caseMsg').textContent);
+  const t = Buffer.from(z.bytes).toString('latin1');
+  assert.ok(t.includes(`"sha256": "${S.prod.sha256}"`), 'plan.json / onay_kaydi.json record the digest');
+  assert.ok(t.includes('"sunucu_surumu": "test"') && t.includes('"izgara_mm": 0.2'));
+  assert.ok(St.reportHTML().includes(S.prod.sha256), 'the report names it');
+  // one byte of the STL changed after it was made: no package
+  saved.length = 0; const b = new Uint8Array(S.prod.stl); b[100] ^= 1; S.prod.stl = b;
+  await St.exportPackage();
+  assert.ok(!saved.some(f => f.filename === 'guide_paketi.zip'), 'no package');
+  assert.match($('caseMsg').textContent, /guide_uretim\.stl: Dosyanın özeti \(SHA-256\) kaydedilenle eşleşmiyor/);
+  S.prod = null;
 });
 
 test('C6: a package without a production STL holds the preview as guide_onizleme_BASMAYIN.stl, never as guide.stl', async () => {

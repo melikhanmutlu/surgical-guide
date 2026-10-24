@@ -1309,7 +1309,7 @@ window.Fibula = (function () {
     if (!active() || !S.fib.guide || guideStale) return;
     const x = S.fib.guide.ctx;
     const r = await St.serverGuide({ vol: F.vol, red: F.red, F: F.c.Fm, thr: F.thr, g: x.g, P: x.P, u: x.u, v: x.v, n: x.n, pls: x.pls, scs: x.scs, wrapProfile: S.fib.guide.result.wrapProfile, seatDir: S.fib.guide.result.seatDir }, signal, onProgress);
-    S.fib.prod = Object.assign(r, { key: S.fib.guide.key });
+    S.fib.prod = Object.assign(r, { key: S.fib.guide.key, sha256: St.sha256Bytes ? await St.sha256Bytes(r.stl) : null });
     $('prodMsg').textContent += ' ' + xl(`Fibula guide'ı: ${r.watertight ? 'su geçirmez' : 'SU GEÇİRMEZ DEĞİL'}, ${r.bodies} parça${r.bodies > 1 ? ' (BİRDEN FAZLA PARÇA)' : ''}.`);
     const why = St.prodWhy ? St.prodWhy(r) : ''; if (why) $('prodMsg').textContent += ' ' + why;   // (the server's reasons not to print it, P5/P6/E3)
   }

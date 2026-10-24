@@ -1618,6 +1618,8 @@ window.I18N_EN = {
 "İlk vida takılana kadar guide elle tutulmalı; sarmayı artırmak ya da segment başına iki vida koymak dönmeyi azaltır.": "Hold the guide by hand until the first screw is in; a deeper wrap or two screws per segment reduce the rotation.",
 "Sarmayı # mm artır": "Wrap # mm deeper",
 "Kanal öner": "Suggest canal",
+"Dosyanın özeti (SHA-256) kaydedilenle eşleşmiyor; paket verilmedi. Üretim STL'ini yeniden alın.": "The file's digest (SHA-256) does not match the recorded one; no package was made. Make the production STL again.",
+"sunucu sürümü": "server version",
 "Baskı için değildir.": "Not for printing.",
 "Mandibula guide (önizleme, BASMAYIN)": "Mandible guide (preview, DO NOT PRINT)",
 "Fibula guide (önizleme, BASMAYIN, fibula BT koordinatı)": "Fibula guide (preview, DO NOT PRINT, fibula CT coordinates)",
