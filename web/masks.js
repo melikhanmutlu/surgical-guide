@@ -8,7 +8,8 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
 window.Masks = (function () {
   const St = window.Studio; if (!St) return null;
   const { S, fmt, bus } = St, $ = id => document.getElementById(id);
-  const PALETTE = [0x46c98b, 0x4f8fe6, 0xe0a03a, 0x9b6ad6, 0x2bb0b0, 0xd46a9a], OTHER = 0x9aa5b1, BASE = 100000, MAXL = 6;
+  // up to 8 layers: a trimalleolar ankle has tibia, fibula, talus and three or more fragments (plan M1.7)
+  const PALETTE = [0x46c98b, 0x4f8fe6, 0xe0a03a, 0x9b6ad6, 0x2bb0b0, 0xd46a9a, 0xc9a227, 0x7fb3d5], OTHER = 0x9aa5b1, BASE = 100000, MAXL = 8;
   const hex = c => '#' + c.toString(16).padStart(6, '0');
   let layers = defaults(), cur = 1, tool = null, radius = 3, seeds = null, seedRed = null, stroke = null, lastPaint = null;
   let planIdx = new Set([1]), active = false, msg = '', shown = '';

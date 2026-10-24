@@ -16,7 +16,7 @@ const fetchStub = async url => { if (/sample_ankle_ct\./.test(url)) return { jso
 const P = studio({ extra: { fetch: fetchStub } });
 const St = await ready(P); const T = P.g.THREE, S = St.S, W = P.g, G = P.eval('G');
 P.eval(`window.CaseType = (() => { let cur = 'mandible'; return { get: () => cur, set(x) { if (x !== cur) { cur = x; Studio.emit('caseType', x); } } }; })();`);
-P.load('audit.js'); P.load('ankle.js'); P.load('ankguide.js');
+P.load('audit.js'); P.load('ankle.js'); P.load('anklm.js'); P.load('ankmirror.js'); P.load('ankguide.js'); P.load('metrics.js'); P.load('refcmp.js');
 const A = W.Ankle, AG = W.AnkGuide;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const until = async (f, ms = 300000) => { const t0 = Date.now(); while (!f()) { if (Date.now() - t0 > ms) throw new Error('timeout'); await sleep(50); } };
@@ -28,6 +28,7 @@ const t0 = Date.now();
 await St.loadSample('ankle_ct');
 await until(() => A.pieces().length > 0 && !A.building());
 const msLoad = Date.now() - t0;
+console.log('  (pieces: ' + A.pieces().map(p => `${p.name} ${p.cm3.toFixed(1)}`).join(', ') + '; hysteresis pieces ' + JSON.stringify(S.compsAll.comps.filter(c => c.hys).map(c => [+(c.size * S.red.sp[0] * S.red.sp[1] * S.red.sp[2] / 1000).toFixed(1), G.worldOf(S.red, ...c.centroid).map(Math.round)])) + ')');
 
 test('joint cut: the threshold piece of tibia + talus is cut in two at the joint', () => {
   assert.match(S.segMethod, /eklem ayırma/);
@@ -67,6 +68,21 @@ test('region: a larger region lists the foot bones as "Diğer kemik"; it is save
   W.PlanExt.ankle.set(Object.assign({}, x, { roi: { above: 100, below: 40, side: '' } })); await until(() => !A.building() && A.roi().below === 40 && A.pieces().length === n0);
 });
 
+// plan M2 on the real CT (an intact joint: no fragment): the joint spaces are those of a normal ankle
+test('joint measures: superior and medial clear space 1.5-5 mm, landmarks on the right ankle in place', () => {
+  const r = W.AnkLM.result(); assert.ok(r && r.ct.ok, r && r.ct.why);
+  const m = r.ct.m, L = r.ct.L;
+  console.log(`  (SCS ${m.scs && m.scs.toFixed(2)} MCS ${m.mcs && m.mcs.toFixed(2)} TFCS ${m.tfcs && m.tfcs.toFixed(2)} mm; plafond points ${m.nPlaf}, facet ${m.nFacet})`);
+  assert.ok(m.scs > 1.5 && m.scs < 5, `SCS ${m.scs}`); assert.ok(m.mcs > 1.5 && m.mcs < 5, `MCS ${m.mcs}`);
+  assert.ok(m.tfcs != null && m.tfcs < 8, `TFCS ${m.tfcs}`);
+  // right ankle: lateral is -x (LPS); the lateral malleolus reaches lower than the medial
+  assert.ok(L.lmTip.x < L.mmTip.x, 'lateral tip lateral'); assert.ok(L.lmTip.z < L.mmTip.z, 'lateral malleolus lower');
+  assert.ok(Math.abs(L.plafond.z - L.dome.z) < 6 && Math.hypot(L.plafond.x - L.dome.x, L.plafond.y - L.dome.y) < 15, `plafond centre at the dome ${JSON.stringify([L.plafond, L.dome].map(v => [v.x, v.y, v.z].map(a => +a.toFixed(1))))}`);
+  assert.deepEqual([...W.AnkLM.checks()], [], 'no warnings before a reduction');
+  // one leg in this CT: no mirror template, and the panel says so
+  assert.match(P.doc.getElementById('ankMirror').innerHTML, /Karşı bacak BT'de yok/);
+});
+
 // the guide on the anterior distal tibia, 30 mm over the talar dome
 const tib = () => named('Tibia')[0];
 function anterior(zOver) {
@@ -98,6 +114,27 @@ test('package: preview named BASMAYIN, the wedge, and cerceve.json with the fram
   const names = AG.files().map(f => f.name); assert.deepEqual([...names], ['guide/kesi_guide_onizleme_BASMAYIN.stl', 'guide/kama.stl']);
   const fr = JSON.parse(A.frameJSON()); assert.match(fr.frame, /LPS/); assert.ok(fr.parcalar.some(p => p.ad === 'Talus'));
   assert.ok(fr.parcalar.every(p => p.t.length === 3 && p.q.length === 4));
+});
+
+// plan M6.1 on the real CT: the automatic placement gives a guide with no critical check
+test('automatic placement on the real CT: no critical check', async () => {
+  const keep = AG.state(); const r = AG.suggest(); assert.ok(!r.why, r.why); await AG.make();
+  const crit = AG.checks().filter(c => c[0] === 'crit'); console.log(`  (suggested ${r.height} mm over the dome, turned ${r.angle}°, cover ${(r.cover * 100).toFixed(0)} %; seat p50 ${AG.info().fit && AG.info().fit.p50.toFixed(2)} p99 ${AG.info().fit && AG.info().fit.p99.toFixed(2)} mm)`);
+  assert.equal(crit.length, 0, JSON.stringify(crit));
+  W.PlanExt.ankGuide.set(keep); await AG.make();
+});
+// plan M9 on the real CT: the reference guide made in another program (anonymised project data, not in the repository)
+const REF = '/mnt/project-files/surgical-guide-prototype/audit/denetim5/veri/malleol_ref_guide.stl', REFW = REF.replace('guide.stl', 'wedge.stl');
+// The project's reference guide lies 13-20 mm off every bone of this CT (in LPS and in RAS) and no rigid pose seats more
+// than a tenth of it: it was not made on this CT (or not in its coordinates). The comparison must say so, not force a fit.
+test('reference guide (when the project file is there): seated on the bone, or reported as not from this CT', () => {
+  if (!fs.existsSync(REF)) { console.log('  (reference guide file not present: skipped)'); return; }
+  const r = W.RefCmp.load(new Uint8Array(fs.readFileSync(REF)), 'ref.stl'); assert.ok(r, 'result');
+  if (fs.existsSync(REFW)) W.RefCmp.loadWedge(new Uint8Array(fs.readFileSync(REFW)), 'refw.stl');
+  if (!r.a) { console.log(`  (reference: ${r.why})`); assert.match(r.why, /aynı BT/); return; }
+  const a = r.a, c = r.cmp;
+  console.log(`  (reference: on ${a.piece.name}, ${a.same ? 'as loaded (same CT)' : `moved ${a.move.toFixed(1)} mm ${a.angle.toFixed(1)}°`}, clearance ${a.off.toFixed(2)} mm, spread median ${a.med.toFixed(2)} p90 ${a.p90.toFixed(2)} mm, n ${a.n}; vs studio guide: centres ${c ? c.centre.toFixed(1) : '-'} mm)`);
+  assert.ok(a.med < 1, `median ${a.med}`);
 });
 
 await run('ankle, real CT sample');

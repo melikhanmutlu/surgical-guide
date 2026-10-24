@@ -633,7 +633,7 @@
     let { labels, comps, count } = G.components(m, r.nx, r.ny, r.nz, 200);
     // an ankle's touching bones (tibia and talus across a narrow joint) are cut apart at the joint (ankle.js); the
     // ankle keeps every component (S.compsAll), the list shown here is capped
-    if (ankle && window.Ankle && Ankle.separate) comps = Ankle.separate(r, labels, comps);
+    if (ankle && window.Ankle && Ankle.separate) comps = Ankle.separate(r, labels, comps, thr);
     S.labels = labels; S.compsAll = { labels, comps }; S.comps = comps.slice(0, ankle ? 12 : 8); S.compNames = null; S.segMethod = `Eşik ${thr} HU (tarayıcı)` + (ankle ? ' + eklem ayırma' : ''); S.segInfo = null;
     let pick = comps.length ? comps[0].label : null;
     // a head CT's threshold mask is one piece (skull + upper jaw + mandible + spine): cut it at its thin necks and take

@@ -18,7 +18,7 @@ window.Ankle = (function () {
   const LIM = { overlapWarn: 0.5, overlapCrit: 1.0, gapWarn: 2.0, contact: 0.8, near: 4, minCm3: 0.2 };
   const CLASSES = ['', 'Weber A', 'Weber B', 'Weber C', 'İzole medial malleol', 'Bimalleoler', 'Trimalleoler', 'Diğer'];
   let pieces = [], built = '', sel = -1, metrics = [], pend = null, buildJob = null;
-  let meta = { side: '', cls: '' }, red = { ok: false }, autoSide = '';
+  let meta = { side: '', cls: '' }, red = { ok: false }, autoSide = '', unmatched = [];
   const hex = c => '#' + c.toString(16).padStart(6, '0');
 
   // ---------- pieces from the segmentation ----------
@@ -29,7 +29,16 @@ window.Ankle = (function () {
   // (G.separator, the watershed the mandible uses) with a low neck ratio: a joint contact is much thinner than the bones
   // on both sides, a bone's own narrowings (trabecular metaphysis, talar neck) are not. Labels are rewritten in place.
   const SEP = { minCm3: 10, ratio: 0.3 };
-  function separate(r, labels, comps) {
+  // A fracture fragment pressed against its bone is one threshold component too: the fracture line is a band of partial
+  // volume brighter than the threshold, as thick as the bones on both sides (no neck for the watershed). At a higher
+  // threshold (thr + HYS.dHu) only the dense bone is left: the fragment's cortex and the main bone's cortex come apart
+  // there. Every such dense piece that reaches the bone's outer surface (a cortex, not a trabecular island inside) seeds
+  // a seeded split (G.splitSeeds: paths through dense bone are cheap, so the border settles in the low-density band).
+  // Two regions stay apart only when the voxels along their border are low density (see below): a
+  // fracture line, not a bone's own cortex that thins out at the higher threshold. Low density: the lower voxel of each
+  // pair across the border averages under thr + HYS.border (sample values, our assumption).
+  const HYS = { dHu: 250, border: 75, minCm3: 2, seedCm3: 0.25, surf: 0.15, maxSeeds: 8 };
+  function separate(r, labels, comps, thr = THR_ANKLE) {
     const vox = r.sp[0] * r.sp[1] * r.sp[2] / 1000, minVox = Math.max(1, Math.round(LIM.minCm3 / vox)), out = [];
     let base = 0; for (let v = 0; v < labels.length; v++) if (labels[v] > base) base = labels[v];
     base = Math.max(base, 1) + 1;
@@ -39,7 +48,70 @@ window.Ankle = (function () {
       const cs = sep.empty ? [] : sep.run({ ratio: SEP.ratio, base, out: labels, minSize: minVox });
       if (cs.length > 1) { out.push(...cs); base += cs.ids + 1; } else { if (!sep.empty) sep.restore(c.label); out.push(c); }
     });
-    return out.sort((a, b) => b.size - a.size);
+    if (!r.hu) return out.sort((a, b) => b.size - a.size);
+    const fin = [];
+    out.forEach(c => {
+      if (c.size * vox < HYS.minCm3) { fin.push(c); return; }
+      const cs = hysteresis(r, labels, c, thr, base, minVox);
+      if (cs) { fin.push(...cs); base += cs.length + 1; } else fin.push(c);
+    });
+    return fin.sort((a, b) => b.size - a.size);
+  }
+  // the hysteresis split of one component (labels rewritten in place); null when it stays one piece
+  function hysteresis(r, labels, c, thr, base, minVox) {
+    const { nx, ny, nz, hu } = r, vox = r.sp[0] * r.sp[1] * r.sp[2] / 1000, thrHi = thr + HYS.dHu;
+    let b = c.box;
+    if (!b) {
+      b = [nx, ny, nz, -1, -1, -1];
+      for (let k = 0, v = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++, v++) if (labels[v] === c.label) {
+        if (i < b[0]) b[0] = i; if (j < b[1]) b[1] = j; if (k < b[2]) b[2] = k; if (i > b[3]) b[3] = i; if (j > b[4]) b[4] = j; if (k > b[5]) b[5] = k;
+      }
+    }
+    if (b[3] < 0) return null;
+    const cx = b[3] - b[0] + 3, cy = b[4] - b[1] + 3, cz = b[5] - b[2] + 3, cxy = cx * cy, N = cxy * cz;
+    const full = (i, j, k) => (i + b[0] - 1) + nx * ((j + b[1] - 1) + ny * (k + b[2] - 1));
+    const dom = new Uint8Array(N), hi = new Uint8Array(N), H = new Int16Array(N);
+    for (let k = 1; k < cz - 1; k++) for (let j = 1; j < cy - 1; j++) for (let i = 1; i < cx - 1; i++) {
+      const v = full(i, j, k); if (labels[v] !== c.label) continue;
+      const m = i + cx * (j + cy * k); dom[m] = 1; H[m] = hu[v]; if (hu[v] >= thrHi) hi[m] = 1;
+    }
+    const nb = [-1, 1, -cx, cx, -cxy, cxy];
+    const hc = G.components(hi, cx, cy, cz, Math.max(2, Math.round(HYS.seedCm3 / vox)));
+    // a seed reaches the outer surface: enough of its voxels have a neighbour outside the component
+    const surf = new Map(hc.comps.map(s => [s.label, 0]));
+    for (let m = 0; m < N; m++) { const l = hc.labels[m]; if (!l || !surf.has(l)) continue; for (let a = 0; a < 6; a++) if (!dom[m + nb[a]]) { surf.set(l, surf.get(l) + 1); break; } }
+    const seedsOk = hc.comps.filter(s => surf.get(s.label) >= HYS.surf * s.size).slice(0, HYS.maxSeeds);
+    if (seedsOk.length < 2) return null;
+    const idOf = new Map(seedsOk.map((s, i) => [s.label, i + 1])), seeds = new Uint8Array(N);
+    for (let m = 0; m < N; m++) { const id = idOf.get(hc.labels[m]); if (id) seeds[m] = id; }
+    const { lab } = G.splitSeeds({ nx: cx, ny: cy, nz: cz, hu: H }, dom, seeds, thr, thrHi + 300);
+    // borders: per pair, voxel count and HU sum; regions with a dense border (or too small) are merged
+    const K = seedsOk.length, cnt = new Float64Array((K + 1) * (K + 1)), sum = new Float64Array((K + 1) * (K + 1)), size = new Int32Array(K + 1);
+    for (let m = 0; m < N; m++) {
+      const a = lab[m]; if (!a) continue; size[a]++;
+      for (let t = 1; t < 6; t += 2) { const u = m + nb[t], q = lab[u]; if (q && q !== a) { const lo = Math.min(a, q), hi2 = Math.max(a, q), x = lo * (K + 1) + hi2; cnt[x]++; sum[x] += Math.min(H[m], H[u]); } }
+    }
+    const par = Array.from({ length: K + 1 }, (_, i) => i), find = x => { while (par[x] !== x) { par[x] = par[par[x]]; x = par[x]; } return x; };
+    for (let a = 1; a <= K; a++) for (let q = a + 1; q <= K; q++) { const x = a * (K + 1) + q; if (cnt[x] && sum[x] / cnt[x] >= thr + HYS.border) par[find(q)] = find(a); }
+    // small regions join the neighbour they share the longest border with
+    for (let pass = 0; pass < K; pass++) {
+      const gs = new Map(); for (let a = 1; a <= K; a++) gs.set(find(a), (gs.get(find(a)) || 0) + size[a]);
+      const small = [...gs.entries()].filter(([, s]) => s < Math.max(minVox, Math.round(HYS.seedCm3 * 2 / vox))).map(([g]) => g);
+      if (!small.length || gs.size < 2) break;
+      const g = small[0]; let best = -1, bn = 0;
+      for (let a = 1; a <= K; a++) for (let q = 1; q <= K; q++) { if (a === q || find(a) !== g || find(q) === g) continue; const x = Math.min(a, q) * (K + 1) + Math.max(a, q); if (cnt[x] > bn) { bn = cnt[x]; best = find(q); } }
+      if (best < 0) break; par[g] = best;
+    }
+    const groups = [...new Set(Array.from({ length: K }, (_, i) => find(i + 1)))];
+    if (groups.length < 2) return null;
+    const gid = new Map(groups.map((g, i) => [g, base + i + 1])), info = groups.map(g => ({ label: gid.get(g), size: 0, cx: 0, cy: 0, cz: 0 }));
+    for (let k = 1; k < cz - 1; k++) for (let j = 1; j < cy - 1; j++) for (let i = 1; i < cx - 1; i++) {
+      const m = i + cx * (j + cy * k); if (!dom[m]) continue;
+      const a = lab[m]; if (!a) continue;            // unreachable specks keep the old label
+      const L = gid.get(find(a)), e = info[groups.indexOf(find(a))]; labels[full(i, j, k)] = L;
+      e.size++; e.cx += i + b[0] - 1; e.cy += j + b[1] - 1; e.cz += k + b[2] - 1;
+    }
+    return info.filter(e => e.size).map(e => ({ label: e.label, size: e.size, centroid: [e.cx / e.size, e.cy / e.size, e.cz / e.size], hys: true }));
   }
 
   // ---------- the ankle region and the anatomical names ----------
@@ -64,7 +136,7 @@ window.Ankle = (function () {
   // any slab), bounding box, and how much of its surface lies against air
   function stats(list) {
     const r = S.red, hu = r.hu, nx = r.nx, ny = r.ny, nz = r.nz, nxy = nx * ny, A = Math.max(1, Math.round(1.7 / r.sp[0])), A3 = Math.max(1, Math.round(3 / r.sp[0]));
-    const L = S.labels, by = new Map();
+    const L = LB(), by = new Map();
     list.forEach(p => { p.st = { kLo: Infinity, kHi: -Infinity, n: 0, nAir3: 0, bnd: 0, bndAir: 0, sl: new Float64Array(nz * 3), box: [nx, ny, nz, -1, -1, -1] }; by.set(p.label, p.st); });
     const air = v => hu && hu[v] < -500;
     for (let k = 0, v = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++, v++) {
@@ -92,7 +164,7 @@ window.Ankle = (function () {
   }
   // smallest distance (mm) from piece p to each of the labels in `to`, looked for up to R mm away (else Infinity)
   function gaps(p, to, R = 10) {
-    const r = S.red, L = S.labels, b = p.st.box, pad = [0, 1, 2].map(a => Math.ceil(R / r.sp[a]) + 1);
+    const r = S.red, L = LB(), b = p.st.box, pad = [0, 1, 2].map(a => Math.ceil(R / r.sp[a]) + 1);
     const lo = [0, 1, 2].map(a => Math.max(0, b[a] - pad[a])), hi = [0, 1, 2].map(a => Math.min([r.nx, r.ny, r.nz][a] - 1, b[a + 3] + pad[a]));
     const cx = hi[0] - lo[0] + 1, cy = hi[1] - lo[1] + 1, cz = hi[2] - lo[2] + 1, m = new Uint8Array(cx * cy * cz), out = new Map(to.map(l => [l, Infinity]));
     for (let k = 0; k < cz; k++) for (let j = 0; j < cy; j++) { const row = lo[0] + r.nx * (lo[1] + j + r.ny * (lo[2] + k)), o = cx * (j + cy * k); for (let i = 0; i < cx; i++) if (L[row + i] === p.label) m[o + i] = 1; }
@@ -103,7 +175,9 @@ window.Ankle = (function () {
   }
   // names every piece of `list` and decides the region kept; returns the side of the ankle ('R', 'L' or '')
   // pieces outside the region (or on the other leg) get role 'roi' / 'side' and are left out by build()
-  function names(list, want = roi) {
+  // prev: the last build's pieces (label -> { role, size }); a tibia, fibula or talus whose voxels did not change (a hand
+  // split or an edit of another piece) keeps its role instead of being guessed again
+  function names(list, want = roi, prev = null) {
     const r = S.red, sp = r.sp[2];
     stats(list);
     const info = { bilateral: false, side: '', mid: null, kDome: null, up: 1, outRoi: 0, otherSide: 0, talus: false };
@@ -117,9 +191,20 @@ window.Ankle = (function () {
       const cnt = { R: 0, L: 0 }; list.forEach(p => { if (!p.role) cnt[sideOf(p)]++; });
       info.bilateral = true; info.mid = mid; info.side = want.side === 'R' || want.side === 'L' ? want.side : cnt.L > cnt.R ? 'L' : 'R';
       list.forEach(p => { if (p.role !== 'out' && sideOf(p) !== info.side) { p.role = 'side'; p.name = 'Diğer kemik'; info.otherSide++; } });
+      // the other leg's tibia and fibula (the two longest of its pieces, the larger the tibia): the mirror template (ankmirror.js)
+      const os = list.filter(p => p.role === 'side' && len(p) > 25).sort((a, b) => len(b) - len(a)).slice(0, 2).sort((a, b) => b.size - a.size);
+      info.other = os.map(p => ({ label: p.label, role: p === os[0] ? 'tibia' : 'fibula', c: p.c.clone() }));
     }
-    const shafts = list.filter(p => !p.role && len(p) > 25).sort((a, b) => len(b) - len(a)).slice(0, 2).sort((a, b) => b.size - a.size);
-    const tib = shafts[0] || null, fib = shafts[1] && Math.hypot(shafts[1].c.x - shafts[0].c.x, shafts[1].c.y - shafts[0].c.y) < 60 ? shafts[1] : null;
+    const keepR = role => { if (!prev) return null; const p = list.find(x => !x.role && prev.has(x.label) && prev.get(x.label).role === role && Math.abs(x.size - prev.get(x.label).size) <= 0.02 * prev.get(x.label).size); if (p) { p.role = role; p.name = { tibia: 'Tibia', fibula: 'Fibula', talus: 'Talus' }[role]; } return p || null; };
+    let tib = keepR('tibia'), fib = keepR('fibula');
+    const keptTal = keepR('talus');
+    const nearSh = (a, b) => Math.hypot(a.c.x - b.c.x, a.c.y - b.c.y) < 60;
+    if (!tib || !fib) {
+      const sh = list.filter(p => !p.role && len(p) > 25).sort((a, b) => len(b) - len(a)).slice(0, (tib ? 0 : 1) + (fib ? 0 : 1)).sort((a, b) => b.size - a.size);
+      if (!tib && !fib) { tib = sh[0] || null; fib = sh[1] && nearSh(sh[1], sh[0]) ? sh[1] : null; }
+      else if (!tib) tib = sh[0] && nearSh(sh[0], fib) ? sh[0] : null;
+      else fib = sh[0] && nearSh(sh[0], tib) ? sh[0] : null;
+    }
     if (tib) { tib.name = 'Tibia'; tib.role = 'tibia'; }
     if (fib) { fib.name = 'Fibula'; fib.role = 'fibula'; }
     // up (towards the knee, in slice order): the shafts leave the scan by the edge they come nearer to
@@ -130,8 +215,8 @@ window.Ankle = (function () {
     // the talus: the largest piece over 5 cm³ that touches the tibia, with its centre below the tibia's middle
     const g = new Map();
     const gapsOf = p => { if (!g.has(p.label)) g.set(p.label, gaps(p, [tib, fib].filter(Boolean).map(x => x.label))); return g.get(p.label); };
-    let tal = null;
-    if (tib) {
+    let tal = keptTal;
+    if (tib && !tal) {
       const kMid = (tib.kLo + tib.kHi) / 2, below = p => (up > 0 ? kOfC(p) < kMid : kOfC(p) > kMid);
       const cand = list.filter(p => !p.role && p.cm3 > 5 && below(p)).sort((a, b) => b.size - a.size);
       for (const p of cand) { if (gapsOf(p).get(tib.label) <= NEAR_TAL) { tal = p; break; } }
@@ -173,17 +258,99 @@ window.Ankle = (function () {
     function kOfC(p) { let s = 0, w = 0; for (let k = p.kLo; k <= p.kHi; k++) { s += k * p.st.sl[3 * k]; w += p.st.sl[3 * k]; } return w ? s / w : (p.kLo + p.kHi) / 2; }
   }
   // all the threshold components of the current labels (app.js keeps them all for the ankle; the list it shows is capped)
-  const allComps = () => (S.compsAll && S.compsAll.labels === S.labels ? S.compsAll.comps : S.comps) || [];
-  const sigOf = () => S.labels && S.comps ? allComps().map(c => `${c.label}:${c.size}`).join(',') + '|' + S.red.nx + 'x' + S.red.ny + 'x' + S.red.nz + '|' + roi.above + ',' + roi.below + ',' + roi.side : '';
+  const comps0 = () => (S.compsAll && S.compsAll.labels === S.labels ? S.compsAll.comps : S.comps) || [];
+  // ---------- brush and eraser edits (segedit.js, saved with the plan) on the pieces (plan M1.3) ----------
+  // The pieces are the labels with the edits laid over: an erased voxel leaves its piece; an added voxel joins the piece
+  // it touches (grown out from the pieces through the added voxels), added voxels touching no piece are new pieces.
+  // labVer counts in-place label changes (a split by hand), so the view is rebuilt.
+  let lv = null, labVer = 0, lastRed = null;
+  function view() {
+    const src = S.labels, c0 = comps0(), E = window.SegEdit && SegEdit.edits ? SegEdit.edits() : null;
+    if (!src || !E || E.add.length !== src.length) return { L: src, comps: c0 };
+    const key = SegEdit.key() + '|' + labVer + '|' + c0.length;
+    if (lv && lv.src === src && lv.key === key) return lv;
+    const r = S.red, nx = r.nx, nxy = r.nx * r.ny, N = src.length, L = src.slice(), known = new Set(c0.map(c => c.label));
+    let maxL = 0; for (let v = 0; v < N; v++) { if (E.del[v]) L[v] = 0; if (L[v] > maxL) maxL = L[v]; }
+    const q = [], nbr = v => [v % nx > 0 ? v - 1 : -1, v % nx < nx - 1 ? v + 1 : -1, ((v / nx) | 0) % r.ny > 0 ? v - nx : -1, ((v / nx) | 0) % r.ny < r.ny - 1 ? v + nx : -1, v >= nxy ? v - nxy : -1, v + nxy < N ? v + nxy : -1];
+    for (let v = 0; v < N; v++) if (E.add[v] && !known.has(L[v])) { L[v] = 0; for (const u of nbr(v)) if (u >= 0 && !E.add[u] && known.has(L[u])) { L[v] = L[u]; q.push(v); break; } }
+    for (let h = 0; h < q.length; h++) { const v = q[h]; for (const u of nbr(v)) if (u >= 0 && E.add[u] && !L[u]) { L[u] = L[v]; q.push(u); } }
+    // added voxels touching no piece: new pieces
+    const left = new Uint8Array(N); let any = false; for (let v = 0; v < N; v++) if (E.add[v] && !L[v]) { left[v] = 1; any = true; }
+    if (any) { const cc = G.components(left, r.nx, r.ny, r.nz, 1); for (let v = 0; v < N; v++) if (cc.labels[v]) { L[v] = maxL + cc.labels[v]; known.add(L[v]); } }
+    const acc = new Map(); for (let k = 0, v = 0; k < r.nz; k++) for (let j = 0; j < r.ny; j++) for (let i = 0; i < nx; i++, v++) {
+      const l = L[v]; if (!l || !known.has(l)) continue; let e = acc.get(l); if (!e) acc.set(l, e = [0, 0, 0, 0]); e[0]++; e[1] += i; e[2] += j; e[3] += k;
+    }
+    const comps = [...acc.entries()].map(([label, e]) => ({ label, size: e[0], centroid: [e[1] / e[0], e[2] / e[0], e[3] / e[0]] })).sort((a, b) => b.size - a.size);
+    lv = { src, key, L, comps }; return lv;
+  }
+  const LB = () => view().L, allComps = () => view().comps;
+
+  // ---------- a piece cut in two by hand (plan M1.2) ----------
+  // Two points, one on each side of the fracture line, in CT position. The piece's voxels go to the nearer point along
+  // the cheapest path through dense bone (G.splitSeeds), so the cut settles in the low-density fracture line. The points
+  // are saved with the plan and laid on the labels again after a new segmentation (a split already made is skipped).
+  let splits = [], splitMode = null, pendSplit = null;
+  const vecOk = a => Array.isArray(a) && a.length === 3 && a.every(Number.isFinite);
+  function labelNear(r, L, w) {
+    const c = G.indexOf(r, [w.x, w.y, w.z]).map(Math.round), votes = new Map();
+    for (let dk = -2; dk <= 2; dk++) for (let dj = -2; dj <= 2; dj++) for (let di = -2; di <= 2; di++) {
+      const i = c[0] + di, j = c[1] + dj, k = c[2] + dk; if (i < 0 || j < 0 || k < 0 || i >= r.nx || j >= r.ny || k >= r.nz) continue;
+      const l = L[i + r.nx * (j + r.ny * k)]; if (l > 0) votes.set(l, (votes.get(l) || 0) + 1 / (1 + di * di + dj * dj + dk * dk));
+    }
+    return votes.size ? [...votes.entries()].sort((a, b) => b[1] - a[1])[0][0] : 0;
+  }
+  // returns the two labels, or null when the points are not on one piece
+  function splitLabels(a, b) {
+    const r = S.red, L = S.labels; if (!r || !L) return null;
+    const la = labelNear(r, L, a), lb = labelNear(r, L, b); if (!la || la !== lb) return null;
+    const N = L.length, dom = new Uint8Array(N), seeds = new Uint8Array(N);
+    for (let v = 0; v < N; v++) if (L[v] === la) dom[v] = 1;
+    [a, b].forEach((w, s) => {
+      const c = G.indexOf(r, [w.x, w.y, w.z]), rad = r.sp.map(x => Math.ceil(2.5 / x));
+      for (let k = Math.round(c[2]) - rad[2]; k <= Math.round(c[2]) + rad[2]; k++) for (let j = Math.round(c[1]) - rad[1]; j <= Math.round(c[1]) + rad[1]; j++) for (let i = Math.round(c[0]) - rad[0]; i <= Math.round(c[0]) + rad[0]; i++) {
+        if (i < 0 || j < 0 || k < 0 || i >= r.nx || j >= r.ny || k >= r.nz) continue;
+        const v = i + r.nx * (j + r.ny * k); if (dom[v] && Math.hypot((i - c[0]) * r.sp[0], (j - c[1]) * r.sp[1], (k - c[2]) * r.sp[2]) <= 2.5) seeds[v] = s + 1;
+      }
+    });
+    const thr = +($('thr') ? $('thr').value : THR_ANKLE), { lab } = G.splitSeeds(r, dom, seeds, thr, thr + 1000);
+    let maxL = 0; for (let v = 0; v < N; v++) if (L[v] > maxL) maxL = L[v];
+    const nl = maxL + 1, acc = { [la]: [0, 0, 0, 0], [nl]: [0, 0, 0, 0] };
+    for (let k = 0, v = 0; k < r.nz; k++) for (let j = 0; j < r.ny; j++) for (let i = 0; i < r.nx; i++, v++) {
+      if (!dom[v]) continue; if (lab[v] === 2) L[v] = nl; const e = acc[L[v]]; e[0]++; e[1] += i; e[2] += j; e[3] += k;
+    }
+    if (!acc[nl][0] || !acc[la][0]) { for (let v = 0; v < N; v++) if (L[v] === nl) L[v] = la; return null; }
+    const cs = S.compsAll && S.compsAll.labels === L ? S.compsAll.comps : S.comps, mk = l => ({ label: +l, size: acc[l][0], centroid: [acc[l][1] / acc[l][0], acc[l][2] / acc[l][0], acc[l][3] / acc[l][0]] });
+    const at = cs.findIndex(c => c.label === la); if (at >= 0) cs.splice(at, 1, mk(la), mk(nl)); else cs.push(mk(la), mk(nl));
+    cs.sort((x, y) => y.size - x.size);
+    labVer++;
+    return [la, nl];
+  }
+  const applySplits = () => splits.forEach(s => splitLabels(V(...s.a), V(...s.b)));
+  // the user's two clicks (world points on the shown pieces, taken back to the CT position of the clicked piece)
+  function splitPiece(i, wa, wb) {
+    const p = pieces[i]; if (!p) return false;
+    const a = toOwn(p, wa), b = toOwn(p, wb), keep = { t: p.t.clone(), q: p.q.clone() };
+    const ls = splitLabels(a, b); if (!ls) return false;
+    splits.push({ a: r3(a), b: r3(b) });
+    pendSplit = { labels: ls, t: keep.t, q: keep.q };
+    unapprove(); pend = planGet(); built = ''; build();
+    return true;
+  }
+  const sigOf = () => S.labels && S.comps ? allComps().map(c => `${c.label}:${c.size}`).join(',') + '|' + S.red.nx + 'x' + S.red.ny + 'x' + S.red.nz + '|' + roi.above + ',' + roi.below + ',' + roi.side + '|' + labVer : '';
 
   async function build() {
     if (!on() || !S.red || !S.labels || !S.comps) return;
+    if (splits.length) applySplits();
     const sig = sigOf(); if (sig === built && pieces.length) { show(); return; }
     const job = buildJob = {}, r = S.red, vox = r.sp[0] * r.sp[1] * r.sp[2] / 1000;
+    const prevRoles = pieces.length && lastRed === r ? new Map(pieces.map(p => [p.label, { role: p.role, size: p.size }])) : null;
+    lastRed = r;
+    // a rebuild of the same case (new threshold, a split, an edit): the motions go with the pieces that match them
+    if (pieces.length && prevRoles && !pend) pend = planGet();
     drop();
     const mk = c => ({ label: c.label, size: c.size, cm3: c.size * vox, c: V(...G.worldOf(r, ...c.centroid)) });
     const all = allComps(), cand = all.filter(c => c.size * vox >= LIM.minCm3).map(mk);
-    const side = autoSide = names(cand);
+    const side = autoSide = names(cand, roi, prevRoles);
     // the pieces shown: the named bones first, then fragments and the rest by size, at most MAXP
     const rank = { tibia: 0, fibula: 1, talus: 2, frag: 3, other: 4, out: 5 };
     const keep = cand.filter(p => p.role !== 'roi' && p.role !== 'side').sort((a, b) => (rank[a.role] - rank[b.role]) || b.size - a.size);
@@ -201,16 +368,16 @@ window.Ankle = (function () {
     St.busy(true, xl('Kırık parçaları hazırlanıyor…')); await St.sleep();
     try {
       // one pass for every piece's bounding box; each piece is then meshed and measured on its own box only
-      const box = new Map(list.map(p => [p.label, [r.nx, r.ny, r.nz, -1, -1, -1]]));
+      const box = new Map(list.map(p => [p.label, [r.nx, r.ny, r.nz, -1, -1, -1]])), L = LB();
       for (let k = 0, v = 0; k < r.nz; k++) for (let j = 0; j < r.ny; j++) for (let i = 0; i < r.nx; i++, v++) {
-        const b = box.get(S.labels[v]); if (!b) continue;
+        const b = box.get(L[v]); if (!b) continue;
         if (i < b[0]) b[0] = i; if (j < b[1]) b[1] = j; if (k < b[2]) b[2] = k; if (i > b[3]) b[3] = i; if (j > b[4]) b[4] = j; if (k > b[5]) b[5] = k;
       }
       let fi = 0;
       for (const p of list) {
-        const b = box.get(p.label), PAD = 6, lo = [0, 1, 2].map(a => Math.max(0, b[a] - PAD)), hi = [0, 1, 2].map(a => Math.min([r.nx, r.ny, r.nz][a] - 1, b[a + 3] + PAD));
+        const b = box.get(p.label), PAD = Math.max(6, Math.ceil(10 / Math.min(...r.sp))), lo = [0, 1, 2].map(a => Math.max(0, b[a] - PAD)), hi = [0, 1, 2].map(a => Math.min([r.nx, r.ny, r.nz][a] - 1, b[a + 3] + PAD));
         const [cx, cy, cz] = [0, 1, 2].map(a => hi[a] - lo[a] + 1), m = new Uint8Array(cx * cy * cz);
-        for (let k = 0; k < cz; k++) for (let j = 0; j < cy; j++) { const row = lo[0] + r.nx * (lo[1] + j + r.ny * (lo[2] + k)), o = cx * (j + cy * k); for (let i = 0; i < cx; i++) if (S.labels[row + i] === p.label) m[o + i] = 1; }
+        for (let k = 0; k < cz; k++) for (let j = 0; j < cy; j++) { const row = lo[0] + r.nx * (lo[1] + j + r.ny * (lo[2] + k)), o = cx * (j + cy * k); for (let i = 0; i < cx; i++) if (L[row + i] === p.label) m[o + i] = 1; }
         const crop = { m: m.slice(), lo, nx: cx, ny: cy, nz: cz };
         const net = await St.blurNetsOf(m, cx, cy, cz);
         if (job !== buildJob) return;
@@ -224,12 +391,14 @@ window.Ankle = (function () {
       pieces = list; built = sig; sel = pieces.findIndex(p => p.role === 'frag');
       pieces.forEach((p, i) => St.setPart('ank' + i, p.name, p.pivot, p.color));
       if (pend) { const x = pend; pend = null; restore(x); }
+      if (pendSplit) { const ps = pendSplit; pendSplit = null; pieces.forEach((p, k) => { if (ps.labels.includes(p.label)) setMotion(k, ps.t, ps.q, false); }); }
       show(); measure(); render(); renderRoi(); St.renderParts(); St.emit('ankPieces'); St.emit('changed');
       if (window.MPR) MPR.redraw();
     } finally { if (job === buildJob) { buildJob = null; St.busy(false); } }
   }
   function drop() { Object.keys(St.parts).filter(k => /^ank\d/.test(k)).forEach(k => St.setPart(k, null, null)); pieces = []; built = ''; sel = -1; metrics = []; attach(); }
-  // signed distance (mm, outside > 0) of a piece on its bounding box + 6 voxels (4.8 mm): the measurements sample it
+  // signed distance (mm, outside > 0) of a piece on its bounding box + 10 mm (at least 6 voxels): the measurements and
+  // the joint landmarks (anklm.js: a medial gutter is 3-5 mm wide) sample it
   async function sdfOf(c) {
     const r = S.red, { nx, ny, nz } = c;
     let d = null; const p = St.bg && St.bg('ank', { op: 'sdf', mask: c.m, nx, ny, nz, sp: r.sp });
@@ -295,7 +464,7 @@ window.Ankle = (function () {
   const angleOf = q => 2 * Math.acos(Math.min(1, Math.abs(q.w))) * 180 / Math.PI;
   const toWorld = (p, q0) => q0.clone().sub(p.c).applyQuaternion(p.q).add(p.c).add(p.t);
   const toOwn = (p, w) => w.clone().sub(p.c).sub(p.t).applyQuaternion(p.q.clone().invert()).add(p.c);
-  function unapprove() { if (red.ok) red = { ok: false }; }
+  function unapprove() { if (red.ok) red = { ok: false }; unmatched = []; }
   // a piece moved by the gizmo, the API or a restored plan; edit = a user change (drops the approval, one history step)
   function setMotion(i, t, q, edit = true) {
     const p = pieces[i]; if (!p) return;
@@ -345,6 +514,7 @@ window.Ankle = (function () {
       else if (m.over >= LIM.overlapWarn) out.push(['warn', 'Uyarı', xl(`${m.name}, ${with_} ile ${fmt(m.over, 1)} mm iç içe; kırık yüzeyleri ezilmiş olabilir, kontrol edin.`), 'ank']);
       if (m.gap != null && m.gap > LIM.gapWarn && m.partner >= 0) out.push(['warn', 'Uyarı', xl(`${m.name} ile ${pieces[m.partner].name} arasında ortalama ${fmt(m.gap, 1)} mm aralık var.`), 'ank']);
     });
+    if (unmatched.length) out.push(['warn', 'Uyarı', xl(`Kayıtlı planda ${unmatched.length} parçanın hareketi bugünkü parçalarla eşleşmedi (${unmatched.join(', ')}); bu parçalar BT konumunda. Segmentasyon değişmiş olabilir; redüksiyonu kontrol edin.`), 'ank']);
     if (!pieces.some(moved)) out.push(['info', 'Bilgi', xl('Henüz hiçbir parça taşınmadı; redükte model BT\'deki konumla aynı.'), 'ank']);
     const ri = roiInfo;
     if (ri) {
@@ -415,6 +585,14 @@ window.Ankle = (function () {
     mouse.set(((e.clientX - rect.left) / rw) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
     St.ray.setFromCamera(mouse, St.camera);
     const h = St.ray.intersectObjects(pieces.map(p => p.mesh).filter(m => m.parent && m.parent.visible), false)[0];
+    if (splitMode) {
+      if (!h || pieces.indexOf(h.object.userData.ankle) !== splitMode.i) { St.alertMsg(xl('Bölünecek parçanın üstüne tıklayın.')); return; }
+      splitMode.pts.push(h.point.clone());
+      if (splitMode.pts.length < 2) { render(); return; }
+      const m = splitMode; splitMode = null;
+      if (!splitPiece(m.i, m.pts[0], m.pts[1])) St.alertMsg(xl('Parça bölünemedi: iki nokta aynı parçada olmalı ve kırık hattının iki yanında durmalı.'));
+      render(); return;
+    }
     if (h) choose(pieces.indexOf(h.object.userData.ankle));
   });
   function choose(i) { sel = i; attach(); render(); }
@@ -453,12 +631,15 @@ window.Ankle = (function () {
       ${pieces[sel] ? `<div class="ctl"><label for="ankName" class="lbl2">${xl('Ad')}</label><select id="ankName">${(NAMES.includes(pieces[sel].name) ? NAMES : [pieces[sel].name, ...NAMES]).map(n => `<option value="${esc(n)}" ${n === pieces[sel].name ? 'selected' : ''}>${esc(xl(n))}</option>`).join('')}</select></div>` : ''}
       <span class="seg tools" role="group" aria-label="${xl('Taşıma aracı')}"><button id="ankT" aria-pressed="${!tc || tc.mode === 'translate'}">${xl('Taşı (W)')}</button><button id="ankR" aria-pressed="${!!tc && tc.mode === 'rotate'}">${xl('Döndür (E)')}</button></span>
       <div id="ankMotion" class="col"></div>
-      <div class="btns"><button id="ankReset" class="sm" ${pieces[sel] && moved(pieces[sel]) ? '' : 'disabled'}>${xl('Parçayı BT konumuna döndür')}</button><button id="ankResetAll" class="ghost sm" ${pieces.some(moved) ? '' : 'disabled'}>${xl('Tümünü sıfırla')}</button></div>
-      <p class="hint more">${xl('Parçayı 3B görünümde tıklayarak ya da listeden seçin; okları sürükleyerek taşıyın, halkalarla döndürün. Ölçümler fare bırakılınca yenilenir.')}</p>`;
+      <div class="btns"><button id="ankReset" class="sm" ${pieces[sel] && moved(pieces[sel]) ? '' : 'disabled'}>${xl('Parçayı BT konumuna döndür')}</button><button id="ankResetAll" class="ghost sm" ${pieces.some(moved) ? '' : 'disabled'}>${xl('Tümünü sıfırla')}</button>
+        <button id="ankSplit" class="ghost sm" aria-pressed="${!!splitMode}" ${pieces[sel] ? '' : 'disabled'}>${splitMode ? xl(`Kırık hattının iki yanına tıklayın (${splitMode.pts.length}/2)`) : xl('Parçayı ikiye böl')}</button></div>
+      ${splits.length ? `<p class="hint">${xl(`Elle bölme: ${splits.length}. Plana kaydedilir; yeni segmentasyonda yeniden uygulanır.`)}</p>` : ''}
+      <p class="hint more">${xl('Parçayı 3B görünümde tıklayarak ya da listeden seçin; okları sürükleyerek taşıyın, halkalarla döndürün. Ölçümler fare bırakılınca yenilenir. Kemiğe kaynaşmış bir kırık parçası için "Parçayı ikiye böl"e basıp kırık hattının iki yanına birer kez tıklayın; kemik fırçası ve silgisi (Anatomi adımı) parçaları da düzeltir.')}</p>`;
     box.querySelectorAll('[data-sel]').forEach(b => b.addEventListener('click', () => choose(+b.dataset.sel)));
     if ($('ankName')) $('ankName').addEventListener('change', e => rename(sel, e.target.value));
     $('ankT').addEventListener('click', () => setMode('translate')); $('ankR').addEventListener('click', () => setMode('rotate'));
     $('ankReset').addEventListener('click', () => reset(sel)); $('ankResetAll').addEventListener('click', () => reset(null));
+    $('ankSplit').addEventListener('click', () => { splitMode = splitMode ? null : sel >= 0 ? { i: sel, pts: [] } : null; render(); });
     renderMotion(); renderAppr(); renderChecks();
   }
   function renderMeta() {
@@ -481,10 +662,13 @@ window.Ankle = (function () {
       <li class="sum"><button class="go" data-ank-go="st1"><span class="nm">${xl('Görüntü kalitesi')}</span></button><span class="tag ${qcCrit ? 'crit' : 'ok'}">${qcCrit ? 'Kritik' : 'Uygun'}</span></li>
       <li><button class="go" data-ank-go="stRed"><span class="nm">${xl('Redüksiyon')}</span><small>${xl(`${nMoved} parça taşındı`)}${meta.cls ? ' · ' + esc(xl(meta.cls)) : ''}</small></button>
         <span class="act">${red.ok ? `<span class="badge" title="${esc(red.by || '')}"><span class="ini">${esc(initials(red.by))}</span></span>` : ''} <button id="ankOk">${red.ok ? 'Kaldır' : 'Onayla'}</button></span></li>
+      ${items().map(it => { const ok = itemOk(it), stale = !ok && appr[it.k]; return `<li><button class="go" data-ank-go="${it.go}"><span class="nm">${esc(xl(it.name))}</span>${stale ? `<small>${xl('Plan değişti; yeniden onaylayın.')}</small>` : ''}</button>
+        <span class="act">${ok ? `<span class="badge" title="${esc(appr[it.k].by)}"><span class="ini">${esc(initials(appr[it.k].by))}</span></span>` : ''} <button data-ank-item="${esc(it.k)}">${ok ? xl('Kaldır') : xl('Onayla')}</button></span></li>`; }).join('')}
       <li class="sum"><button class="go" data-ank-go="checks"><span class="nm">${xl('Otomatik kontroller')}</span></button><span class="tag ${crit ? 'crit' : 'ok'}">${crit ? 'Kritik' : 'Geçti'}</span></li></ul>
       <p class="hint" id="ankApprMsg"></p>`;
     box.querySelectorAll('[data-ank-go]').forEach(b => b.addEventListener('click', () => { const id = b.dataset.ankGo; if (id === 'checks') St.goTo('data'); else if ($(id)) $(id).open = true; }));
     $('ankOk').addEventListener('click', approve);
+    box.querySelectorAll('[data-ank-item]').forEach(b => b.addEventListener('click', () => approveItem(b.dataset.ankItem)));
   }
   function approve() {
     const name = $('surgeon').value.trim(), msg = t => { if ($('ankApprMsg')) $('ankApprMsg').textContent = xl(t); };
@@ -500,7 +684,48 @@ window.Ankle = (function () {
     let a = 0x811c9dc5; for (let i = 0; i < t.length; i++) a = Math.imul(a ^ t.charCodeAt(i), 16777619);
     return (a >>> 0).toString(16).padStart(8, '0');
   }
-  (window.PendingHooks = window.PendingHooks || []).push(() => (on() && pieces.length && !red.ok ? ['Redüksiyon'] : []));
+  // ---------- item approvals (plan M7.1): each screw, the cutting guide, the wedge and the drill guide ----------
+  // An approval is kept with what it approved (a signature of the item and of its piece's motion); when the item
+  // changes the approval no longer counts ("Plan değişti"). Stamps are not part of the plan's design hash (audit.js).
+  let appr = {};          // key -> { by, at, sig }
+  const hsh = t => (window.Audit ? Audit.sha256(t).slice(0, 16) : String(t.length));
+  const mot = p => (p ? JSON.stringify([[p.t.x, p.t.y, p.t.z].map(x => Math.round(x * 1000) / 1000), [p.q.x, p.q.y, p.q.z, p.q.w].map(x => Math.round(x * 1e5) / 1e5)]) : '');
+  function items() {
+    const out = [];
+    if (window.AnkScrew) {
+      const is = AnkScrew.issues(), sc = AnkScrew.screws();
+      sc.forEach((z, k) => {
+        const p = pieces.find(q => q.name === z.piece), same = sc.filter(y => y.kind === z.kind);
+        out.push({ k: 'screw:' + hsh(JSON.stringify([z.kind, z.piece, z.E, z.d])), name: `${(AnkScrew.KIND[z.kind] || {}).name || 'Vida'} ${same.indexOf(z) + 1}`, go: 'stAnkS',
+          sig: hsh(JSON.stringify([z.kind, z.piece, z.E, z.d, z.D, z.L]) + mot(p)), crit: is.some(i => i.id === z.id && i.lvl === 'crit') });
+      });
+      const dg = AnkScrew.drillInfo();
+      if (dg) out.push({ k: 'drill', name: 'Matkap guide\'ı', go: 'stAnkS', sig: hsh(JSON.stringify(AnkScrew.screws().filter(z => z.piece === dg.name)) + dg.name + mot(dg.piece)), crit: AnkScrew.drillChecks().some(c => c[0] === 'crit') });
+    }
+    if (window.AnkGuide && AnkGuide.ready()) {
+      const gs = AnkGuide.state(), o = AnkGuide.parts(), gp = pieces.find(q => q.name === gs.piece), ck = AnkGuide.checks();
+      const prod = o.prod && o.prod.productionOk ? [o.prod.volume, o.prod.stl.length] : null;
+      out.push({ k: 'guide', name: 'Kesi guide\'ı', go: 'stAnkG', sig: hsh(JSON.stringify([gs, prod]) + mot(gp)), crit: ck.some(c => c[0] === 'crit') });
+      if (o.wedge) out.push({ k: 'wedge', name: 'Kama', go: 'stAnkG', sig: hsh(JSON.stringify([gs.P, gs.n, gs.prm.off, gs.prm.tiltA, gs.prm.tiltB, gs.prm.deg]) + mot(gp)), crit: false });
+    }
+    return out;
+  }
+  const itemOk = it => !!(appr[it.k] && appr[it.k].sig === it.sig);
+  function approveItem(k) {
+    const it = items().find(x => x.k === k); if (!it) return false;
+    const name = $('surgeon') ? $('surgeon').value.trim() : '', msg = t => { if ($('ankApprMsg')) $('ankApprMsg').textContent = xl(t); };
+    if (itemOk(it)) { delete appr[k]; renderAppr(); St.emit('changed'); return true; }
+    if (!name) { msg('Önce onaylayan cerrahın adını yazın.'); return false; }
+    if (it.crit) { msg(`${it.name}: kritik kontrol var; önce düzeltin.`); return false; }
+    appr[k] = { by: name, at: new Date().toISOString(), sig: it.sig }; renderAppr(); St.emit('changed'); return true;
+  }
+  const allItemsOk = () => items().every(itemOk);
+  (window.PlanExt = window.PlanExt || {}).ankAppr = {
+    label: 'Malleol öğe onayları',
+    get: () => (on() && Object.keys(appr).length ? JSON.parse(JSON.stringify(appr)) : null),
+    set(x) { appr = {}; if (x && typeof x === 'object') Object.entries(x).slice(0, 60).forEach(([k, v]) => { if (/^(screw:[0-9a-f]{1,16}|guide|wedge|drill)$/.test(k) && v && typeof v.by === 'string' && typeof v.sig === 'string') appr[k] = { by: v.by.slice(0, 120), at: typeof v.at === 'string' ? v.at.slice(0, 40) : '', sig: v.sig.slice(0, 40) }; }); renderAppr(); },
+  };
+  (window.PendingHooks = window.PendingHooks || []).push(() => (on() && pieces.length ? [...(!red.ok ? ['Redüksiyon'] : []), ...items().filter(it => !itemOk(it)).map(it => it.name)] : []));
 
   // ---------- outputs ----------
   // the reduced model: every piece's mesh moved to its reduced position, one STL in patient coordinates (LPS mm)
@@ -515,7 +740,49 @@ window.Ankle = (function () {
     const used = new Set();
     return kept().map(p => { let n = fileName(p.name); while (used.has(n)) n += '_2'; used.add(n); const m = bakedMesh([p]), data = St.stlOf(m); m.geometry.dispose(); return { name: `parcalar/${n}_redukte.stl`, data }; });
   }
-  function reportHTML() {
+  // the report's sections from the other malleolar modules (plan M8): joint measures before / after, screws, guide and
+  // wedge, the sample thresholds, the print guide with its material alternatives
+  const PRINT = [
+    ['SLA reçine (biyouyumlu)', 'Oturma yüzü yukarı, 30-45° eğik; destek yalnız dış yüzde', 'Destek dış yüzde, oturma yüzüne değmez', 'Buhar otoklav (ör. 121 °C / 134 °C) reçine üreticisinin onayladığı programla'],
+    ['PolyJet (MED610)', 'Oturma yüzü yukarı', 'Destek jeli tamamen temizlenir (delikler ve yuva dahil)', 'Otoklav uygun değil; düşük sıcaklık (EtO ya da hidrojen peroksit plazma)'],
+    ['SLS PA12', 'Uzun eksen tabla düzlemine paralel', 'Destek gerekmez; delik ve yuvadan toz temizlenir', 'Buhar otoklav (121 °C / 134 °C)'],
+  ];
+  function reportExtra() {
+    const f1 = x => (x == null ? '–' : fmt(x, 1)), out = [];
+    const LMr = window.AnkLM && AnkLM.result();
+    if (LMr && LMr.ct.ok && LMr.red.ok) {
+      const a = LMr.ct.m, b = LMr.red.m, row = (l, x, y) => `<tr><td>${xl(l)}</td><td>${x}</td><td>${y}</td></tr>`;
+      const st = b.steps.map(z => { const c = a.steps.find(y => y.name === z.name) || {}; return row(`${xl('Basamak')}: ${esc(xl(z.name))}`, f1(c.step), f1(z.step)) + row(`${xl('Aralık')}: ${esc(xl(z.name))}`, f1(c.gap), f1(z.gap)); }).join('');
+      out.push(`<h2>${xl('Eklem ölçüleri')}</h2><table><tr><th>${xl('Ölçü (mm)')}</th><th>${xl('BT')}</th><th>${xl('Redükte')}</th></tr>${st}${row('Üst açıklık (SCS)', f1(a.scs), f1(b.scs))}${row('Medial açıklık (MCS)', f1(a.mcs), f1(b.mcs))}${row('Talus kayması (MCS − SCS)', f1(a.shift), f1(b.shift))}${row('Tibiofibular açıklık', f1(a.tfcs), f1(b.tfcs))}</table>`);
+    }
+    if (window.AnkScrew && AnkScrew.screws().length) {
+      const an = AnkScrew.analyse(), is = AnkScrew.issues();
+      out.push(`<h2>${xl('Vidalar')}</h2><table><tr><th>${xl('Vida')}</th><th>${xl('Giriş')}</th><th>${xl('Çap')}</th><th>${xl('Boy (mm)')}</th><th>${xl('Karşı korteks (mm)')}</th><th>${xl('Geçtiği parçalar')}</th></tr>${an.map(z => `<tr><td>${esc(xl(`${(AnkScrew.KIND[z.s.kind] || {}).name || 'Vida'} ${AnkScrew.screws().filter(y => y.kind === z.s.kind).findIndex(y => y.id === z.s.id) + 1}`))}</td><td>${esc(xl(z.s.piece))}</td><td>Ø${fmt(z.s.D, 1)}</td><td>${z.s.L}</td><td>${z.lost || z.m.exit == null ? '–' : fmt(z.m.exit, 1)}</td><td>${z.lost ? '–' : esc(z.pieces.map(xl).join(' → '))}</td></tr>`).join('')}</table>
+        ${is.length ? `<ul>${is.map(i => `<li><b>${xl(i.lvl === 'crit' ? 'Kritik' : 'Uyarı')}</b> ${esc(xl(i.msg))}</li>`).join('')}</ul>` : ''}`);
+    }
+    const gi = window.AnkGuide && AnkGuide.ready() ? AnkGuide.info() : null;
+    if (gi) {
+      const q = AnkGuide.state().prm, w = gi.wedge, m = AnkGuide.MAT[q.mat] || AnkGuide.MAT.unset;
+      out.push(`<h2>${xl('Kesi guide\'ı ve kama')}</h2><table>
+        <tr><td>${xl('Kemik')}</td><td>${esc(xl(AnkGuide.state().piece))}</td></tr>
+        <tr><td>${xl('Eklemden uzaklık')}</td><td>${gi.joint ? `${xl('kesi')} ${fmt(gi.joint.slot, 1)} mm · ${xl('teller')} ${gi.joint.pins.map(z => (z ? fmt(z.d, 1) : '–')).join(' / ')} mm` : '–'}</td></tr>
+        <tr><td>${xl('Oturma')}</td><td>${gi.fit ? `p50 ${fmt(gi.fit.p50, 2)} · p99 ${fmt(gi.fit.p99, 2)} mm` : '–'} · ${xl('Temas alanı')} ${fmt(gi.contact, 0)} mm²</td></tr>
+        <tr><td>${xl('Yuva boşluğu')}</td><td>${gi.play != null ? fmt(gi.play, 1) + '°' : '–'} (${xl('yuva')} ${fmt(q.kerf, 2)} mm, ${xl('bıçak')} ${fmt(q.blade, 2)} mm)</td></tr>
+        <tr><td>${xl('Malzeme')}</td><td>${esc(xl(m.name))} · ${xl(q.sleeve === 'metal' ? 'Metal kovan' : 'Basılı delik')}</td></tr>
+        ${w ? `<tr><td>${xl('Kama')}</td><td>${fmt(w.deg, 1)}° (${xl('STL\'de ölçülen')} ${w.measured != null ? fmt(w.measured, 2) + '°' : '–'}) · ${xl('açılma')} ${fmt(w.open, 1)} mm</td></tr>` : ''}</table>`);
+    }
+    const sp = window.AnkScrew ? AnkScrew.LIM : null, lm = window.AnkLM ? AnkLM.LIM : null, jg = window.AnkGuide ? AnkGuide.JOINT : null;
+    out.push(`<h2>${xl('Örnek eşikler')}</h2><p class="m">${xl('Aşağıdaki eşikler literatürden örnek değerlerdir; klinik ekip belirler ve onaylar.')}</p><ul>
+      ${lm ? `<li>${xl(`Eklem basamağı ve aralığı ${lm.step} mm; medial açıklık ${lm.mcs} mm; tibiofibular açıklık ${lm.tfcs} mm; posterior parça %${lm.post}`)}</li>` : ''}
+      ${jg ? `<li>${xl(`Testere kesisi ve K-telleri eklem yüzeyinden en az ${jg.min} mm`)}</li>` : ''}
+      ${sp ? `<li>${xl(`Vida: karşı korteksten taşma ${sp.over} mm, eklem yüzeyine ${sp.joint} mm, vidalar arası ${sp.clear} mm, karşı parçada tutunma ${sp.purchase} mm`)}</li>` : ''}
+      <li>${xl(`Yuvada testere eğilmesi en çok ${St.SLOT_PLAY_MAX || 3}°`)}</li></ul>`);
+    out.push(`<h2>${xl('Baskı rehberi')}</h2><p class="m">${xl('Malzeme ve yöntem henüz seçilmedi; alternatifler. Değerler tipik başlangıçtır, üretici ve hastanenin sterilizasyon birimi doğrular.')}</p>
+      <table><tr><th>${xl('Malzeme')}</th><th>${xl('Yön')}</th><th>${xl('Destek')}</th><th>${xl('Sterilizasyon')}</th></tr>${PRINT.map(r => `<tr>${r.map(c => `<td>${esc(xl(c))}</td>`).join('')}</tr>`).join('')}</table>
+      <p class="m">${xl('Metal kovan seçildiyse kovanlar baskıdan sonra deliklere preslenir; delik çapı kovanın dış çapı artı malzemenin geçme payıdır. Basılan guide redükte modelin üstünde denenir.')}</p>`);
+    return out.join('');
+  }
+  function reportHTML(hashes) {
     const A = window.Audit, h = A ? A.planHash() : '', st = r => { const s = A ? A.status(r, h) : { state: 'none' }; return s.state === 'valid' ? `${xl('Onaylı')} · ${esc(s.e.name)}` : s.state === 'stale' ? xl('Plan değişti') : xl('Bekliyor'); };
     const rows = metrics.filter(m => m.role !== 'out').map(m => `<tr><td>${esc(m.name)}</td><td>${fmt(pieces[m.i].cm3, 1)}</td><td>${m.moved ? `${fmt(m.dist, 1)} mm · ${fmt(m.ang, 1)}°` : '–'}</td><td>${m.partner >= 0 ? esc(pieces[m.partner].name) : '–'}</td><td>${m.partner >= 0 ? fmt(m.contact, 0) : '–'}</td><td>${m.gap != null ? fmt(m.gap, 1) : '–'}</td><td>${fmt(m.over, 1)}</td></tr>`).join('');
     const ck = checks().map(c => `<li><b>${esc(xl(c[1]))}</b> ${esc(c[2])}</li>`).join('');
@@ -525,17 +792,20 @@ window.Ankle = (function () {
       <p>${esc(St.caseLine ? St.caseLine() : '')}</p>
       <p>${xl('Taraf')}: ${meta.side === 'R' ? xl('Sağ ayak bileği') : meta.side === 'L' ? xl('Sol ayak bileği') : xl('Bilinmiyor')} · ${xl('Kırık tipi')}: ${meta.cls ? esc(xl(meta.cls)) : xl('Seçilmedi')}</p>
       <h2>${xl('Parçalar ve redüksiyon')}</h2><table><tr><th>${xl('Parça')}</th><th>cm³</th><th>${xl('Hareket')}</th><th>${xl('Komşu')}</th><th>${xl('Temas mm²')}</th><th>${xl('Aralık mm')}</th><th>${xl('Çakışma mm')}</th></tr>${rows}</table>
+      ${reportExtra()}
       <h2>${xl('Kontroller')}</h2><ul>${ck || `<li>${xl('Tüm kontroller geçti.')}</li>`}</ul>
       <h2>${xl('Onay')}</h2><p>${xl('Redüksiyon')}: ${red.ok ? `${xl('Onaylı')} · ${esc(red.by)} · ${esc(red.at)}` : xl('Bekliyor')}</p>
-      <p>${xl('Mühendis (teknik)')}: ${st('eng')}<br>${xl('Cerrah (klinik)')}: ${st('sur')}</p><p class="m"><small>${xl('Plan özeti (SHA-256):')} ${h}</small></p>
+      ${items().length ? `<ul>${items().map(it => `<li>${esc(xl(it.name))}: ${itemOk(it) ? `${xl('Onaylı')} · ${esc(appr[it.k].by)} · ${esc(appr[it.k].at)}` : appr[it.k] ? xl('Plan değişti') : xl('Bekliyor')}</li>`).join('')}</ul>` : ''}
+      <p>${xl('Mühendis (teknik)')}: ${st('eng')}<br>${xl('Cerrah (klinik)')}: ${st('sur')}</p>
+      ${hashes && Object.keys(hashes).length ? `<h2>${xl('Dosya özetleri (SHA-256)')}</h2><table>${Object.entries(hashes).map(([n, h]) => `<tr><td>${esc(n)}</td><td><code>${h}</code></td></tr>`).join('')}</table>` : ''}<p class="m"><small>${xl('Plan özeti (SHA-256):')} ${h}</small></p>
       <p class="m"><small>${xl('Redükte model, parçaların planlanan konumdaki yüzeyleridir (LPS, mm). Plak ön bükme ve eğitim için; doğruluk klinik olarak doğrulanmadı.')}</small></p></body></html>`;
   }
-  const packReady = () => { const A = window.Audit; if (!A || !on() || !pieces.length) return false; const h = A.planHash(); return red.ok && A.status('eng', h).ok && A.status('sur', h).ok && !S.crit; };
+  const packReady = () => { const A = window.Audit; if (!A || !on() || !pieces.length) return false; const h = A.planHash(); return red.ok && allItemsOk() && A.status('eng', h).ok && A.status('sur', h).ok && !S.crit; };
   function renderOut() {
     const box = $('ankOut'); if (!box) return;
     const ready = packReady(), why = [];
     if (!pieces.length) why.push(xl('parça yok'));
-    else { if (!red.ok) why.push(xl('redüksiyon onayı')); const A = window.Audit, h = A ? A.planHash() : ''; if (A && !A.status('eng', h).ok) why.push(xl('mühendis onayı')); if (A && !A.status('sur', h).ok) why.push(xl('cerrah onayı')); if (S.crit) why.push(xl(`${S.crit} kritik kontrol`)); }
+    else { if (!red.ok) why.push(xl('redüksiyon onayı')); items().filter(it => !itemOk(it)).forEach(it => why.push(`${xl(it.name)} ${xl('onayı')}`)); const A = window.Audit, h = A ? A.planHash() : ''; if (A && !A.status('eng', h).ok) why.push(xl('mühendis onayı')); if (A && !A.status('sur', h).ok) why.push(xl('cerrah onayı')); if (S.crit) why.push(xl(`${S.crit} kritik kontrol`)); }
     box.innerHTML = `<ol class="deliver">
       <li><div><b>${xl('Redükte model STL\'i')}</b><p class="hint">${xl('Bütün parçalar planlanan konumda, tek dosya. Plak ön bükme için basılabilir; onay gerektirmez.')}</p></div><button id="ankStl" ${pieces.length ? '' : 'disabled'}><svg class="i"><use href="#i-download"/></svg>${xl('İndir')}</button></li>
       ${window.AnkGuide && AnkGuide.ready() ? `<li><div><b>${xl('Kesi guide\'ı ve kama')}</b><p class="hint">${xl('Üretim STL\'i alındıysa o, alınmadıysa tarayıcı önizlemesi ("BASMAYIN" adıyla) ve kama; redükte modelle aynı koordinatta. Pakete de girer.')}</p></div><button id="ankGStl">${xl('İndir')}</button></li>` : ''}
@@ -550,7 +820,7 @@ window.Ankle = (function () {
     $('ankPack').addEventListener('click', () => { if (!packReady()) return; St.offer(`${name()}_paket.zip`, St.zip(packFiles())); St.emit('exported'); });
   }
   // every STL of the package is in one frame (the reduced model's); the file says which and how to go back to the CT
-  function frameJSON() {
+  function frameJSON(hashes) {
     const g = window.AnkGuide && AnkGuide.ready() ? AnkGuide.state() : null, q4 = q => [q.x, q.y, q.z, q.w].map(x => Math.round(x * 1e6) / 1e6), m3 = v => [v.x, v.y, v.z].map(x => Math.round(x * 1000) / 1000);
     return JSON.stringify({
       cerceve: 'BT hasta koordinatları (DICOM LPS), mm; her parça planlanan (redükte) konumunda',
@@ -558,10 +828,16 @@ window.Ankle = (function () {
       donusum: "x' = q (x - c) + c + t, q = [x, y, z, w] birim kuaterniyon; BT konumuna dönüş: x = q^-1 (x' - c - t) + c",
       dosyalar: { 'redukte_model.stl': 'tüm parçalar', 'parcalar/*_redukte.stl': 'her parça ayrı', 'guide/*.stl': g ? `kesi guide'ı ve kama, "${g.piece}" parçasının hareketiyle taşınmış` : 'yok' },
       parcalar: kept().map(p => ({ ad: p.name, c: m3(p.c), t: m3(p.t), q: q4(p.q), tasindi: moved(p) })),
+      vidalar: window.AnkScrew ? AnkScrew.screws().map(z => { const w = AnkScrew.world(z); return { tur: z.kind, parca: z.piece, cap_mm: z.D, boy_mm: z.L, giris: w ? m3(w.E) : null, yon: w ? m3(w.d) : null }; }) : [],
+      onaylar: Object.assign({ reduksiyon: red.ok ? { by: red.by, at: red.at } : null }, Object.fromEntries(items().map(it => [it.name, itemOk(it) ? { by: appr[it.k].by, at: appr[it.k].at } : null]))),
+      sha256: hashes || undefined,
     }, null, 2);
   }
+  // every STL's SHA-256 (plan M7.2): written into cerceve.json and the report, so a printed file can be checked
+  function stlHashes(files) { const o = {}; if (window.Audit && Audit.sha256b) files.filter(f => /\.stl$/.test(f.name)).forEach(f => { o[f.name] = Audit.sha256b(f.data); }); return o; }
   function packFiles() {
-    const files = [{ name: 'redukte_model.stl', data: reducedStl() }, ...pieceFiles(), ...(window.AnkGuide ? AnkGuide.files() : []), { name: 'cerceve.json', data: frameJSON() }, { name: 'plan.json', data: JSON.stringify(St.planOf(), null, 2) }, { name: 'rapor.html', data: reportHTML() }];
+    const stls = [{ name: 'redukte_model.stl', data: reducedStl() }, ...pieceFiles(), ...(window.AnkGuide ? AnkGuide.files() : []), ...(window.AnkScrew ? AnkScrew.drillFiles() : [])], hs = stlHashes(stls);
+    const files = [...stls, { name: 'cerceve.json', data: frameJSON(hs) }, { name: 'plan.json', data: JSON.stringify(St.planOf(), null, 2) }, { name: 'rapor.html', data: reportHTML(hs) }];
     // the approval log (audit.js); the other export hooks write mandible files (navigation of cuts and screws)
     const extra = []; (window.ExportHooks || []).forEach(f => { try { f(extra); } catch (e) { /* optional */ } });
     extra.filter(f => f.name === 'onay_kaydi.json').forEach(f => files.push(f));
@@ -573,14 +849,25 @@ window.Ankle = (function () {
     meta = { side: x && ['R', 'L'].includes(x.side) ? x.side : meta.side, cls: x && CLASSES.includes(x.cls) ? x.cls : '' };
     const num = a => Array.isArray(a) && a.every(v => Number.isFinite(+v)) ? a.map(Number) : null;
     pieces.forEach((p, i) => setMotion(i, V(), new T.Quaternion(), false));
-    (x && Array.isArray(x.pieces) ? x.pieces : []).slice(0, MAXP).forEach(s => {
-      const c = num(s.c), t = num(s.t), q = num(s.q); if (!c || c.length !== 3 || !t || t.length !== 3 || !q || q.length !== 4) return;
-      let best = -1, bd = 5; pieces.forEach((p, i) => { const d = p.c.distanceTo(V(...c)); if (d < bd) { bd = d; best = i; } });
-      if (best < 0) return;
-      const tt = V(...t.map(v => Math.max(-60, Math.min(60, v)))), qq = new T.Quaternion(...q); if (qq.lengthSq() < 1e-6) return;
-      setMotion(best, tt, qq, false);
-      if (typeof s.name === 'string' && s.name.trim() && s.name !== pieces[best].name) rename(best, s.name, false);
+    // each saved piece goes to the one piece that matches it best: centre within 8 mm and (when saved) a volume within
+    // ±30 % (plan M1.4: a piece whose segmentation changed is not given another piece's motion). Each piece once.
+    const ents = (x && Array.isArray(x.pieces) ? x.pieces : []).slice(0, MAXP).map(s => ({ s, c: num(s.c), t: num(s.t), q: num(s.q), v: Number.isFinite(+s.cm3) && +s.cm3 > 0 ? +s.cm3 : null }))
+      .filter(e => e.c && e.c.length === 3 && e.t && e.t.length === 3 && e.q && e.q.length === 4);
+    const pairs = [];
+    ents.forEach((e, k) => pieces.forEach((p, i) => {
+      const d = p.c.distanceTo(V(...e.c)), rv = e.v ? p.cm3 / e.v : 1;
+      if (d < (e.v ? 8 : 5) && rv > 0.7 && rv < 1 / 0.7) pairs.push({ k, i, cost: d + 10 * Math.abs(Math.log(rv)) });
+    }));
+    pairs.sort((a, b) => a.cost - b.cost);
+    const usedE = new Set(), usedP = new Set();
+    pairs.forEach(({ k, i }) => {
+      if (usedE.has(k) || usedP.has(i)) return; usedE.add(k); usedP.add(i);
+      const { s, t, q } = ents[k], tt = V(...t.map(v => Math.max(-60, Math.min(60, v)))), qq = new T.Quaternion(...q); if (qq.lengthSq() < 1e-6) return;
+      setMotion(i, tt, qq, false);
+      if (typeof s.name === 'string' && s.name.trim() && s.name !== pieces[i].name) rename(i, s.name, false);
     });
+    // a saved motion that found no piece is said, not dropped silently
+    unmatched = ents.filter((e, k) => !usedE.has(k) && (Math.hypot(...e.t) > 1e-6 || Math.abs(e.q[3]) < 1 - 1e-9)).map(e => String(e.s.name || '?').slice(0, 40));
     const r = x && x.red;
     red = r && r.ok && typeof r.by === 'string' ? { ok: true, by: r.by.slice(0, 120), at: typeof r.at === 'string' ? r.at.slice(0, 40) : '', sig: typeof r.sig === 'string' ? r.sig : '' } : { ok: false };
     if (red.ok && red.sig !== sig()) { red = { ok: false }; St.alertMsg(xl('Redüksiyon onayı kayıtlı parça konumlarıyla eşleşmiyor; yeniden onaylayın.')); }
@@ -588,20 +875,26 @@ window.Ankle = (function () {
   }
   function planGet() {
     return { side: meta.side, cls: meta.cls, roi: Object.assign({}, roi), red: red.ok ? { ok: true, by: red.by, at: red.at, sig: red.sig } : { ok: false },
-      pieces: pieces.map(p => ({ c: r3(p.c), name: p.name, t: [p.t.x, p.t.y, p.t.z].map(x => Math.round(x * 1000) / 1000), q: [p.q.x, p.q.y, p.q.z, p.q.w].map(x => Math.round(x * 1e6) / 1e6) })) };
+      splits: splits.map(x => ({ a: x.a.slice(), b: x.b.slice() })),
+      pieces: pieces.map(p => ({ c: r3(p.c), cm3: Math.round(p.cm3 * 100) / 100, name: p.name, t: [p.t.x, p.t.y, p.t.z].map(x => Math.round(x * 1000) / 1000), q: [p.q.x, p.q.y, p.q.z, p.q.w].map(x => Math.round(x * 1e6) / 1e6) })) };
   }
   (window.PlanExt = window.PlanExt || {}).ankle = {
     label: 'Malleol redüksiyonu',
     get: () => (on() ? planGet() : null),
     set(x) {
-      if (!x) { roi = Object.assign({}, ROI_DEF); if (pieces.length) restore(null); else { meta = { side: '', cls: '' }; red = { ok: false }; } renderRoi(); return; }
+      if (!x) { roi = Object.assign({}, ROI_DEF); splits = []; unmatched = []; if (pieces.length) restore(null); else { meta = { side: '', cls: '' }; red = { ok: false }; } renderRoi(); return; }
       if (x && !on()) CaseType.set('ankle', true);
       // a plan saved with another region: the pieces are found again in that region first
       const want = x.roi && typeof x.roi === 'object' ? x.roi : ROI_DEF, nr = { above: clampR('above', want.above), below: clampR('below', want.below), side: ['R', 'L'].includes(want.side) ? want.side : '' };
       const regionChanged = nr.above !== roi.above || nr.below !== roi.below || nr.side !== roi.side;
       roi = nr; renderRoi();
+      // the hand splits of the plan: a split the labels have and the plan not is undone by segmenting again
+      const ns = (Array.isArray(x.splits) ? x.splits : []).filter(z => z && vecOk(z.a) && vecOk(z.b)).slice(0, 20).map(z => ({ a: z.a.map(Number), b: z.b.map(Number) }));
+      const key = a => JSON.stringify(a), dropped = splits.some(z => !ns.some(w => key(w) === key(z))), splitChanged = key(ns) !== key(splits);
+      splits = ns;
+      if (dropped && St.segment && S.red && !S.restoring) { pend = x; built = ''; St.segment(false); return; }
       if (!pieces.length || buildJob) { pend = x; return; }
-      if (regionChanged) { pend = x; built = ''; build(); return; }
+      if (regionChanged || splitChanged) { pend = x; built = ''; build(); return; }
       restore(x);
     },
   };
@@ -609,7 +902,7 @@ window.Ankle = (function () {
   // ---------- wiring ----------
   bus.addEventListener('bone', () => { if (on()) build(); else if (pieces.length) drop(); });
   // a new volume is a new case: its pieces come with the 'bone' event that came just before (the side found there is kept)
-  bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring)) { meta = { side: autoSide, cls: '' }; red = { ok: false }; } renderMeta(); render(); renderRoi(); });
+  bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring)) { meta = { side: autoSide, cls: '' }; red = { ok: false }; splits = []; unmatched = []; appr = {}; } renderMeta(); render(); renderRoi(); });
   bus.addEventListener('caseType', () => {
     // a built-in sample of the other case type is swapped for this type's sample (nothing planned on it yet)
     const isAnkle = n => /^ankle/.test(n);
@@ -636,14 +929,14 @@ window.Ankle = (function () {
   bus.addEventListener('caseType', () => { if (on()) { renderMeta(); build(); } else { drop(); const b = St.parts.bone; if (b) { b.visible = true; b.obj.visible = true; St.renderParts(); } } render(); renderOut(); renderRoi(); });
   let tmo = null;
   ['changed', 'planApplied', 'lock'].forEach(ev => bus.addEventListener(ev, () => { if (!on()) return; clearTimeout(tmo); tmo = setTimeout(() => { renderAppr(); renderOut(); renderChecks(); }, 120); }));
-  ['st2', 'stRed', 'stAnkG', 'st7', 'stAnkOut'].forEach(id => $(id) && $(id).addEventListener('toggle', () => { if (!on()) return; show(); if (id === 'stAnkOut') renderOut(); }));
+  ['st2', 'stRed', 'stAnkS', 'stAnkG', 'st7', 'stAnkOut'].forEach(id => $(id) && $(id).addEventListener('toggle', () => { if (!on()) return; show(); if (id === 'stAnkOut') renderOut(); }));
   renderMeta(); render(); renderOut(); renderRoi();
 
   const planned = () => on() && pieces.length > 0;
   // for ui.js: step completion and the top bar while the case is an ankle
   function status() {
     const A = window.Audit, h = A && pieces.length ? A.planHash() : '', both = !!(A && pieces.length && A.status('eng', h).ok && A.status('sur', h).ok);
-    return { done: { stRed: pieces.length > 0 && pieces.some(moved) && !checks().some(c => c[0] === 'crit'), stAnkG: !!(window.AnkGuide && AnkGuide.ready()), st7: red.ok && both && !S.crit, stAnkOut: false }, ready: red.ok && both && !S.crit, pend: (red.ok ? 0 : 1) + (A && pieces.length && !A.status('eng', h).ok ? 1 : 0) + (A && pieces.length && !A.status('sur', h).ok ? 1 : 0) };
+    return { done: { stRed: pieces.length > 0 && pieces.some(moved) && !checks().some(c => c[0] === 'crit'), stAnkS: !!(window.AnkScrew && AnkScrew.done()), stAnkG: !!(window.AnkGuide && AnkGuide.ready()), st7: red.ok && both && !S.crit, stAnkOut: false }, ready: red.ok && both && !S.crit, pend: (red.ok ? 0 : 1) + (A && pieces.length && !A.status('eng', h).ok ? 1 : 0) + (A && pieces.length && !A.status('sur', h).ok ? 1 : 0) };
   }
-  return { on, planned, status, renderChecks, checks, pieces: () => pieces, metrics: () => metrics, select: choose, rename, _names: names, separate, roi: () => Object.assign({}, roi), roiInfo: () => roiInfo, setRoi, building: () => !!buildJob, sdfAt, toWorld, toOwn, moved, setMotion, reset, measure, reducedStl, pieceFiles, reportHTML, packFiles, frameJSON, packReady, approve, build, meta: () => meta, approved: () => red.ok, LIM };
+  return { on, planned, status, renderChecks, checks, pieces: () => pieces, selected: () => sel, metrics: () => metrics, select: choose, rename, _names: names, separate, splitPiece, splits: () => splits.map(x => ({ a: x.a.slice(), b: x.b.slice() })), labels: LB, unmatched: () => unmatched.slice(), roi: () => Object.assign({}, roi), roiInfo: () => roiInfo, setRoi, building: () => !!buildJob, sdfAt, toWorld, toOwn, moved, setMotion, reset, measure, reducedStl, pieceFiles, reportHTML, packFiles, frameJSON, packReady, approve, approveItem, items, itemOk, stlHashes, build, meta: () => meta, approved: () => red.ok, LIM };
 })();

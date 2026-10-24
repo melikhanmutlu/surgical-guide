@@ -201,6 +201,35 @@ test('separate: a tibia and a talus joined across a thin joint contact become tw
   const m2 = Uint8Array.from(sc2.lab, x => (x ? 1 : 0)), c2 = G.components(m2, 40, 40, 100, 10);
   assert.equal(A.separate(sc2.red, c2.labels, c2.comps).length, 1, 'a shaft is not cut');
 });
+// a medial malleolus fragment pressed against the tibia (plan M1.1): the fracture band is partial volume over the
+// threshold, as wide as the bones (no neck); a cortex (1400 HU) around cancellous bone (450 HU), noise-free
+function fusedScene(band) {
+  const nx = 50, ny = 50, nz = 90, hu = new Int16Array(nx * ny * nz).fill(40), at = (i, j, k) => i + nx * (j + ny * k);
+  const inT = (i, j, k) => k >= 20 && k < 90 && Math.hypot(i - 22, j - 25) < 10, inF = (i, j, k) => k >= 8 && k < 40 && i >= 33 && i < 40 && Math.abs(j - 25) < 7;
+  const shell = (f, i, j, k) => f(i, j, k) && [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]].some(([a, b, c]) => !f(i + 2 * a, j + 2 * b, k + 2 * c));
+  for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+    const T_ = inT(i, j, k), F = inF(i, j, k);
+    if (T_ || F) hu[at(i, j, k)] = shell(T_ ? inT : inF, i, j, k) ? 1400 : 450;
+    if (band && i === 32 && k >= 20 && k < 40 && Math.abs(j - 25) < 7) hu[at(i, j, k)] = 330;   // the fracture band, over 300 HU
+  }
+  return { nx, ny, nz, hu, sp: [1, 1, 1] };
+}
+test('separate (M1.1): a fragment fused to the tibia through a bright fracture band is cut off; the intact tibia is not cut', () => {
+  const G = P.eval('G');
+  for (const band of [true, false]) {
+    const r = fusedScene(band), m = Uint8Array.from(r.hu, h => (h >= 300 ? 1 : 0)), { labels, comps } = G.components(m, r.nx, r.ny, r.nz, 10);
+    if (band) assert.equal(comps.length, 1, 'one threshold piece');
+    const out = A.separate(r, labels, comps, 300).filter(c => c.size > 200);
+    assert.equal(out.length, 2, `band ${band}: ${JSON.stringify(out.map(c => [c.size, c.centroid.map(Math.round)]))}`);
+    const fr = out.find(c => c.centroid[0] > 32);
+    assert.ok(fr && Math.abs(fr.size - 7 * 13 * 32) < 0.15 * 7 * 13 * 32, `fragment ${fr && fr.size}`);
+  }
+  // one tibia alone, its cortex thinning out: stays one piece
+  const r = fusedScene(false); for (let v = 0; v < r.hu.length; v++) { const i = v % 50; if (i >= 33) r.hu[v] = 40; }
+  for (let v = 0; v < r.hu.length; v += 7) if (r.hu[v] === 1400) r.hu[v] = 500;   // patchy cortex
+  const m = Uint8Array.from(r.hu, h => (h >= 300 ? 1 : 0)), c = G.components(m, 50, 50, 90, 10);
+  assert.equal(A.separate(r, c.labels, c.comps, 300).filter(x => x.size > 200).length, 1);
+});
 test('package: locked until reduction + engineer + surgeon approvals; holds the STLs, plan, report and approval log', () => {
   assert.equal(A.packReady(), false);
   const Au = W.Audit; assert.ok(Au);
