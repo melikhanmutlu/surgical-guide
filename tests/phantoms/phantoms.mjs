@@ -63,6 +63,8 @@ export function mandibleBar(o = {}) {
       if (e < 1) h = ei < 1 ? 350 : 1500;
       if (canal && Math.abs(x) < half - 5 && Math.hypot(y - canal.y, z - canal.z) < canal.r) h = 20;       // the canal: soft tissue in a thin cortical wall
       for (const r of roots) { const t = (cz + az - z) / r.len; if (t >= 0 && t <= 1 && Math.hypot(x - r.x, y) < r.r * (1 - 0.6 * t)) h = 1800; }
+      // o.crowns: an enamel crown (7 mm, 3000 HU) on each root, above the crest
+      if (o.crowns) for (const r of roots) { const t = z - (cz + az); if (t >= 0 && t < 7 && Math.hypot(x - r.x, y) < r.r * 1.2) h = 3000; }
     }
     if (metal) {
       if (Math.hypot(x - metal.x, y - metal.y) < metal.r && z < metal.z + metal.len / 2 && z > metal.z - metal.len / 2) h = 3500;

@@ -3,7 +3,7 @@
 // canal.js: the canal is traced between clicks along the dark tube, roots are marked with two clicks; a screw within
 // 2 mm of the canal or through a root is critical, automatic screws stop 2 mm short. Phantom: tests/phantoms/phantoms.mjs
 // mandibleBar({ canal, roots }). Run: node test_canal.mjs
-import { test, run, assert } from './lib/t.mjs';
+import { test, run, assert, near } from './lib/t.mjs';
 import { studio, ready } from './lib/harness.mjs';
 import { mandibleBar } from '../../phantoms/phantoms.mjs';
 
@@ -12,7 +12,7 @@ const St = await ready(P); const T = P.g.THREE, S = St.S, G = P.eval('G'), $ = i
 const V = (x = 0, y = 0, z = 0) => new T.Vector3(x, y, z);
 const C = () => P.eval('Canal');
 
-const v = mandibleBar({ canal: true, roots: [-30] });
+const v = mandibleBar({ canal: true, roots: [-30], crowns: true });
 S.vol = { hu: v.hu, nx: v.nx, ny: v.ny, nz: v.nz, sp: v.sp, origin: v.origin, axes: v.axes, meta: v.meta };
 S.source = { type: 'dicom', name: 'phantom', fp: 'phantom-canal' };
 S.red = G.reduce(S.vol, 0.8); S.kind = 'dicom'; S.autoAnchor = false;
@@ -43,6 +43,20 @@ test('A5: no canal marked, screws in bone: the package is locked until the canal
   // the mark-the-canal fix starts the canal tool
   await St.runFix('canalMark'); assert.equal(C().mode(), 'canal'); C().setMode('canal');
   P.eval('PlanExt').canal.set(null);
+});
+
+test('B5: the root is suggested as an upright dense post inside the bone; the cortex is not; it counts only once accepted', () => {
+  const c = C(), n0 = S.roots.length, cand = c.rootCands();
+  // (a root with no crown over it is no tooth: see the real-CT note in canal.js)
+  assert.equal(cand.length, 1, 'one root (the cortex and the canal wall are no roots): ' + JSON.stringify(cand));
+  const t = cand[0];
+  near((t.a[0] + t.b[0]) / 2, -30, 1.5, 'at the root x'); near((t.a[1] + t.b[1]) / 2, 0, 1.5);
+  assert.ok(t.a[2] > t.b[2], 'a is the crown side'); assert.ok(t.a[2] > -3 && t.b[2] < -8, JSON.stringify(t)); assert.ok(t.tilt < 10);
+  const r = c.suggestRoots(); assert.equal(r.suggestions, 1);
+  assert.equal(S.roots.length, n0, 'a suggestion is not a root');
+  c.dropRoots(); assert.equal((S.rootSuggest || []).length, 0);
+  c.suggestRoots(); c.acceptRoots(); assert.equal(S.roots.length, n0 + 1); assert.equal(S.rootSuggest.length, 0);
+  S.roots.pop(); St.emit('changed');
 });
 
 test('B1: the canal is suggested as the long thin dark tube inside the bone; it counts only once accepted', () => {

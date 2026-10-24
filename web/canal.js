@@ -120,11 +120,8 @@ window.Canal = (function () {
   // blobs of marrow are neither. The two longest give a suggestion each: the path is traced between the group's two
   // farthest cells like a hand-marked canal. A suggestion is shown apart and counts for nothing until the surgeon
   // accepts it. (Sample values, set on the phantom.)
-  const TUBE_HU = 300, TUBE_LEN = 20, TUBE_AREA = 15;
-  S.canalSuggest = S.canalSuggest || [];
-  function tubes() {
-    const r = S.red, m = S.mask; if (!r || !r.hu || !m) return [];
-    const { nx, ny, nz } = r, nxy = nx * ny, at = (i, j, k) => i + nx * (j + ny * k), vox = r.sp[0] * r.sp[1] * r.sp[2];
+  function insideOf(r, m) {
+    const { nx, ny, nz } = r, at = (i, j, k) => i + nx * (j + ny * k);
     // the inside of the bone: cells the bone encloses in a slice of any of the three orientations (the canal is a hole
     // in the threshold mask that opens at the foramina, so it is enclosed across its course, not along it)
     const inside = new Uint8Array(nx * ny * nz), dims = [nx, ny, nz];
@@ -139,6 +136,14 @@ window.Canal = (function () {
         for (let c = 0; c < np * nq; c++) if (!seen[c]) { const e = cell(c % np, (c / np) | 0); if (!m[e]) inside[e] = 1; }
       }
     }
+    return inside;
+  }
+  const TUBE_HU = 300, TUBE_LEN = 20, TUBE_AREA = 15;
+  S.canalSuggest = S.canalSuggest || [];
+  function tubes() {
+    const r = S.red, m = S.mask; if (!r || !r.hu || !m) return [];
+    const { nx, ny, nz } = r, nxy = nx * ny, at = (i, j, k) => i + nx * (j + ny * k), vox = r.sp[0] * r.sp[1] * r.sp[2];
+    const inside = insideOf(r, m);
     const dark = new Uint8Array(nx * ny * nz), list = [];
     for (let id = 0; id < dark.length; id++) if (inside[id] && r.hu[id] < TUBE_HU) { dark[id] = 1; list.push(id); }
     const seen = new Uint8Array(dark.length), out = [];
@@ -169,6 +174,53 @@ window.Canal = (function () {
     }
     draw(); render(); return { candidates: cand, suggestions: S.canalSuggest.length };
   }
+  // ---------- root suggestion (plan B5) ----------
+  // A root is dense (dentin, ROOT_HU and up) and lies deeper than ROOT_DEPTH mm inside the bone, where the cortex is
+  // not; it is a short upright post (ROOT_LEN to ROOT_MAX mm along its axis, within ROOT_TILT° of the bone's up-down axis,
+  // at most ROOT_AREA mm² of cross-section). The cortex of the lower border is a flat plate and the teeth crowns stand
+  // outside the bone: neither passes. Suggestions are shown apart and count for nothing until accepted, so a false
+  // one makes no critical row. (Sample values, set on the phantom.)
+  const ROOT_HU = 1650, ROOT_DEPTH = 1.5, ROOT_LEN = 6, ROOT_TILT = 35, ROOT_AREA = 20, ROOT_CROWN = 20, ROOT_MAX = 20, ENAMEL_HU = 2500;
+  S.rootSuggest = S.rootSuggest || [];
+  function rootCands() {
+    const r = S.red, m = S.mask; if (!r || !r.hu || !m) return [];
+    const { nx, ny, nz, sp } = r, nxy = nx * ny, N = nx * ny * nz, vox = sp[0] * sp[1] * sp[2], inside = insideOf(r, m);
+    const feat = new Uint8Array(N); for (let v = 0; v < N; v++) feat[v] = m[v] || inside[v] ? 0 : 1;
+    const D = G.edt(feat, nx, ny, nz, sp), dense = new Uint8Array(N);
+    for (let v = 0; v < N; v++) if (!feat[v] && D[v] >= ROOT_DEPTH && r.hu[v] >= ROOT_HU) dense[v] = 1;
+    const up = r.axes && r.axes[2] ? G.worldOf(r, 0, 0, 1).map((x, i) => x - G.worldOf(r, 0, 0, 0)[i]) : [0, 0, 1], ul = Math.hypot(...up), U = up.map(x => x / ul);
+    const seen = new Uint8Array(N), out = [];
+    for (let s0 = 0; s0 < N; s0++) {
+      if (!dense[s0] || seen[s0]) continue;
+      const q = [s0], cells = []; seen[s0] = 1;
+      while (q.length) { const c = q.pop(); cells.push(c); const i = c % nx, j = ((c / nx) | 0) % ny, k = (c / nxy) | 0;
+        for (let c2 = -1; c2 <= 1; c2++) for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) { const x = i + a, y = j + b, z = k + c2; if (x < 0 || y < 0 || z < 0 || x >= nx || y >= ny || z >= nz) continue; const e = x + nx * (y + ny * z); if (dense[e] && !seen[e]) { seen[e] = 1; q.push(e); } } }
+      if (cells.length * vox < 8) continue;
+      const W = cells.map(c => G.worldOf(r, c % nx, ((c / nx) | 0) % ny, (c / nxy) | 0));
+      const ctr = [0, 1, 2].map(a => W.reduce((t, w) => t + w[a], 0) / W.length);
+      // the extent along the up-down axis and the spread across it
+      let lo = Infinity, hi = -Infinity; const tp = W.map(w => { const d = (w[0] - ctr[0]) * U[0] + (w[1] - ctr[1]) * U[1] + (w[2] - ctr[2]) * U[2]; if (d < lo) lo = d; if (d > hi) hi = d; return d; });
+      const L = hi - lo + sp[2]; if (L < ROOT_LEN || L > ROOT_MAX || cells.length * vox / L > ROOT_AREA) continue;
+      // the axis: the line through the means of the top and the bottom thirds; its tilt from up-down
+      const third = (f) => { const S3 = W.filter((w, i) => f(tp[i])); return [0, 1, 2].map(a => S3.reduce((t, w) => t + w[a], 0) / S3.length); };
+      const top = third(d => d > hi - L / 3), bot = third(d => d < lo + L / 3), ax = top.map((x, i) => x - bot[i]), al = Math.hypot(...ax);
+      const tilt = Math.acos(Math.min(1, Math.abs(ax[0] * U[0] + ax[1] * U[1] + ax[2] * U[2]) / al)) * 180 / Math.PI;
+      if (tilt > ROOT_TILT) continue;
+      // a tooth's root carries a crown: enamel (ENAMEL_HU and up, denser than any cortex) in the bone over its top,
+      // at most ROOT_CROWN mm higher (over a ramus, a condylar neck or a coronoid process there is none)
+      const ti = G.indexOf(r, top).map(Math.round); let crown = false;
+      for (let dj = -2; dj <= 2 && !crown; dj++) for (let di = -2; di <= 2 && !crown; di++) { const i = ti[0] + di, j = ti[1] + dj; if (i < 0 || j < 0 || i >= nx || j >= ny) continue; for (let k = 0; k < nz; k++) { const e = i + nx * (j + ny * k); if (!m[e] || r.hu[e] < ENAMEL_HU) continue; const w = G.worldOf(r, i, j, k), d = (w[0] - top[0]) * U[0] + (w[1] - top[1]) * U[1] + (w[2] - top[2]) * U[2]; if (d > 0 && d <= ROOT_CROWN) { crown = true; break; } } }
+      if (!crown) continue;
+      // the ends: the thirds' means carried out to the top and the bottom of the group
+      const pr = p => (p[0] - ctr[0]) * U[0] + (p[1] - ctr[1]) * U[1] + (p[2] - ctr[2]) * U[2], end = (c0, t) => c0.map((x, i) => r2(x + U[i] * (t - pr(c0))));
+      out.push({ a: end(top, hi), b: end(bot, lo), len: r2(L), tilt: r2(tilt), vol: r2(cells.length * vox) });
+    }
+    return out.sort((x, y) => x.a[0] - y.a[0]);
+  }
+  function suggestRoots() { const c = rootCands(); S.rootSuggest = c.map(x => ({ a: x.a, b: x.b, r: R_ROOT })); draw(); render(); return { candidates: c, suggestions: S.rootSuggest.length }; }
+  function acceptRoots() { S.rootSuggest.forEach(x => S.roots.push(x)); S.rootSuggest = []; changed(); }
+  function dropRoots() { S.rootSuggest = []; draw(); render(); }
+
   function acceptSuggest() { S.canalSuggest.forEach(c => S.canals.push({ keys: c.keys, pts: c.pts })); S.canalSuggest = []; changed(); }
   function dropSuggest() { S.canalSuggest = []; draw(); render(); }
 
@@ -220,6 +272,7 @@ window.Canal = (function () {
       m.position.copy(a).add(b).multiplyScalar(0.5); m.quaternion.setFromUnitVectors(V(0, 1, 0), b.clone().sub(a).normalize()); group.add(m);
     }
     for (const k of keys) { const m = new THREE.Mesh(new THREE.SphereGeometry(0.8, 10, 8), rMat); m.position.set(...k); group.add(m); }
+    for (const rt of S.rootSuggest || []) { const a = V(...rt.a), b = V(...rt.b), L = a.distanceTo(b); if (L < 0.1) continue; const g = new THREE.CylinderGeometry(rt.r * 0.6, rt.r * 0.6, L, 10); const ms = new THREE.Mesh(g, sMat); ms.position.copy(a.clone().add(b).multiplyScalar(0.5)); ms.quaternion.setFromUnitVectors(V(0, 1, 0), b.clone().sub(a).normalize()); group.add(ms); }
     for (const c of S.canalSuggest || []) { const curve = new THREE.CatmullRomCurve3(c.pts.map(q => V(...q))); group.add(new THREE.Mesh(new THREE.TubeGeometry(curve, Math.max(8, c.pts.length * 2), R_CANAL * 0.7, 8, false), sMat)); }
     if (window.MPR) MPR.redraw();
     St.render();
@@ -231,6 +284,9 @@ window.Canal = (function () {
     for (const c of S.canals) c.pts.forEach(p => { if (!near(p)) return; const [x, y] = pt(p); ctx.beginPath(); ctx.arc(x, y, 2.5 * dpr, 0, 2 * Math.PI); ctx.fill(); });
     ctx.strokeStyle = '#7fb3ff'; ctx.lineWidth = 1.5 * dpr;
     for (const c of S.canalSuggest || []) c.pts.forEach(p => { if (!near(p)) return; const [x, y] = pt(p); ctx.beginPath(); ctx.arc(x, y, 3 * dpr, 0, 2 * Math.PI); ctx.stroke(); });
+    ctx.strokeStyle = '#7fb3ff'; ctx.lineWidth = 2 * dpr; ctx.setLineDash([3 * dpr, 3 * dpr]);
+    for (const rt of S.rootSuggest || []) { const a = pt(rt.a), b = pt(rt.b); ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.stroke(); }
+    ctx.setLineDash([]);
     ctx.strokeStyle = '#f4efe2'; ctx.lineWidth = 2 * dpr;
     for (const rt of S.roots) { const a = pt(rt.a), b = pt(rt.b); ctx.setLineDash(near(rt.a) || near(rt.b) ? [] : [4 * dpr, 3 * dpr]); ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.stroke(); }
     ctx.setLineDash([]);
@@ -241,12 +297,15 @@ window.Canal = (function () {
     const host = $('canalBox'); if (!host) return;
     host.innerHTML = `<h3 class="sub">${xl('Sinir kanalı ve kökler')}</h3>
       <p class="hint more">${xl(`Kanalı işaretleyin: mental foramene, sonra mandibular foramene tıklayın; yol aradaki koyu tüpü izler. Kanala ${SAFE} mm'den yakın ya da kökü geçen vida kritiktir.`)}</p>
-      <div class="btns"><button id="cnCanal" aria-pressed="${mode === 'canal'}">${xl('Kanal işaretle')}</button><button id="cnRoot" aria-pressed="${mode === 'root'}">${xl('Kök işaretle')}</button><button id="cnSuggest">${xl('Kanal öner')}</button></div>
+      <div class="btns"><button id="cnCanal" aria-pressed="${mode === 'canal'}">${xl('Kanal işaretle')}</button><button id="cnRoot" aria-pressed="${mode === 'root'}">${xl('Kök işaretle')}</button><button id="cnSuggest">${xl('Kanal öner')}</button><button id="cnRootSug">${xl('Kök öner')}</button></div>
       ${(S.canalSuggest || []).length ? `<p class="hint">${xl(`Önerilen kanal (mavi): ${S.canalSuggest.length} taraf. Kesitlerde kontrol edin; kabul edilmeden kontrol sayılmaz.`)}</p><div class="btns"><button id="cnAccept">${xl('Öneriyi kabul et')}</button><button id="cnDrop" class="link">${xl('Öneriyi sil')}</button></div>` : ''}
+      ${(S.rootSuggest || []).length ? `<p class="hint">${xl(`Önerilen kökler (mavi): ${S.rootSuggest.length}. Kesitlerde kontrol edin; kabul edilmeden vidalar bunlara karşı kontrol edilmez.`)}</p><div class="btns"><button id="cnRootAcc">${xl('Kökleri kabul et')}</button><button id="cnRootDrop" class="link">${xl('Öneriyi sil')}</button></div>` : ''}
       ${S.canals.length || S.roots.length ? `<div class="tbl"><table><tbody>${S.canals.map((c, i) => `<tr><td>${xl('Kanal')} ${i + 1}</td><td>${fmt(pathLen(c.pts), 0)} mm</td><td><button class="link" data-cdel="${i}">${xl('Sil')}</button></td></tr>`).join('')}${S.roots.map((rt, i) => `<tr><td>${xl('Kök')} ${i + 1}</td><td>${fmt(Math.hypot(rt.b[0] - rt.a[0], rt.b[1] - rt.a[1], rt.b[2] - rt.a[2]), 0)} mm</td><td><button class="link" data-rdel="${i}">${xl('Sil')}</button></td></tr>`).join('')}</tbody></table></div>` : `<p class="empty">${xl('Kanal işaretlenmedi; vidalar kanala karşı kontrol edilmiyor.')}</p>`}`;
     $('cnCanal').addEventListener('click', () => setMode('canal'));
     $('cnRoot').addEventListener('click', () => setMode('root'));
     $('cnSuggest').addEventListener('click', async () => { St.busy(true, xl('Kanal aranıyor…')); await St.sleep(); try { const r = suggest(); if (!r.suggestions) St.alertMsg(xl('Bu BT\'de kanal biçiminde (uzun, ince, koyu) bir yol bulunamadı; kanalı elle işaretleyin.')); } finally { St.busy(false); } });
+    $('cnRootSug').addEventListener('click', async () => { St.busy(true, xl('Kökler aranıyor…')); await St.sleep(); try { const r = suggestRoots(); if (!r.suggestions) St.alertMsg(xl('Bu BT\'de kök biçiminde (kemiğin içinde dik, yoğun) bir yapı bulunamadı; kökleri elle işaretleyin.')); } finally { St.busy(false); } });
+    if ($('cnRootAcc')) { $('cnRootAcc').addEventListener('click', acceptRoots); $('cnRootDrop').addEventListener('click', dropRoots); }
     if ($('cnAccept')) { $('cnAccept').addEventListener('click', acceptSuggest); $('cnDrop').addEventListener('click', dropSuggest); }
     host.querySelectorAll('[data-cdel]').forEach(b => b.addEventListener('click', () => { S.canals.splice(+b.dataset.cdel, 1); cur = -1; changed(); }));
     host.querySelectorAll('[data-rdel]').forEach(b => b.addEventListener('click', () => { S.roots.splice(+b.dataset.rdel, 1); changed(); }));
@@ -321,7 +380,7 @@ window.Canal = (function () {
       mode = null; keys = []; cur = -1; draw(); render();
     },
   };
-  bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring)) { S.canals = []; S.roots = []; S.canalChecked = null; S.canalSuggest = []; mode = null; keys = []; cur = -1; draw(); render(); } });
+  bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring)) { S.canals = []; S.roots = []; S.canalChecked = null; S.canalSuggest = []; S.rootSuggest = []; mode = null; keys = []; cur = -1; draw(); render(); } });
 
   // ---------- wiring: 3D clicks (the Tools chain), slices (mpr.js), Esc ----------
   const prevTools = window.Tools;
@@ -337,5 +396,5 @@ window.Canal = (function () {
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && mode) setMode(mode); });
   St.onEndModes(() => { if (mode) setMode(mode); });
   render();
-  return { active: () => !!mode, mode: () => mode, setMode, pick, trace, segSeg, canalClear, rootsHit, maxLen, findings, gate, screwKey, tubes, suggest, acceptSuggest, dropSuggest, R_CANAL, SAFE, R_ROOT };
+  return { active: () => !!mode, mode: () => mode, setMode, pick, trace, segSeg, canalClear, rootsHit, maxLen, findings, gate, screwKey, tubes, suggest, acceptSuggest, dropSuggest, rootCands, suggestRoots, acceptRoots, dropRoots, R_CANAL, SAFE, R_ROOT };
 })();
