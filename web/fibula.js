@@ -1496,6 +1496,8 @@ window.Fibula = (function () {
     showAll(false); $('fibPick').setAttribute('aria-pressed', 'false'); $('fibSplit').setAttribute('aria-pressed', 'false');
   }
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && fsel.mode) { endMode(); note(''); } });
+  // the panel's check texts are translated when drawn: draw them again in the new language
+  if (window.addEventListener) window.addEventListener('langchange', () => { try { if (active()) renderStep(); } catch (e) { /* no plan yet */ } });
   St.onEndModes(() => { if (fsel.mode) { endMode(); note(''); } });
   // opening a step makes its structure the active one
   document.querySelectorAll('details.step[name="flow"]').forEach(d => d.addEventListener('toggle', () => { if (d.open && S.split) setActive(d.id === 'st4' ? 'f' : 'm'); }));

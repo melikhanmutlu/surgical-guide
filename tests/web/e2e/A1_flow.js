@@ -292,8 +292,10 @@ const fs = require('fs'), path = require('path'), { execFileSync } = require('ch
     await page.click('#auditBox button[data-a="onay"][data-r="eng"]'); await h.sleep(300);
     const sur = page.locator('#auditBox button[data-a="onay"][data-r="sur"]');
     if (await sur.count()) await sur.click(); await h.sleep(500); await h.idle();
+    await page.waitForFunction(() => /Onaylı/.test(document.getElementById('readyPill').textContent), null, { timeout: 5000 }).catch(() => {});   // the top bar follows on the next animation frame
     const s = await st(), zip = await page.$eval('#expZip', b => !b.disabled), au = await page.textContent('#auditBox');
-    return { pass: zip && /Onaylı/.test(s.pill || ''), actual: `paket etkin=${zip}, durum "${s.pill}", kritik ${s.crit}, apprMsg "${msgItems}", audit "${au.replace(/\s+/g, ' ').slice(0, 200)}"`, evidence: await h.shot('A1.7a_onay') };
+    const why = await h.ev(() => ({ pend: Studio.pendingList(), lock: Studio.lockState && Studio.lockState(), tag7: document.getElementById('tag7').textContent }));
+    return { pass: zip && /Onaylı/.test(s.pill || ''), actual: `paket etkin=${zip}, durum "${s.pill}", kritik ${s.crit}, ${JSON.stringify(why)}, apprMsg "${msgItems}", audit "${au.replace(/\s+/g, ' ').slice(0, 200)}"`, evidence: await h.shot('A1.7a_onay') };
   });
 
   // ---------- step 8: export ----------

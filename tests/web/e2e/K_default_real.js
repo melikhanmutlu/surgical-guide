@@ -16,6 +16,7 @@ const H = require('./lib');
   });
   await h.run('K2', 'Otomatik planla', '#autoPrep', '2 kesi, tek parça guide, vidalar, kritik yok', async () => {
     await h.openStep(3); const t = Date.now(); await page.click('#autoPrep'); await h.idle(300000);
+    { if (await h.ev(() => { const b = document.querySelector('.checks li [data-fix="canalOk"]'); if (b) b.click(); return !!b; })) { await h.sleep(300); await h.idle(); } }   // the surgeon checked the canal in the slices (canal gate)
     const s = await st(); return { pass: s.planes === 2 && s.pieces === 1 && s.screws >= 3 && !s.critList.some(c => !/Fibula/.test(c)), actual: `${Date.now() - t} ms ${JSON.stringify(s)}`, evidence: await h.shot('K2_otoplan') };
   });
   await h.run('K3', 'Fibula', 'Gerçek BT fibula örneği (#fibSampleCt), otomatik fibula guide', 'Fibula planı ve guide hazır, kritik yok', async () => {
@@ -27,11 +28,13 @@ const H = require('./lib');
     return { pass: fb.guide && !s.crit, actual: `${Date.now() - t} ms ${JSON.stringify(fb)} kritik ${JSON.stringify(s.critList)}`, evidence: await h.shot('K3_fibula') };
   });
   await h.run('K4', 'Onay', 'Cerrah adı, tüm öğeler, mühendis, cerrah', 'Paket etkin, Onaylı plan', async () => {
+    { if (await h.ev(() => { const b = document.querySelector('.checks li [data-fix="canalOk"]'); if (b) b.click(); return !!b; })) { await h.sleep(300); await h.idle(); } }   // the surgeon checked the canal in the slices (canal gate)
     await h.openStep(7); await page.fill('#surgeon', 'Dr. Denetim'); await page.press('#surgeon', 'Tab');
     const all = page.locator('#appr button', { hasText: 'Tüm öğeleri onayla' }); if (await all.count()) { await all.first().click(); await h.sleep(300); await h.idle(60000); }
     for (let k = 0; k < 30; k++) { const b = page.locator('#appr button[data-ap]', { hasText: 'Onayla' }).first(); if (!(await b.count())) break; await b.click(); await h.sleep(250); await h.idle(30000, 300); }
     await page.fill('#au_eng_n', 'Müh. Denetim'); await page.click('#auditBox button[data-a="onay"][data-r="eng"]'); await h.sleep(300);
     const sur = page.locator('#auditBox button[data-a="onay"][data-r="sur"]'); if (await sur.count()) await sur.click(); await h.sleep(500); await h.idle();
+    await page.waitForFunction(() => /Onaylı/.test(document.getElementById('readyPill').textContent), null, { timeout: 5000 }).catch(() => {});   // the top bar follows on the next animation frame
     const s = await st(); return { pass: s.zip && /Onaylı/.test(s.pill), actual: JSON.stringify({ pill: s.pill, zip: s.zip, crit: s.critList, msg: await page.textContent('#apprMsg') }), evidence: await h.shot('K4_onay') };
   });
   await h.run('K5', 'Üretim', '#expSrv: sunucuda üretim STL\'i; ilerleme çubuğu', 'Su geçirmez, 1 parça; çubuk yüzde gösterir ve geri gitmez', async () => {
