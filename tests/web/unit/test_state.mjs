@@ -35,5 +35,18 @@ test('low: a guide body slider (wall) and the side selector clear every approval
   S.planes = []; S.screws = [];
 });
 
+test('C3: the lesion type sets the sample margin (benign 3, aggressive benign 10, malignant 10); "not set" keeps it; saved with the plan; a new patient starts without it', async () => {
+  S.lesion.margin = 4; S.lesion.ok = true; S.anchor = null;
+  fire('l_type', 'change', 'malign'); assert.equal(S.lesion.margin, 10); assert.equal(S.lesion.type, 'malign'); assert.equal(S.lesion.ok, false, 'the bounds are approved again');
+  fire('l_type', 'change', 'benign'); assert.equal(S.lesion.margin, 3);
+  S.lesion.margin = 6; fire('l_type', 'change', ''); assert.equal(S.lesion.margin, 6, 'not set: the margin stays'); assert.equal(S.lesion.type, undefined); assert.ok(!('type' in St.planOf().lesion), 'no type in the saved plan (old plan hashes stay)');
+  fire('l_type', 'change', 'aggressive'); assert.equal(S.lesion.margin, 10);
+  const p = St.planOf(); assert.equal(p.lesion.type, 'aggressive');
+  S.lesion.type = null; await St.applyPlan(p); assert.equal(S.lesion.type, 'aggressive'); assert.equal(P.doc.getElementById('l_type').value, 'aggressive');
+  const bad = JSON.parse(JSON.stringify(p)); bad.lesion.type = '<x>'; await St.applyPlan(bad); assert.equal(S.lesion.type, undefined);
+  S.lesion.type = 'malign'; S.source = { type: 'dicom', name: 'other2', fp: 'dicom:other2' }; S.autoAnchor = true;
+  await St.setVolume(vol, 'Yeni hasta', 'dicom'); assert.ok(!S.lesion.type, 'a new patient: no type');
+});
+
 await run('plan state (Denetim 3 fixes)');
 await new Promise(r => process.stdout.write("", r)); process.exit(process.exitCode || 0);
