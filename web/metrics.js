@@ -144,6 +144,23 @@ var Metrics = (function () {
     if (opt.about) { const c = opt.about, Rc = [dot(R[0], c), dot(R[1], c), dot(R[2], c)]; sh = [Rc[0] + t[0] - c[0], Rc[1] + t[1] - c[1], Rc[2] + t[2] - c[2]]; }
     return { angle: ang * r2d, axis, translation: sh, shift: len(sh) };
   }
+  // E4 (plan after P0): a rotation as three angles (degrees) about the fixed axes x, then y, then z: R = Rz(z) Ry(y) Rx(x).
+  // In the CT's LPS frame x is the left-right axis (pitch), y the front-back axis (roll), z the vertical axis (yaw).
+  function euler(T, opt = {}) {
+    const { R } = asRT(T, opt.colMajor), y = Math.asin(Math.max(-1, Math.min(1, -R[2][0])));
+    let x, z;
+    if (Math.abs(R[2][0]) < 1 - 1e-12) { x = Math.atan2(R[2][1], R[2][2]); z = Math.atan2(R[1][0], R[0][0]); }
+    else { x = Math.atan2(-R[1][2], R[1][1]); z = 0; }     // gimbal lock: the x and z turns are one
+    return { x: x * r2d, y: y * r2d, z: z * r2d };
+  }
+  // a plane's tilt from a planned plane, as two signed angles about axes in the planned plane: about e1 (given, e.g. the
+  // vertical in the cut face) and about e2 = n x e1; total is the angle between the normals
+  function planeTilt(n, m, e1) {
+    n = unit(n); m = unit(m);
+    let a = sub(e1, n.map(x => x * dot(e1, n))); a = unit(a);
+    const b = cross(n, a), c = dot(m, n);
+    return { about1: Math.atan2(-dot(m, b), c) * r2d, about2: Math.atan2(dot(m, a), c) * r2d, total: Math.acos(Math.min(1, Math.abs(c))) * r2d };
+  }
   const apply = (T, p) => { const { R, t } = asRT(T); return [dot(R[0], p) + t[0], dot(R[1], p) + t[1], dot(R[2], p) + t[2]]; };
   // axis-angle (degrees) to a rotation matrix (tests and phantoms)
   function rotation(axis, deg) {
@@ -227,7 +244,7 @@ var Metrics = (function () {
     return { R: T.R, t: T.t, rms, iters: it };
   }
 
-  return { surfaceDistance, distances, summary, planeAngle, planeOffset, decompose, apply, rotation, compose, kabsch, icp, eigSym, triDist2 };
+  return { surfaceDistance, distances, summary, planeAngle, planeOffset, decompose, euler, planeTilt, apply, rotation, compose, kabsch, icp, eigSym, triDist2 };
 })();
 if (typeof window !== 'undefined') window.Metrics = Metrics;
 if (typeof self !== 'undefined') self.Metrics = Metrics;

@@ -2592,4 +2592,12 @@ window.I18N_EN = {
 "Matkap delikleri için metal kovan ya da basılı delik seçilmedi (Üretim profili).": "No choice yet between metal sleeves and printed holes for the drill holes (Manufacturing profile).",
 "Basılı delikte matkap guide malzemesini aşındırabilir ve parçacık bırakabilir; tekrarlı delmede metal kovan önerilir.": "In a printed hole the drill can wear the guide material and leave particles; metal sleeves are recommended for repeated drilling.",
 "Metal kovan seçildi: guide deliği kovanın dış çapına göre açılmalı; bu sürüm kovan yuvasını ayrıca çizmiyor, üreticiyle doğrulayın.": "Metal sleeves chosen: the guide hole must be sized to the sleeve's outer diameter; this version does not model the sleeve seat, confirm with the manufacturer.",
+"Sağ gonion": "Right gonion",
+"Sol gonion": "Left gonion",
+"Menton": "Menton",
+"Sağ gonial açı": "Right gonial angle",
+"Sol gonial açı": "Left gonial angle",
+"Plan → sonrası": "Plan → post-op",
+"Hizalama dönmesi (x / y / z)": "Registration rotation (x / y / z)",
+"yatay #°, dikey #°": "horizontal #°, vertical #°",
 };

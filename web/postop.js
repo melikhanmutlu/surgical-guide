@@ -138,7 +138,11 @@ window.PostOp = (function () {
       if (!S.mask[i + r.nx * (j + r.ny * k)]) continue;
       const w = G.worldOf(r, i, j, k); for (let d = 0; d < 3; d++) { if (w[d] < lo[d]) lo[d] = w[d]; if (w[d] > hi[d]) hi[d] = w[d]; }
     }
-    return [lo.map(v => v - 10), hi.map(v => v + 10)];
+    // the margin is a whole number of 0.8 mm steps: the field grid (0.8 mm, run()) then meets the voxel centres of a
+    // 0.8 mm plan exactly instead of half-way between them, where planInside's rounding picked the next voxel each time
+    // (E4: a post-op scan moved by a known transform came back 0.4 mm off along every axis)
+    const pad = 12 * 0.8;
+    return [lo.map(v => v - pad), hi.map(v => v + pad)];
   }
   function grafts() {
     if (!window.Fibula || !Fibula.active()) return [];
@@ -164,6 +168,9 @@ window.PostOp = (function () {
       const ref = field(g, fill(g, inside));
       const GB = grafts();
       const recon = GB.length ? field(g, fill(g, (x, y, z) => inside(x, y, z) || GB.some(b => graftIn(b, x, y, z)))) : ref;
+      // the remaining bone's pieces (E4); with two or more the scan is aligned on the largest (a piece that moved in
+      // surgery must not pull the alignment), the others are measured against it
+      const PC = pieces(), refMain = PC.list.length > 1 ? field(g, fill(g, PC.inside(PC.list[0].label))) : null;
       // 1) global fit on the remaining bone: from the scan as it is and from the centroids lined up; the better one wins
       St.busy(true, 'Kalan kemiğe hizalanıyor…'); await St.sleep();
       const P = post.Pts, n = post.nPts, cP = V(); for (let i = 0; i < n; i++) cP.add(V(P[3 * i], P[3 * i + 1], P[3 * i + 2])); cP.multiplyScalar(1 / n);
@@ -172,7 +179,11 @@ window.PostOp = (function () {
       if (cn) cR.multiplyScalar(1 / cn);
       const starts = [new THREE.Matrix4(), new THREE.Matrix4().makeTranslation(cR.x - cP.x, cR.y - cP.y, cR.z - cP.z)];
       let best = null;
-      for (const T0 of starts) { const f = icp(P, n, ref, T0, { keep: 0.7, cap: 10, iters: 60 }); if (!best || f.inl > best.inl + 0.02 || (Math.abs(f.inl - best.inl) <= 0.02 && f.rms < best.rms)) best = f; await St.sleep(); }
+      const regF = refMain || ref;
+      for (const T0 of starts) { const f = icp(P, n, regF, T0, { keep: 0.7, cap: 10, iters: 60 }); if (!best || f.inl > best.inl + 0.02 || (Math.abs(f.inl - best.inl) <= 0.02 && f.rms < best.rms)) best = f; await St.sleep(); }
+      // a tighter trim (the closest half of the points) for the last steps: the cut faces and the edges of the piece
+      // where other bone lies next to it no longer pull the fit (E4)
+      { const f2 = icp(P, n, regF, best.T, { keep: 0.5, cap: 2, iters: 40 }); if (f2.n >= 30) best = f2; }
       const T = best.T, Ti = T.clone().invert();
       const postAt = q => { const p = q.clone().applyMatrix4(Ti); return St.fieldAt(post.r, post.F, [p.x, p.y, p.z]) > 0.5; };
       const rem = S.mask.slice(); if (S.resMask) for (let v = 0; v < rem.length; v++) if (S.resMask[v]) rem[v] = 0;
@@ -212,15 +223,101 @@ window.PostOp = (function () {
             end0: g.P0.clone().applyMatrix4(A).distanceTo(g.P0), end1: g.P1.clone().applyMatrix4(A).distanceTo(g.P1), rms: fit.rms });
         });
       }
+      // 3b) landmarks (E4): each piece of the remaining bone fitted on its own (it moves rigidly in surgery), its plan
+      // condyle, gonion and menton carried with it; the gonial angle (condyle - gonion - menton) before and after
+      const lms = landmarks(), lm = [];
+      if (lms.length) {
+        const W = post.W, moved = {}, PW = planSurface(), I4 = new THREE.Matrix4();
+        const fits = PC.list.map(pc => ({ pc, f: pc.main && refMain ? refMain : PC.list.length === 1 ? ref : field(g, fill(g, PC.inside(pc.label))) }));
+        // points of a cloud (moved by Tm) on each piece: the piece whose surface is nearest, within 2.5 mm
+        const split = (A, Tm) => { const out = fits.map(() => []), n0 = A.length / 3, st = Math.max(1, Math.floor(n0 / 80000)), M = Tm.elements, q = V();
+          for (let i = 0; i < n0; i += st) {
+            const px = A[3 * i], py = A[3 * i + 1], pz = A[3 * i + 2]; q.set(M[0] * px + M[4] * py + M[8] * pz + M[12], M[1] * px + M[5] * py + M[9] * pz + M[13], M[2] * px + M[6] * py + M[10] * pz + M[14]);
+            let bi = -1, bd = 2.5; fits.forEach((F, j) => { const d = sdAt(F.f, q); if (d !== null && Math.abs(d) < bd) { bd = Math.abs(d); bi = j; } });
+            if (bi >= 0) out[bi].push(q.x, q.y, q.z);
+          }
+          return out; };
+        const sp = split(W, T), so = split(PW, I4), opt = { keep: 0.85, cap: 3, iters: 50 };
+        const Apc = fits.map((F, j) => {
+          const m = sp[j].length / 3, o = so[j].length / 3; if (m < 150 || o < 150) return null;
+          // the same fit of the plan's own surface (the same kind of voxel surface as the post-op one) is the method's
+          // own bias for this piece; it is taken out (as the stump measure does)
+          const fit = icp(Float32Array.from(sp[j]), m, F.f, new THREE.Matrix4(), opt), fit0 = icp(Float32Array.from(so[j]), o, F.f, new THREE.Matrix4(), opt);
+          return fit.T.clone().invert().multiply(fit0.T);
+        });
+        lms.forEach(L => {
+          const j = fits.findIndex(F => F.pc.label === PC.at(L.p)), A = j >= 0 ? Apc[j] : null;
+          if (!A) { lm.push({ key: L.key, name: L.name, ok: false }); return; }
+          const q = L.p.clone().applyMatrix4(A); moved[L.key] = q;
+          lm.push({ key: L.key, name: L.name, ok: true, piece: j + 1, plan: L.p.toArray(), post: q.toArray(), d: q.clone().sub(L.p).toArray(), disp: q.distanceTo(L.p) });
+        });
+        const angAt = (c, g0, m) => THREE.MathUtils.radToDeg(c.clone().sub(g0).angleTo(m.clone().sub(g0)));
+        ['R', 'L'].forEach(k => {
+          const c = lms.find(l => l.key === "cond" + k), gn = lms.find(l => l.key === "gon" + k), m = lms.find(l => l.key === "men");
+          if (!c || !gn || !m) return;
+          const plan = angAt(c.p, gn.p, m.p), mv = ['cond' + k, 'gon' + k, 'men'].map(x => moved[x]);
+          lm.push({ key: 'gonial' + k, name: k === 'R' ? 'Sağ gonial açı' : 'Sol gonial açı', angle: true, ok: mv.every(Boolean), plan, post: mv.every(Boolean) ? angAt(...mv) : null });
+        });
+      }
       // 4) surface deviation map
       St.busy(true, 'Sapma haritası çiziliyor…'); await St.sleep();
       const surf = paint(T, recon, GB.length ? ref : null);
-      R = { T, reg: { rms: best.rms, inl: best.inl, n: best.n, shift: transOf(T).length(), rot: rotDeg(T) }, cuts, grafts: gr, surf, source: post.source, ctDate: post.ctDate };
+      const eu = window.Metrics ? Metrics.euler(T.elements, { colMajor: true }) : null;
+      R = { T, reg: { rms: best.rms, inl: best.inl, n: best.n, shift: transOf(T).length(), rot: rotDeg(T), euler: eu, move: transOf(T).toArray() }, cuts, grafts: gr, landmarks: lm, surf, source: post.source, ctDate: post.ctDate };
       sig = planSig(); msg = ''; R.stale = false;
     } catch (e) { msg = 'Karşılaştırma yapılamadı: ' + e.message; R = null; }
     finally { St.busy(false); render(); St.renderChecks(); St.render(); }
   }
 
+  // plan landmarks on the remaining bone (E4): the condyles from the symmetry reference (else the highest point of each
+  // side), the gonion of each side (the most posterior-inferior point, LPS: +y back, -z down) and the menton (the lowest
+  // point within 6 mm of the midline); a landmark in the resected piece is left out
+  const LM_R = 15;
+  // connected pieces of the remaining bone holding at least 5 % of it, largest first; inside(label) tests a world point,
+  // at(p) gives the piece at (or within 3 voxels of) a world point
+  function pieces() {
+    const r = S.red, rem = S.mask.slice(); if (S.resMask) for (let v = 0; v < rem.length; v++) if (S.resMask[v]) rem[v] = 0;
+    const { labels, comps } = G.components(rem, r.nx, r.ny, r.nz, 50), tot = comps.reduce((a, c) => a + c.size, 0);
+    const list = comps.filter(c => c.size >= 0.05 * tot).sort((a, b) => b.size - a.size).map((c, i) => ({ label: c.label, size: c.size, main: i === 0 }));
+    const idx = (x, y, z) => { const ix = G.indexOf(r, [x, y, z]).map(Math.round); return ix.every((q, d) => q >= 0 && q < [r.nx, r.ny, r.nz][d]) ? ix[0] + r.nx * (ix[1] + r.ny * ix[2]) : -1; };
+    const inside = lab => (x, y, z) => { const v = idx(x, y, z); return v >= 0 && labels[v] === lab; };
+    const at = p => { const c = G.indexOf(r, [p.x, p.y, p.z]).map(Math.round); let best = null, bd = Infinity;
+      for (let k = -3; k <= 3; k++) for (let j = -3; j <= 3; j++) for (let i = -3; i <= 3; i++) {
+        const x = c[0] + i, y = c[1] + j, z = c[2] + k; if (x < 0 || y < 0 || z < 0 || x >= r.nx || y >= r.ny || z >= r.nz) continue;
+        const l = labels[x + r.nx * (y + r.ny * z)], d = i * i + j * j + k * k; if (l && d < bd && list.some(q => q.label === l)) { bd = d; best = l; }
+      }
+      return best; };
+    return { list, inside, at };
+  }
+  // the remaining bone's surface as the post-op one is made (prep): surface nets of the blurred mask, in world mm
+  function planSurface() {
+    const r = S.red, rem = S.mask.slice(); if (S.resMask) for (let v = 0; v < rem.length; v++) if (S.resMask[v]) rem[v] = 0;
+    const net = G.surfaceNets(G.blur(rem, r.nx, r.ny, r.nz), r.nx, r.ny, r.nz), np = net.positions.length / 3, W = new Float32Array(np * 3);
+    for (let i = 0; i < np; i++) W.set(G.worldOf(r, net.positions[3 * i], net.positions[3 * i + 1], net.positions[3 * i + 2]), 3 * i);
+    return W;
+  }
+  function landmarks() {
+    const r = S.red, ref = window.Ref && Ref.get && Ref.get(), out = [];
+    const resected = c => { if (!S.resMask) return false; const ix = G.indexOf(r, c).map(Math.round); return ix.every((x, d) => x >= 0 && x < [r.nx, r.ny, r.nz][d]) && !!S.resMask[ix[0] + r.nx * (ix[1] + r.ny * ix[2])]; };
+    const mid = ref && ref.n ? q => q[0] * ref.n[0] + q[1] * ref.n[1] + q[2] * ref.n[2] - ref.d : null;
+    let cx = 0, cn = 0; if (!mid) for (let v = 0; v < S.mask.length; v += 5) if (S.mask[v]) { cx += G.worldOf(r, v % r.nx, ((v / r.nx) | 0) % r.ny, (v / (r.nx * r.ny)) | 0)[0]; cn++; }
+    const side = q => (mid ? mid(q) : q[0] - cx / Math.max(1, cn));
+    const best = { gonR: null, gonL: null, topR: null, topL: null, men: null }, sc = { gonR: -Infinity, gonL: -Infinity, topR: -Infinity, topL: -Infinity, men: Infinity };
+    for (let k = 0; k < r.nz; k++) for (let j = 0; j < r.ny; j++) for (let i = 0; i < r.nx; i++) {
+      const v = i + r.nx * (j + r.ny * k); if (!S.mask[v] || (S.resMask && S.resMask[v])) continue;
+      const q = G.worldOf(r, i, j, k), d = side(q), K = d < 0 ? 'R' : 'L';     // LPS: patient right is -x
+      if (Math.abs(d) > 20) { const g = q[1] - q[2]; if (g > sc['gon' + K]) { sc['gon' + K] = g; best['gon' + K] = q; } if (q[2] > sc['top' + K]) { sc['top' + K] = q[2]; best['top' + K] = q; } }
+      if (Math.abs(d) < 6 && q[2] < sc.men) { sc.men = q[2]; best.men = q; }
+    }
+    const cond = ref && ref.cond;
+    ['R', 'L'].forEach(K => {
+      const c = cond && cond[K] ? cond[K] : best['top' + K];
+      if (c && !resected(c)) out.push({ key: 'cond' + K, name: K === 'R' ? 'Sağ kondil' : 'Sol kondil', p: V(...c) });
+      if (best['gon' + K]) out.push({ key: 'gon' + K, name: K === 'R' ? 'Sağ gonion' : 'Sol gonion', p: V(...best['gon' + K]) });
+    });
+    if (best.men) out.push({ key: 'men', name: 'Menton', p: V(...best.men) });
+    return out;
+  }
   // stump face of the remaining bone at a cut: rays start 5 mm inside the planned remaining bone and walk towards
   // the defect until the bone ends, once in the planned bone and once in the post-op bone (both are blurred voxel
   // masks of the same kind, so the method's own bias cancels). Shift = post-op exit minus planned exit
@@ -244,7 +341,12 @@ window.PostOp = (function () {
     if (ex.length < Math.max(20, 0.3 * valid)) return { ok: false, why: 'güdük greftle birleşik', rays: valid, joined: joined / valid };
     ex.sort((a, b) => a - b);
     const nA = planeFit(A, Nin), nB = planeFit(B, Nin);
-    return { ok: true, pos: ex[ex.length >> 1], ang: THREE.MathUtils.radToDeg(Math.acos(Math.min(1, Math.abs(nA.dot(nB))))), rays: valid, exits: ex.length, joined: joined / valid };
+    const out = { ok: true, pos: ex[ex.length >> 1], ang: THREE.MathUtils.radToDeg(Math.acos(Math.min(1, Math.abs(nA.dot(nB))))), rays: valid, exits: ex.length, joined: joined / valid };
+    // E4: the angle as two components in the cut face: about its vertical (the horizontal angle error) and about its
+    // horizontal (the vertical angle error), the vertical being the guide's seating direction projected into the face
+    const Mx = window.Metrics;
+    if (Mx && S.anchor) { const t = Mx.planeTilt(nA.toArray(), nB.toArray(), S.anchor.n.toArray()); out.yaw = t.about1; out.pitch = t.about2; }
+    return out;
   }
   // normal of the least-squares plane through points (smallest principal axis), started from a guess
   function planeFit(pts, guess) {
@@ -362,6 +464,7 @@ window.PostOp = (function () {
       <dl class="kv"><dt title="Kalan kemik yüzeyinin 1 mm içinde oturan kısmı ve kalan farkın RMS'i">Hizalama</dt><dd>${pc(R.reg.inl)}, RMS ${fmt(R.reg.rms, 2)} mm</dd>${R.ctDate ? `<dt>Post-op BT tarihi</dt><dd>${new Date(R.ctDate + 'T12:00:00').toLocaleDateString('tr-TR')}</dd>` : ''}
       ${R.surf.all ? `<dt title="Plana 1 mm ve 2 mm içinde kalan yüzey">Yüzey ≤ 1 / 2 mm</dt><dd>${pc(R.surf.all.in1)} / ${pc(R.surf.all.in2)}</dd>` : ''}${R.surf.graft ? `<dt title="Yalnız greft bölgesi">Greft ≤ 1 / 2 mm</dt><dd>${pc(R.surf.graft.in1)} / ${pc(R.surf.graft.in2)}</dd>` : ''}</dl>
       ${R.cuts.length ? `<div class="tbl"><table><thead><tr><th>Kesi</th><th>Konum</th><th>Açı</th></tr></thead><tbody>${R.cuts.map(cutRow).join('')}</tbody></table></div>` : ''}
+      ${(R.landmarks || []).length ? `<div class="tbl"><table><thead><tr><th>Nokta</th><th>Plan → sonrası</th></tr></thead><tbody>${R.landmarks.map(l => `<tr><td>${l.name}</td><td>${!l.ok ? 'ölçülemedi' : l.angle ? `${fmt(l.plan, 1)}° → ${fmt(l.post, 1)}°` : `${fmt(l.disp)} mm`}</td></tr>`).join('')}</tbody></table></div>` : ''}
       ${R.grafts.length ? `<div class="tbl"><table><thead><tr><th>Greft</th><th>Kayma</th><th>Eksen</th><th>Uçlar</th></tr></thead><tbody>${R.grafts.map(grRow).join('')}</tbody></table></div>` : ''}
       <label class="chk"><input type="checkbox" id="postMap" ${view.map ? 'checked' : ''}> Sapma haritasını göster</label>
       <label class="chk"><input type="checkbox" id="postOnly" ${view.only ? 'checked' : ''}> Diğer modelleri gizle</label>` : ''}
@@ -396,7 +499,9 @@ window.PostOp = (function () {
     const r2 = x => (x == null ? null : Math.round(x * 100) / 100);
     return { kaynak: R.source, post_op_bt_tarihi: R.ctDate || null, plan_degisti: !!R.stale,
       hizalama: { yuzey_1mm_orani: r2(R.reg.inl), rms_mm: r2(R.reg.rms), oteleme_mm: r2(R.reg.shift), donme_deg: r2(R.reg.rot) },
-      kesiler: R.cuts.map(c => (c.ok ? { kesi: c.name, konum_sapmasi_mm: r2(c.pos), aci_sapmasi_deg: r2(c.ang), isin: c.rays, greftle_birlesik_oran: r2(c.joined || 0) } : { kesi: c.name, olculemedi: c.why })),
+      hizalama_euler_deg: R.reg.euler ? { x: r2(R.reg.euler.x), y: r2(R.reg.euler.y), z: r2(R.reg.euler.z) } : null,
+      noktalar: (R.landmarks || []).map(l => (!l.ok ? { nokta: l.name, olculemedi: true } : l.angle ? { nokta: l.name, plan_deg: r2(l.plan), sonrasi_deg: r2(l.post) } : { nokta: l.name, kayma_mm: r2(l.disp), kayma_lps_mm: l.d.map(r2) })),
+      kesiler: R.cuts.map(c => (c.ok ? { kesi: c.name, konum_sapmasi_mm: r2(c.pos), aci_sapmasi_deg: r2(c.ang), yatay_aci_sapmasi_deg: r2(c.yaw), dikey_aci_sapmasi_deg: r2(c.pitch), isin: c.rays, greftle_birlesik_oran: r2(c.joined || 0) } : { kesi: c.name, olculemedi: c.why })),
       greftler: R.grafts.map(g => (g.ok ? { greft: g.no, merkez_kaymasi_mm: r2(g.disp), eksen_acisi_deg: r2(g.ang), toplam_donme_deg: r2(g.rot), uc_kaymasi_mm: [r2(g.end0), r2(g.end1)] } : { greft: g.no, olculemedi: 'yeterli yüzey yok' })),
       yuzey: R.surf.all ? { bir_mm_ici: r2(R.surf.all.in1), iki_mm_ici: r2(R.surf.all.in2), p95_mm: r2(R.surf.all.p95) } : null,
       greft_bolgesi: R.surf.graft ? { bir_mm_ici: r2(R.surf.graft.in1), iki_mm_ici: r2(R.surf.graft.in2), p95_mm: r2(R.surf.graft.p95) } : null,
@@ -406,7 +511,9 @@ window.PostOp = (function () {
     if (!R) return;
     if (d.keep) d.keep(300); d.h2('Ameliyat sonrası karşılaştırma');
     const rows = [['Hizalama', xl(`%${fmt(R.reg.inl * 100, 0)} yüzey 1 mm içinde, RMS ${fmt(R.reg.rms, 2)} mm`)]];
-    R.cuts.forEach(c => rows.push([c.name, c.ok ? `${sgn(c.pos)} mm, ${fmt(c.ang)}°` : c.why]));
+    if (R.reg.euler) rows.push(['Hizalama dönmesi (x / y / z)', `${fmt(R.reg.euler.x, 2)}° / ${fmt(R.reg.euler.y, 2)}° / ${fmt(R.reg.euler.z, 2)}°`]);
+    R.cuts.forEach(c => rows.push([c.name, c.ok ? `${sgn(c.pos)} mm, ${fmt(c.ang)}°${c.yaw != null ? ` (${xl(`yatay ${fmt(c.yaw, 1)}°, dikey ${fmt(c.pitch, 1)}°`)})` : ''}` : c.why]));
+    (R.landmarks || []).forEach(l => rows.push([l.name, !l.ok ? 'ölçülemedi' : l.angle ? `${fmt(l.plan, 1)}° → ${fmt(l.post, 1)}°` : `${fmt(l.disp)} mm`]));
     R.grafts.forEach(g => rows.push([`Greft ${g.no}`, g.ok ? xl(`kayma ${fmt(g.disp)} mm, eksen ${fmt(g.ang)}°, uçlar ${fmt(g.end0)} / ${fmt(g.end1)} mm`) : 'ölçülemedi']));
     if (R.surf.all) rows.push(['Yüzey sapması', `%${fmt(R.surf.all.in1 * 100, 0)} ≤ 1 mm, %${fmt(R.surf.all.in2 * 100, 0)} ≤ 2 mm`]);
     if (R.stale) rows.push(['Not', 'Plan karşılaştırmadan sonra değişti.']);
@@ -418,5 +525,5 @@ window.PostOp = (function () {
   bus.addEventListener('changed', () => { if (R && !R.stale && planSig() !== sig) { R.stale = true; render(); St.renderChecks(); } });
   bus.addEventListener('planApplied', render);
   render();
-  return { load, run, simulate, clear, result: () => R, summary, planeFit };
+  return { load, run, simulate, clear, result: () => R, summary, planeFit, landmarks };
 })();
