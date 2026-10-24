@@ -48,8 +48,10 @@
     let hit = 0, outp = '', o = off;
     for (let i = 0; i < parts.length; i += 2) {
       let j = parts.length - 1, v = null;
-      for (; j > i; j -= 2) if ((v = look(parts.slice(i, j + 1).join(''), true, o)) != null) break;
-      if (v == null && parts[i]) v = look(parts[i], true, o);
+      // a run that ends a sentence is also looked up with its full stop (the dictionary keeps it: "… olmalı.")
+      const dot = (run, at) => (parts[at + 1] && parts[at + 1][0] === '.' && (v = look(run + '.', true, o)) != null ? (v = v.replace(/\.$/, '')) : null);
+      for (; j > i; j -= 2) { const run = parts.slice(i, j + 1).join(''); if ((v = look(run, true, o)) != null || dot(run, j) != null) break; }
+      if (v == null && parts[i]) { v = look(parts[i], true, o); if (v == null) dot(parts[i], i); }
       if (v != null) hit++;
       outp += (v ?? slots(parts[i], o)) + (parts[j + 1] ?? '');
       o += cnt(parts.slice(i, j + 1).join(''));

@@ -130,6 +130,28 @@ test('reports: the engineer and the surgeon are printed with their approval time
   S.prod = null;
 });
 
+// D1 (plan after P0): the PDF has a table of what the checks measured (saw play in each slot, canal, metal, ...) and the
+// clinical thresholds; D4: with English chosen the PDF is in English (headings, the table, the numbers)
+test('D1: the PDF lists the accuracy and safety measures and the clinical thresholds', async () => {
+  await plan(); W.Image = class { constructor() { this.width = 1000; this.height = 640; } set src(v) { setTimeout(() => this.onload && this.onload(), 0); } };
+  const rows = W.Report.accuracyRows(); assert.ok(rows.some(r => r[0] === 'Yuvada testere eğilmesi'), JSON.stringify(rows));
+  const all = pdfText(new Uint8Array(await (await W.Report.build()).arrayBuffer())).join('\n').replace(/\s+/g, ' ');
+  for (const t of ['Doğruluk ve güvenlik ölçüleri', 'Yuvada testere eğilmesi', 'Kesi 1: ', 'Klinik eşikler', 'Yuvada testere eğilmesi (en çok)'])
+    assert.ok(all.includes(t), `"${t}" in the PDF:\n` + all.slice(-2500));
+  const a = St.slotPlay(S.planes[0].w, S.g.blade, St.slotDepth(S.g));
+  assert.ok(all.includes(`Kesi 1: ${St.fmt(a, 1)}°`), 'the play of cut 1: ' + St.fmt(a, 1));
+});
+test('D4: with English chosen the PDF report is in English', async () => {
+  P.load('i18n_en.js'); P.load('i18n.js'); W.I18N.set('en', true);
+  try {
+    const all = pdfText(new Uint8Array(await (await W.Report.build()).arrayBuffer())).join('\n').replace(/\s+/g, ' ');
+    for (const t of ['Patient-specific surgical plan report', 'Cut table', 'Accuracy and safety measures', 'Saw tilt in the slot', 'Cut 1: ', 'Assembly order', 'Automatic checks'])
+      assert.ok(all.includes(t), `"${t}" in the English PDF:\n` + all.slice(0, 2500));
+    for (const t of ['Kesim tablosu', 'Doğruluk ve güvenlik', 'Montaj sırası', 'Yuvada testere', 'yuvasında testere', 'İmza', 'Zaman']) assert.ok(!all.includes(t), `no Turkish "${t}"`);
+    assert.ok(all.includes('The saw can tilt'), 'a check made in Turkish prints in English (sentence by sentence)');
+  } finally { W.I18N.set('tr', true); }
+});
+
 test('a pointer drag of a cut rebuilds nothing until it ends; the end rebuilds once', async () => {
   await plan(); const R0 = S.result, builds = St.guideBuilds();
   S.planes[0].off -= 1; St.unapprove(S.planes[0]); St.schedule(true, 'drag');

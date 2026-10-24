@@ -80,7 +80,7 @@ window.Report = (function () {
     function signature(rows) {
       room(220); y += 10;
       const cw = (W - 2 * M - 40) / 2;
-      rows.forEach((r, i) => { const x = M + i * (cw + 40); g.fillStyle = C.muted; g.font = `600 22px ${FONT}`; g.fillText(xt(r.role), x, y + 24); g.fillStyle = C.ink; g.font = `22px ${FONT}`; g.fillText(r.name || xt('Ad Soyad: ________________'), x, y + 62); g.fillText(r.date || xt('Tarih: ____ / ____ / ________'), x, y + 100); g.strokeStyle = C.ink; g.lineWidth = 1.5; g.beginPath(); g.moveTo(x, y + 170); g.lineTo(x + cw, y + 170); g.stroke(); g.fillStyle = C.muted; g.font = `20px ${FONT}`; g.fillText('İmza', x, y + 196); });
+      rows.forEach((r, i) => { const x = M + i * (cw + 40); g.fillStyle = C.muted; g.font = `600 22px ${FONT}`; g.fillText(xt(r.role), x, y + 24); g.fillStyle = C.ink; g.font = `22px ${FONT}`; g.fillText(r.name || xt('Ad Soyad: ________________'), x, y + 62); g.fillText(r.date || xt('Tarih: ____ / ____ / ________'), x, y + 100); g.strokeStyle = C.ink; g.lineWidth = 1.5; g.beginPath(); g.moveTo(x, y + 170); g.lineTo(x + cw, y + 170); g.stroke(); g.fillStyle = C.muted; g.font = `20px ${FONT}`; g.fillText(xt('İmza'), x, y + 196); });
       y += 220;
     }
     page();
@@ -187,6 +187,37 @@ window.Report = (function () {
   }
 
   // production STL state in one sentence (made on the server and sound, or only the 0.4 mm voxel preview)
+  // D1 (plan after P0): what the checks measured, in one table: the saw's play in each slot, the nerve canal and the
+  // roots against the screws, metal under the guide, how the grafts follow the defect, guide screws against the plate
+  function accuracyRows() {
+    const out = [];
+    if (S.planes.length && St.slotPlay && S.g) {
+      const dp = St.slotDepth(S.g);
+      out.push(['Yuvada testere eğilmesi', S.planes.map((p, i) => xl(`Kesi ${i + 1}: ${fmt(St.slotPlay(p.w, S.g.blade, dp), 1)}°`)).join(' · ') + ' ' + xl(`(bıçak ${fmt(S.g.blade, 2)} mm, kılavuz derinliği ${fmt(dp, 1)} mm, en çok ${fmt(St.SLOT_PLAY_MAX, 1)}°)`)]);
+    }
+    const fs = window.Fibula && Fibula.active() && Fibula.slotOf ? Fibula.slotOf() : null, fg = fs && S.fib && S.fib.guide && S.fib.guide.ctx && S.fib.guide.ctx.g;
+    if (fg && Number.isFinite(fs)) out.push(["Fibula guide'ında testere eğilmesi", xl(`${fmt(St.slotPlay(fs, S.g.blade, St.slotDepth(fg)), 1)}° (yuva ${fmt(fs, 2)} mm)`)]);
+    if (window.Canal && S.canals && S.kind === 'dicom') {
+      if (!S.canals.length) out.push(['Alt alveoler sinir kanalı', S.canalChecked ? 'işaretlenmedi; kesitlerde kontrol edildi' : 'işaretlenmedi']);
+      else {
+        let m = Infinity; (St.screwsWorld ? St.screwsWorld() : []).forEach(w => { if (w.entry) m = Math.min(m, Canal.canalClear(w.entry, w.dir, w.sc.len, w.sc.d / 2)); });
+        out.push(['Alt alveoler sinir kanalı', Number.isFinite(m) ? xl(`${S.canals.length} kanal işaretli; guide vidalarına en yakın ${fmt(Math.max(0, m), 1)} mm (en az ${fmt(Canal.SAFE, 1)} mm)`) : xl(`${S.canals.length} kanal işaretli`)]);
+      }
+      if (S.roots && S.roots.length) { const f = Canal.findings(), hit = f.guide.filter(g => g.roots.length).length + f.plate.filter(g => g.roots.length).length; out.push(['Diş kökleri', xl(`${S.roots.length} kök işaretli; kökten geçen vida: ${hit}`)]); }
+    }
+    const mq = window.MetalQC && S.anchor && S.result ? MetalQC.measureAll() : null;
+    if (mq) out.push(["Guide altında metal", xl(`${fmt(mq.metalMm3, 1)} mm³ (${MetalQC.METAL_HU} HU üstü, ${fmt(MetalQC.BAND_GUIDE, 1)} mm bant içinde)`)]);
+    const fl = window.Fibula && Fibula.active() && Fibula.state ? Fibula.state().last : null;
+    if (fl) {
+      out.push(['Greftlerin defekt hattından sapması', xl(`${fmt(fl.dev, 2)} mm (uyarı eşiği ${fmt(Fibula.DEV_WARN, 1)} mm)`)]);
+      const g = fl.D && fl.D.mirrorGap;
+      if (g) out.push(['Rezeke kemik ile sağlam tarafın aynası', xl(`en çok ${fmt(g.max, 1)} mm, ortalama ${fmt(g.mean, 1)} mm`)]);
+      else if (fl.D && fl.D.mirrored) out.push(['Rezeke kemik ile sağlam tarafın aynası', xl(`hedef kontur sağlam taraftan aynalandı (${fl.D.mirrored} nokta)`)]);
+    }
+    const pc = window.Plate && Plate.conflicts && Plate.get && Plate.get() ? Plate.conflicts() : null;
+    if (pc) out.push(['Guide vidaları ile plak vidaları', xl(`çakışan ${pc.hit.length} · iz kesişen ${pc.cross.length} · ekseni farklı ${pc.tilt.length}`)]);
+    return out;
+  }
   function prodLine(p, file) {
     if (!p) return `${xl("Üretim STL'i alınmadı; pakette yalnız 0,4 mm voksel önizleme var:")} ${file}_onizleme_BASMAYIN.stl. ${xl('Baskı için değildir.')}`;
     return `${xl("Üretim STL'i sunucuda yüzey tabanlı boolean ile üretildi")} (${file}_uretim.stl): ${xl(p.watertight ? 'su geçirmez' : 'su geçirmez değil')}, ${xl(`${p.bodies} parça`)}, ${fmt(p.volume / 1000, 2)} cm³${p.resolution ? xl(`, ızgara ${fmt(p.resolution, 2)} mm`) : ''}${p.sha256 ? `, SHA-256 ${p.sha256}` : ''}${p.version ? `, ${xl('sunucu sürümü')} ${p.version}` : ''}.${p.ok ? '' : ' ' + xl("Sunucu bu STL'i basılabilir bulmadı.")}${p.src && St.printLine ? St.printLine(p.src).replace(/<[^>]+>/g, '') : ''}`;
@@ -252,6 +283,13 @@ window.Report = (function () {
         d.text(prodLine(fgr.prod, 'fibula_guide'), { size: 21, color: fgr.prod && fgr.prod.watertight && fgr.prod.ok ? C.ink : C.warn });
       }
     }
+    const acc = accuracyRows();
+    if (acc.length) { d.h2('Doğruluk ve güvenlik ölçüleri'); d.table(['Ölçü', 'Değer'], acc, [0.36, 0.64]); }
+    if (window.Clinical) {
+      d.keep(330); d.h2('Klinik eşikler');
+      d.text('Kontrollerin kullandığı değerler; örnek değerlerdir, klinik ekip belirler.', { size: 20, color: C.muted });
+      d.table(['Eşik', 'Değer'], Clinical.list().map(([t, v, u, ch]) => [t + (ch ? ' *' : ''), `${fmt(v, v >= 100 ? 0 : 1)} ${u}`]), [0.7, 0.3]);
+    }
     (window.ReportSections || []).forEach(f => { try { f(d, C); } catch (e) { /* optional section */ } });
     d.h2('Montaj sırası');
     assembly().forEach((t, i) => d.text(`${i + 1}. ${xt(t)}`, { size: 23 }));
@@ -276,5 +314,5 @@ window.Report = (function () {
     catch (e) { St.busy(false); $('expMsg').textContent = 'PDF rapor oluşturulamadı: ' + e.message; }
   }
   $('expPdf').addEventListener('click', download);
-  return { build, download, pdfOf };
+  return { build, download, pdfOf, accuracyRows };
 })();

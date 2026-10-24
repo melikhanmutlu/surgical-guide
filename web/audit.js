@@ -154,7 +154,7 @@ window.Audit = (function () {
     const h = planHash();
     if (d.keep) d.keep(360); d.h2('İki aşamalı onay');
     d.table(['Aşama', 'Durum', 'Ad', 'Zaman'], ['eng', 'sur'].map(r => { const s = status(r, h); return [r === 'eng' ? 'Mühendis (teknik)' : 'Cerrah (klinik)', s.state === 'valid' ? 'Onaylı' : s.state === 'stale' ? 'Plan değişti' : s.state === 'broken' ? 'Geçersiz' : 'Bekliyor', s.e ? s.e.name : '–', s.e ? when(s.e.at) : '–']; }), [0.25, 0.2, 0.3, 0.25]);
-    log.filter(e => e.comment).slice(-6).forEach(e => d.text(`${ROLE[e.role]} ${e.name} (${when(e.at)}): ${e.comment}`, { size: 20 }));
+    log.filter(e => e.comment).slice(-6).forEach(e => d.text(`${xl(ROLE[e.role] || '')} ${e.name} (${when(e.at)}): ${e.comment}`, { size: 20 }));
     d.text(`Plan özeti (SHA-256): ${h}`, { size: 18, mono: true, color: '#5b646e' });
     d.text(xl(`Onay kaydı: ${log.length} kayıt, zincir ${chain.ok ? 'doğrulandı' : 'BOZUK'}`) + (log.length ? `, ${xl('son özet')} ${log[log.length - 1].hash}` : ''), { size: 18, mono: true, color: '#5b646e' });
   });
