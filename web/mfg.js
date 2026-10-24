@@ -13,7 +13,8 @@ window.Mfg = (function () {
     ti: { name: 'Titanyum (SLM)', clear: 0.2, slotTol: 0.15, minWall: 1.2, fit: 0.05, note: 'Destek yapıları ve yüzey işlemi sonrası ölçü kontrolü yapılır.' },
     custom: { name: 'Özel', clear: 0.3, slotTol: 0.2, minWall: 2.0, fit: 0.1, note: '' },
   };
-  const DEF = { prof: null, blade: 0.6, clear: 0.3, slotTol: 0.2, minWall: 2.0, fit: 0.1 };
+  const CV = (k, d) => (window.Clinical ? Clinical.v(k) : d);   // clinical.js (C4)
+  const DEF = { prof: null, blade: 0.6, clear: 0.3, slotTol: CV('slotTol', 0.2), minWall: CV('minWall', 2.0), fit: 0.1 };
   const F = [['blade', 'Testere ağzı kalınlığı', 0.3, 1.5, 0.05, 'mm'], ['clear', 'Kemik aralığı', 0, 1, 0.05, 'mm'], ['slotTol', 'Yuva toleransı (testereye ek)', 0, 0.8, 0.05, 'mm'], ['minWall', 'En ince duvar', 0.8, 4, 0.1, 'mm'], ['fit', 'Kovan geçme payı (matkaba ek)', 0, 0.5, 0.05, 'mm']];
   let M = Object.assign({}, DEF);
   // a stored plan is untrusted input (G1: its values were written into the form unescaped): the profile key must be a

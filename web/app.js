@@ -267,8 +267,9 @@
   // depth the saw slot guides the blade over, from the guide's inner surface (a raised rim of bossW mm on each side of
   // the slot; 0 or anything up to the wall = no rim, the slot then guides over the wall only). Plan 1.3, Lohn 2025:
   // slot = blade + 0.1-0.3 mm, angular play atan((slot - blade) / depth) <= 3° (sample threshold, the clinical team sets it)
-  const G_DEFAULT = { rot: 0, roll: 0, L: 36, W: 22, wrap: 6, wall: 2.5, clear: 0.3, bridge: 4, side: 1, split: 0, flange: 3, peri: 0, fit: 0, stopT: 0, stopB: 0, stopL: 6, stopD: 5, kerfSide: 1, vc: 0, blade: 0.6, boss: 5, bossW: 2, slotFlange: 0 };
-  const SLOT_TOL = 0.2, SLOT_PLAY_MAX = 3;
+  const CV = (k, d) => (window.Clinical ? Clinical.v(k) : d);   // clinical.js (C4): the one place for the clinical thresholds
+  const G_DEFAULT = { rot: 0, roll: 0, L: 36, W: 22, wrap: 6, wall: CV('wall', 2.5), clear: 0.3, bridge: 4, side: 1, split: 0, flange: 3, peri: 0, fit: 0, stopT: 0, stopB: 0, stopL: 6, stopD: 5, kerfSide: 1, vc: 0, blade: 0.6, boss: 5, bossW: 2, slotFlange: 0 };
+  const SLOT_TOL = CV('slotTol', 0.2), SLOT_PLAY_MAX = CV('slotPlayMax', 3);
   // the slot a new cut gets: the blade plus the material profile's tolerance (Mfg), else SLOT_TOL
   const slotDefault = () => Math.round(((S.g.blade || G_DEFAULT.blade) + (window.Mfg && Mfg.get().prof ? Mfg.get().slotTol : SLOT_TOL)) * 100) / 100;
   // the depth a slot guides the blade over, and the angle the blade can tilt in it (degrees)
@@ -287,7 +288,7 @@
     planes: [], screws: [], sel: null, explode: 0, mode: 'orbit', result: null,
     guideOn: false,           // the guide is built only after 'Guide oluştur', never on its own
     resRemoved: false,        // 'Rezeksiyon bölgesini sil': the resected piece is hidden
-    lesion: { from: -6, to: 6, margin: 3, ok: false }, compNames: null, segMethod: 'Eşik', crit: 0, qc: [],
+    lesion: { from: -6, to: 6, margin: CV('margin', 3), ok: false }, compNames: null, segMethod: 'Eşik', crit: 0, qc: [],
   };
   const bus = new EventTarget(), emit = (t, d) => bus.dispatchEvent(new CustomEvent(t, { detail: d }));
   const SCREW_DEFAULT = { mandible: { d: 2.0, D: 5, sleeveH: 5, len: 10 }, leg: { d: 2.5, D: 5.5, sleeveH: 6, len: 20 }, dicom: { d: 2.0, D: 5, sleeveH: 5, len: 12 } };
@@ -553,7 +554,7 @@
     S.qcBase = qualityCheck(vol); S.segWarn = []; syncQC();
     S.anchor = null; S.planes = []; S.screws = []; S.sel = null; S.result = null; S.guideOn = false; S.resRemoved = false; unapprove(S.lesion);
     // a new volume is a new patient: the previous case's guide settings and lesion bounds must not carry over (a plan restore keeps its own)
-    if (S.autoAnchor !== false) { S.drillD = null; S.screwDrops = []; S.screwBlocked = []; Object.assign(S.g, G_DEFAULT, { wrapU: null }); Object.assign(S.gAuto, AUTO_DEFAULT); S.fitLog = []; S.autoSize = null; Object.assign(S.lesion, { from: -6, to: 6, margin: 3, condyle: null, type: undefined }); syncGuideInputs(); syncLesion(); }
+    if (S.autoAnchor !== false) { S.drillD = null; S.screwDrops = []; S.screwBlocked = []; Object.assign(S.g, G_DEFAULT, { wrapU: null }); Object.assign(S.gAuto, AUTO_DEFAULT); S.fitLog = []; S.autoSize = null; Object.assign(S.lesion, { from: -6, to: 6, margin: CV('margin', 3), condyle: null, type: undefined }); syncGuideInputs(); syncLesion(); }
     ['guide', 'bar', 'resected', 'anchor', 'lesion'].forEach(id => setPart(id, null, null));
     clearElementParts();
     await segment(true);
@@ -590,9 +591,9 @@
     if (m.ts && /^1\.2\.840\.10008\.1\.2\.4\.(50|51|81|91)$/.test(m.ts) && window.DicomCodecs) out.push(['warn', 'Uyarı', `${DicomCodecs.name(m.ts)}: ${xl('kayıplı sıkıştırma; kemik sınırı birkaç HU kayabilir.')}`]);
     if (m.tilt > 1) out.push(['crit', 'Kritik', `Gantry eğimi ${fmt(m.tilt)}°; hacim eğik örneklenmiş, guide kemiğe oturmayabilir. Eğimsiz (0°) ya da eğimi düzeltilmiş seri kullanın.`]);
     let mn = Infinity, metal = 0, n = 0;
-    for (let i = 0; i < vol.hu.length; i += 7) { const v = vol.hu[i]; if (v < mn) mn = v; if (v > 2500) metal++; n++; }
+    for (let i = 0; i < vol.hu.length; i += 7) { const v = vol.hu[i]; if (v < mn) mn = v; if (v > CV('metalHu', 2500)) metal++; n++; }
     if (mn > -900) out.push(['warn', 'Uyarı', `En düşük değer ${mn} HU; HU kalibrasyonu (rescale) şüpheli.`]);
-    if (metal / n > 1e-4) out.push(['warn', 'Uyarı', 'Metal artefaktı olabilir (> 2500 HU bölgeler); segmentasyonu kontrol edin.']);
+    if (metal / n > 1e-4) out.push(['warn', 'Uyarı', xl(`Metal artefaktı olabilir (> ${CV('metalHu', 2500)} HU bölgeler); segmentasyonu kontrol edin.`)]);
     if (m.series > 1) out.push(['info', 'Bilgi', m.picked ? `${m.series} seri bulundu; seçilen seri kullanıldı.` : `${m.series} seri bulundu; en çok kesitli seri kullanıldı.`]);
     out.push(['info', 'Bilgi', `Kapsam ${fmt(vol.nz * dz, 0)} mm${m.kernel ? `, kernel ${m.kernel}` : ''}.`]);
     return out;
@@ -3727,6 +3728,7 @@ ${draft ? `<p>Onay bekleyen: ${esc(miss.join(', ') || '-')}${S.crit ? ` · ${S.c
 <h2>Vaka</h2><p>${esc(caseLine())}</p><p>Segmentasyon: ${esc(S.segMethod)}</p>
 <h2>Görüntü kalite kontrolü</h2><ul>${li(S.qc)}</ul>
 <h2>Rezeksiyon aralığı</h2><p>Lezyon ${fmt(S.lesion.from)} ile ${fmt(S.lesion.to)} mm arası, güvenlik payı ${fmt(S.lesion.margin)} mm${S.lesion.type && LESION_TYPES[S.lesion.type] ? ` (${esc(xl(LESION_TYPES[S.lesion.type][0]))})` : ''} · ${st(S.lesion)}</p>
+${window.Clinical ? `<h2>Klinik eşikler</h2><p class="small">${esc(xl('Kontrollerin kullandığı değerler; örnek değerlerdir, klinik ekip belirler.'))}${Clinical.changed().length ? ' ' + esc(xl('Bu kurulumda değiştirilmiş değerler * ile işaretli.')) : ''}</p><table><tbody>${Clinical.list().map(([t, v, u, ch]) => `<tr><td>${esc(xl(t))}${ch ? ' *' : ''}</td><td>${fmt(v, v >= 100 ? 0 : 1)} ${esc(u)}</td></tr>`).join('')}</tbody></table>` : ''}
 <h2>Kesi düzlemleri</h2><table><tr><th>Kesi</th><th>Konum</th><th>Yatay açı</th><th>Dikey açı</th><th>Yuva</th><th>Durum</th></tr>${S.planes.map((p, i) => `<tr><td>${i + 1}</td><td>${fmt(p.off)} mm</td><td>${fmt(p.yaw)}°</td><td>${fmt(p.pitch)}°</td><td>${fmt(p.w)} mm</td><td>${st(p)}</td></tr>`).join('')}</table>
 <h2>Vidalar</h2><table><tr><th>Vida</th><th>Konum (eksen, yanal)</th><th>Eğim</th><th>Matkap / kovan</th><th>Boy</th><th>Kemik içinde</th><th>Durum</th></tr>${S.screws.map((s, i) => { const si = R && R.screwInfo[i]; return `<tr><td>${i + 1}</td><td>${fmt(s.u)}, ${fmt(s.v)} mm</td><td>${fmt(s.tiltU, 0)}°, ${fmt(s.tiltV, 0)}°</td><td>${fmt(s.d)} / ${fmt(s.D)} mm</td><td>${fmt(s.len, 0)} mm</td><td>${si && si.ok ? fmt(si.inBone) + ' mm' : '-'}</td><td>${st(s)}</td></tr>`; }).join('')}</table>
 <h2>Guide gövdesi</h2><table>${gp.map(([k, v, u]) => `<tr><td>${k}</td><td>${fmt(v)} ${u}</td></tr>`).join('')}${R ? `<tr><td>Temas alanı</td><td>${fmt(R.contact, 0)} mm²</td></tr><tr><td>Hacim</td><td>${fmt(R.volume / 1000, 2)} cm³</td></tr>` : ''}</table>
@@ -4078,7 +4080,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
       S.g.side = S.g.side < 0 ? -1 : 1; S.g.split = S.g.split === 2 ? 2 : S.g.split ? 1 : 0; clampTo(S.g, 'fit', -0.5, 0.5);
       S.g.stopT = S.g.stopT ? 1 : 0; S.g.stopB = S.g.stopB ? 1 : 0; clampTo(S.g, 'stopL', 2, 15); clampTo(S.g, 'stopD', 1, 15);
       S.g.stopP = S.g.stopP ? 1 : 0; S.g.bar = S.g.bar ? 1 : 0; clampTo(S.g, 'bossW', 1, 4);
-      const L0 = { from: -6, to: 6, margin: 3 }, pl = plan.lesion || {};
+      const L0 = { from: -6, to: 6, margin: CV('margin', 3) }, pl = plan.lesion || {};
       S.lesion = Object.assign(num(pl, ['from', 'to', 'margin'], L0), who(pl), { condyle: pl.condyle === 'R' || pl.condyle === 'L' ? pl.condyle : null }, pl.type && LESION_TYPES[pl.type] ? { type: pl.type } : {});
       const P0 = { off: 0, yaw: 0, pitch: 0, w: 1.2 }, C0 = Object.assign({ u: 0, v: 0, tiltU: 0, tiltV: 0 }, SCREW_DEFAULT.mandible);
       // pv / pn: the cut's point moved within its plane (a cut turned with the bone, cutAlongBone). The plane is the same

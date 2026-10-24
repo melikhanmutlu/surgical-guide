@@ -10,7 +10,8 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
 window.MetalQC = (function () {
   const St = window.Studio; if (!St) return null;
   const { S, G, fmt } = St;
-  const METAL_HU = 2500, METAL_MM3 = 1, BAND_GUIDE = 1.5, BAND_BONE = 2, STREAK_SD = 250, STREAK_HI = 0.05;
+  const CV = (k, d) => (window.Clinical ? Clinical.v(k) : d);   // clinical.js (C4)
+  const METAL_HU = CV('metalHu', 2500), METAL_MM3 = 1, BAND_GUIDE = CV('metalBand', 1.5), BAND_BONE = 2, STREAK_SD = 250, STREAK_HI = 0.05;
   let memo = { grid: null, out: null };
 
   // one guide grid (S.grid or one of its parts): the HU of the contact band, from the full-resolution CT
@@ -53,5 +54,5 @@ window.MetalQC = (function () {
     else if (m.softN >= 20 && (m.sd > STREAK_SD || m.hiShare > STREAK_HI)) out.push(['warn', 'Uyarı', xl(`Guide ile kemik arasında çizgi artefaktı olabilir (yumuşak doku yayılımı ${fmt(m.sd, 0)} HU, kemik eşiğine ulaşan %${fmt(100 * m.hiShare, 0)}).`) + ' ' + xl('Guide\'ın altındaki kemik yüzeyini kesitlerde kontrol edin.'), 'guide']);
     return out;
   });
-  return { measure, measureAll, METAL_HU, METAL_MM3, STREAK_SD, STREAK_HI };
+  return { measure, measureAll, METAL_HU, METAL_MM3, BAND_GUIDE, STREAK_SD, STREAK_HI };
 })();

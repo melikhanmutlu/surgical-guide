@@ -12,7 +12,8 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
 window.Canal = (function () {
   const St = window.Studio; if (!St) return null;
   const { S, V, G, fmt, bus, scene } = St, $ = id => document.getElementById(id);
-  const R_CANAL = 1.5, SAFE = 2, R_ROOT = 2.5, MARGIN = 6, COLOR = 0xf2c94c, ROOT_COLOR = 0xf4efe2;
+  const CV = (k, d) => (window.Clinical ? Clinical.v(k) : d);   // clinical.js (C4)
+  const R_CANAL = 1.5, SAFE = CV('canalSafe', 2), R_ROOT = 2.5, MARGIN = 6, COLOR = 0xf2c94c, ROOT_COLOR = 0xf4efe2;
   S.canals = S.canals || []; S.roots = S.roots || [];
   let mode = null, keys = [], cur = -1;
   const r2 = x => Math.round(x * 100) / 100, arr = q => (Array.isArray(q) ? q.slice() : [q.x, q.y, q.z]).map(r2);

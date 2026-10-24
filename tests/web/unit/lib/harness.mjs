@@ -97,6 +97,7 @@ export function studio(opts = {}) {
   T.OrbitControls = class { constructor(cam) { this.object = cam; this.target = new T.Vector3(); this.enabled = true; } update() {} addEventListener() {} };
   g.YOLMED_SERVER = opts.server || '';
   if (opts.dicom) vm.runInContext(fs.readFileSync(path.join(VENDOR, 'dicomParser.min.js'), 'utf8'), P.ctx, { filename: 'dicomParser.min.js' });
+  P.load('clinical.js');   // the clinical thresholds (C4): every module reads them
   (opts.pre || []).forEach(f => P.load(f));
   P.load('geom.js'); P.load('seat.js'); P.load('gkernel.js');
   P.load('app.js');

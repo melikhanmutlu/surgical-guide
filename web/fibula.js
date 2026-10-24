@@ -866,7 +866,7 @@ window.Fibula = (function () {
   }
   function guideAuto(c) {
     const FR = F.c.FR, sA = c.segs[0].s0, sB = c.segs[c.segs.length - 1].s1, sec = localSection(sA, sB), Rl = sec ? Math.min(FR, sec.half) : FR, dp = sec ? Math.min(FR, sec.depth) : FR;
-    return { span: sB - sA, Lm: needsEnds(c) ? END_REACH + 5 : 8, W: Math.round(2 * (Rl + 2.8) + 2), wrap: Math.max(2, Math.round(dp * 0.8 * 2) / 2), wall: 2.5, clear: S.g.clear };
+    return { span: sB - sA, Lm: needsEnds(c) ? END_REACH + 5 : 8, W: Math.round(2 * (Rl + 2.8) + 2), wrap: Math.max(2, Math.round(dp * 0.8 * 2) / 2), wall: St.G_DEFAULT ? St.G_DEFAULT.wall : 2.5, clear: S.g.clear };
   }
   // The body runs Lm past the outer cuts, and further where a slot is oblique: a slot tilted across the guide runs
   // diagonally over the body, (W/2 |N·v| + depth |N·n|) / |N·u| mm along it on each side of its centre. A body that
