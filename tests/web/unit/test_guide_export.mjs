@@ -75,15 +75,25 @@ test('3MF button: makes the production STL first when it is out of date', async 
   assert.ok(new TextDecoder().decode(saved[0].bytes).includes('Mandibula guide (üretim)'));
 });
 
-test('no server: the preview leaves as guide_onizleme.stl with a not-for-printing message', async () => {
+test('no server: the preview leaves as guide_onizleme_BASMAYIN.stl with a not-for-printing message (C6: the name says it)', async () => {
   S.prod = null; saved.length = 0; calls.length = 0; $('aiUrl').value = '';
   await St.exportOne('guide');
   assert.equal(calls.length, 0);
-  assert.deepEqual(saved.map(f => f.filename), ['guide_onizleme.stl']);
+  assert.equal(JSON.stringify(saved.map(f => f.filename)), JSON.stringify(['guide_onizleme_BASMAYIN.stl']));
   assert.equal(saved[0].bytes.length, previewTris());
   assert.match($('oneMsg').textContent, /0,4 mm voksel önizlemesidir, baskı için değildir/);
   const z = new TextDecoder().decode(P.g.Exports.guides3MF());
-  assert.ok(z.includes('Mandibula guide (önizleme)'));
+  assert.ok(z.includes('Mandibula guide (önizleme, BASMAYIN)'), 'the 3MF object is labelled too');
+});
+
+test('C6: a package without a production STL holds the preview as guide_onizleme_BASMAYIN.stl, never as guide.stl', async () => {
+  S.prod = null; saved.length = 0; $('aiUrl').value = ''; $('expZip').disabled = false;
+  await St.exportPackage();
+  const z = saved.find(f => f.filename === 'guide_paketi.zip'); assert.ok(z, JSON.stringify(saved.map(f => f.filename)));
+  const t = Buffer.from(z.bytes).toString('latin1');
+  assert.ok(t.includes('guide_onizleme_BASMAYIN.stl'));
+  assert.ok(!/(^|[^_a-z])guide\.stl/.test(t), 'no file named guide.stl');
+  assert.ok(!t.includes('guide_uretim.stl'));
 });
 
 await run('guide export (single STL, 3MF): production STL first');

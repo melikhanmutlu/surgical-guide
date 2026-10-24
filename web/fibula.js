@@ -1267,7 +1267,7 @@ window.Fibula = (function () {
     if (!active() || !S.fib.guide || guideStale) return;
     const prod = S.fib.prod && S.fib.prod.key === S.fib.guide.key ? S.fib.prod : null;
     if (prod) files.push({ name: 'fibula_guide_uretim.stl', data: prod.stl });
-    files.push({ name: prod ? 'fibula_guide_onizleme.stl' : 'fibula_guide.stl', data: St.stlOf(S.fib.guide.mesh) });
+    files.push({ name: prod ? 'fibula_guide_onizleme.stl' : 'fibula_guide_onizleme_BASMAYIN.stl', data: St.stlOf(S.fib.guide.mesh) });
     files.push({ name: 'fibula_plani.json', data: JSON.stringify(summary(), null, 2) });
   }
   function summary() {
@@ -1297,7 +1297,7 @@ window.Fibula = (function () {
     const row = (k, v) => `<tr><td>${xl(k)}</td><td>${v}</td></tr>`;
     return `<h3>${xl("Fibula guide'ı")}</h3>${r.stale ? `<p><b>${xl("Fibula guide'ı güncelleniyor; rapor son üretilen guide'ı gösteriyor.")}</b></p>` : ''}<table>${row('Uzunluk', fmt(r.L) + ' mm')}${row('Genişlik', fmt(r.W) + ' mm')}${row('Sarma derinliği', fmt(r.wrap) + ' mm')}${row('Duvar', fmt(r.wall) + ' mm')}${row('Kemik boşluğu', fmt(r.clear) + ' mm')}${row('Temas alanı', fmt(r.contact, 0) + ' mm²')}${r.seat ? row('Eksen etrafında dönme direnci (vidasız)', '%' + fmt(r.seat.rotU * 100, 0)) + row('Eksen boyunca kayma direnci (vidasız)', '%' + fmt(r.seat.slideU * 100, 0)) : ''}${row('Hacim', fmt(r.volume / 1000, 2) + ' cm³')}</table>
 <table><tr><th>${xl('Vida')}</th><th>${xl('Segment')}</th><th>${xl('Matkap / kovan')}</th><th>${xl('Boy')}</th><th>${xl('Kemik içinde')}</th></tr>${r.screws.map(s => `<tr><td>${s.no}</td><td>${s.end ? xl('guide ucu (greft dışı)') : s.seg}</td><td>${fmt(s.d)} / ${fmt(s.D)} mm</td><td>${fmt(s.len, 0)} mm</td><td>${s.inBone != null ? fmt(s.inBone) + ' mm' : '–'}</td></tr>`).join('')}</table>
-<p>${r.prod ? `${xl("Fibula guide'ının üretim STL'i sunucuda yüzey tabanlı boolean ile üretildi:")} ${xl(r.prod.watertight ? 'su geçirmez' : 'su geçirmez değil')}, ${xl(`${r.prod.bodies} parça`)}, ${fmt(r.prod.volume / 1000, 2)} cm³${r.prod.resolution ? xl(`, ızgara ${fmt(r.prod.resolution, 2)} mm`) : ''} (fibula_guide_uretim.stl).${r.prod.ok ? '' : ` <b>${xl("Sunucu bu STL'i basılabilir bulmadı.")}</b>`}` : xl("Fibula guide'ının üretim STL'i alınmadı; fibula_guide.stl 0,4 mm voksel önizlemesidir.")}</p>`;
+<p>${r.prod ? `${xl("Fibula guide'ının üretim STL'i sunucuda yüzey tabanlı boolean ile üretildi:")} ${xl(r.prod.watertight ? 'su geçirmez' : 'su geçirmez değil')}, ${xl(`${r.prod.bodies} parça`)}, ${fmt(r.prod.volume / 1000, 2)} cm³${r.prod.resolution ? xl(`, ızgara ${fmt(r.prod.resolution, 2)} mm`) : ''} (fibula_guide_uretim.stl).${r.prod.ok ? '' : ` <b>${xl("Sunucu bu STL'i basılabilir bulmadı.")}</b>`}` : xl("Fibula guide'ının üretim STL'i alınmadı; fibula_guide_onizleme_BASMAYIN.stl 0,4 mm voksel önizlemesidir, baskı için değildir.")}</p>`;
   }
   function reportHTML() {
     if (!active()) return '';

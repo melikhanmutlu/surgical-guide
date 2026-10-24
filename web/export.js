@@ -61,8 +61,8 @@ window.Exports = (function () {
   const fibProdNow = () => (S.fib && S.fib.guide && S.fib.prod && S.fib.prod.key === S.fib.guide.key ? S.fib.prod : null);
   function guideItems() {
     const out = [], pt = St.parts, p = prodNow(), fp = fibProdNow();
-    if (pt.guide) out.push(p ? { name: 'Mandibula guide (üretim)', meshes: [stlMesh(p.stl)] } : { name: 'Mandibula guide (önizleme)', meshes: [pt.guide.obj] });
-    if (S.fib && S.fib.guide) out.push(fp ? { name: 'Fibula guide (üretim, fibula BT koordinatı)', meshes: [stlMesh(fp.stl)] } : { name: 'Fibula guide (önizleme, fibula BT koordinatı)', meshes: [S.fib.guide.mesh] });
+    if (pt.guide) out.push(p ? { name: 'Mandibula guide (üretim)', meshes: [stlMesh(p.stl)] } : { name: 'Mandibula guide (önizleme, BASMAYIN)', meshes: [pt.guide.obj] });
+    if (S.fib && S.fib.guide) out.push(fp ? { name: 'Fibula guide (üretim, fibula BT koordinatı)', meshes: [stlMesh(fp.stl)] } : { name: 'Fibula guide (önizleme, BASMAYIN, fibula BT koordinatı)', meshes: [S.fib.guide.mesh] });
     return out;
   }
   function modelItems() {

@@ -116,7 +116,7 @@ test('reports: the engineer and the surgeon are printed with their approval time
   [S.lesion, ...S.planes, ...S.screws].forEach(o => St.stamp(o)); signOff('eng', 'sur'); St.renderAppr(); await frames();
   W.Image = class { constructor() { this.width = 1000; this.height = 640; } set src(v) { setTimeout(() => this.onload && this.onload(), 0); } };
   const all = pdfText(new Uint8Array(await (await W.Report.build()).arrayBuffer())).join('\n');
-  for (const t of ['Ad Soyad: Müh Y', 'Ad Soyad: Dr X', 'Teknik onay:', 'Klinik onay:', "Üretim STL'i alınmadı; pakette yalnız 0,4 mm voksel önizleme var: guide.stl."])
+  for (const t of ['Ad Soyad: Müh Y', 'Ad Soyad: Dr X', 'Teknik onay:', 'Klinik onay:', "Üretim STL'i alınmadı; pakette yalnız 0,4 mm voksel önizleme var: guide_onizleme_BASMAYIN.stl. Baskı için değildir."])
     assert.ok(all.includes(t), `"${t}" in the PDF:\n` + all.slice(-1500));
   assert.ok(!all.includes('Ad Soyad: ________________'), 'no blank name line once both approved');
   let h = St.reportHTML();

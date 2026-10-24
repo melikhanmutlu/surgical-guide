@@ -188,7 +188,7 @@ window.Report = (function () {
 
   // production STL state in one sentence (made on the server and sound, or only the 0.4 mm voxel preview)
   function prodLine(p, file) {
-    if (!p) return `${xl("Üretim STL'i alınmadı; pakette yalnız 0,4 mm voksel önizleme var:")} ${file}.stl.`;
+    if (!p) return `${xl("Üretim STL'i alınmadı; pakette yalnız 0,4 mm voksel önizleme var:")} ${file}_onizleme_BASMAYIN.stl. ${xl('Baskı için değildir.')}`;
     return `${xl("Üretim STL'i sunucuda yüzey tabanlı boolean ile üretildi")} (${file}_uretim.stl): ${xl(p.watertight ? 'su geçirmez' : 'su geçirmez değil')}, ${xl(`${p.bodies} parça`)}, ${fmt(p.volume / 1000, 2)} cm³${p.resolution ? xl(`, ızgara ${fmt(p.resolution, 2)} mm`) : ''}.${p.ok ? '' : ' ' + xl("Sunucu bu STL'i basılabilir bulmadı.")}${p.src && St.printLine ? St.printLine(p.src).replace(/<[^>]+>/g, '') : ''}`;
   }
   async function build() {
