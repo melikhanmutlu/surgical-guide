@@ -662,10 +662,13 @@ window.Ankle = (function () {
       <li class="sum"><button class="go" data-ank-go="st1"><span class="nm">${xl('Görüntü kalitesi')}</span></button><span class="tag ${qcCrit ? 'crit' : 'ok'}">${qcCrit ? 'Kritik' : 'Uygun'}</span></li>
       <li><button class="go" data-ank-go="stRed"><span class="nm">${xl('Redüksiyon')}</span><small>${xl(`${nMoved} parça taşındı`)}${meta.cls ? ' · ' + esc(xl(meta.cls)) : ''}</small></button>
         <span class="act">${red.ok ? `<span class="badge" title="${esc(red.by || '')}"><span class="ini">${esc(initials(red.by))}</span></span>` : ''} <button id="ankOk">${red.ok ? 'Kaldır' : 'Onayla'}</button></span></li>
+      ${items().map(it => { const ok = itemOk(it), stale = !ok && appr[it.k]; return `<li><button class="go" data-ank-go="${it.go}"><span class="nm">${esc(xl(it.name))}</span>${stale ? `<small>${xl('Plan değişti; yeniden onaylayın.')}</small>` : ''}</button>
+        <span class="act">${ok ? `<span class="badge" title="${esc(appr[it.k].by)}"><span class="ini">${esc(initials(appr[it.k].by))}</span></span>` : ''} <button data-ank-item="${esc(it.k)}">${ok ? xl('Kaldır') : xl('Onayla')}</button></span></li>`; }).join('')}
       <li class="sum"><button class="go" data-ank-go="checks"><span class="nm">${xl('Otomatik kontroller')}</span></button><span class="tag ${crit ? 'crit' : 'ok'}">${crit ? 'Kritik' : 'Geçti'}</span></li></ul>
       <p class="hint" id="ankApprMsg"></p>`;
     box.querySelectorAll('[data-ank-go]').forEach(b => b.addEventListener('click', () => { const id = b.dataset.ankGo; if (id === 'checks') St.goTo('data'); else if ($(id)) $(id).open = true; }));
     $('ankOk').addEventListener('click', approve);
+    box.querySelectorAll('[data-ank-item]').forEach(b => b.addEventListener('click', () => approveItem(b.dataset.ankItem)));
   }
   function approve() {
     const name = $('surgeon').value.trim(), msg = t => { if ($('ankApprMsg')) $('ankApprMsg').textContent = xl(t); };
@@ -681,7 +684,48 @@ window.Ankle = (function () {
     let a = 0x811c9dc5; for (let i = 0; i < t.length; i++) a = Math.imul(a ^ t.charCodeAt(i), 16777619);
     return (a >>> 0).toString(16).padStart(8, '0');
   }
-  (window.PendingHooks = window.PendingHooks || []).push(() => (on() && pieces.length && !red.ok ? ['Redüksiyon'] : []));
+  // ---------- item approvals (plan M7.1): each screw, the cutting guide, the wedge and the drill guide ----------
+  // An approval is kept with what it approved (a signature of the item and of its piece's motion); when the item
+  // changes the approval no longer counts ("Plan değişti"). Stamps are not part of the plan's design hash (audit.js).
+  let appr = {};          // key -> { by, at, sig }
+  const hsh = t => (window.Audit ? Audit.sha256(t).slice(0, 16) : String(t.length));
+  const mot = p => (p ? JSON.stringify([[p.t.x, p.t.y, p.t.z].map(x => Math.round(x * 1000) / 1000), [p.q.x, p.q.y, p.q.z, p.q.w].map(x => Math.round(x * 1e5) / 1e5)]) : '');
+  function items() {
+    const out = [];
+    if (window.AnkScrew) {
+      const is = AnkScrew.issues(), sc = AnkScrew.screws();
+      sc.forEach((z, k) => {
+        const p = pieces.find(q => q.name === z.piece), same = sc.filter(y => y.kind === z.kind);
+        out.push({ k: 'screw:' + hsh(JSON.stringify([z.kind, z.piece, z.E, z.d])), name: `${(AnkScrew.KIND[z.kind] || {}).name || 'Vida'} ${same.indexOf(z) + 1}`, go: 'stAnkS',
+          sig: hsh(JSON.stringify([z.kind, z.piece, z.E, z.d, z.D, z.L]) + mot(p)), crit: is.some(i => i.id === z.id && i.lvl === 'crit') });
+      });
+      const dg = AnkScrew.drillInfo();
+      if (dg) out.push({ k: 'drill', name: 'Matkap guide\'ı', go: 'stAnkS', sig: hsh(JSON.stringify(AnkScrew.screws().filter(z => z.piece === dg.name)) + dg.name + mot(dg.piece)), crit: AnkScrew.drillChecks().some(c => c[0] === 'crit') });
+    }
+    if (window.AnkGuide && AnkGuide.ready()) {
+      const gs = AnkGuide.state(), o = AnkGuide.parts(), gp = pieces.find(q => q.name === gs.piece), ck = AnkGuide.checks();
+      const prod = o.prod && o.prod.productionOk ? [o.prod.volume, o.prod.stl.length] : null;
+      out.push({ k: 'guide', name: 'Kesi guide\'ı', go: 'stAnkG', sig: hsh(JSON.stringify([gs, prod]) + mot(gp)), crit: ck.some(c => c[0] === 'crit') });
+      if (o.wedge) out.push({ k: 'wedge', name: 'Kama', go: 'stAnkG', sig: hsh(JSON.stringify([gs.P, gs.n, gs.prm.off, gs.prm.tiltA, gs.prm.tiltB, gs.prm.deg]) + mot(gp)), crit: false });
+    }
+    return out;
+  }
+  const itemOk = it => !!(appr[it.k] && appr[it.k].sig === it.sig);
+  function approveItem(k) {
+    const it = items().find(x => x.k === k); if (!it) return false;
+    const name = $('surgeon') ? $('surgeon').value.trim() : '', msg = t => { if ($('ankApprMsg')) $('ankApprMsg').textContent = xl(t); };
+    if (itemOk(it)) { delete appr[k]; renderAppr(); St.emit('changed'); return true; }
+    if (!name) { msg('Önce onaylayan cerrahın adını yazın.'); return false; }
+    if (it.crit) { msg(`${it.name}: kritik kontrol var; önce düzeltin.`); return false; }
+    appr[k] = { by: name, at: new Date().toISOString(), sig: it.sig }; renderAppr(); St.emit('changed'); return true;
+  }
+  const allItemsOk = () => items().every(itemOk);
+  (window.PlanExt = window.PlanExt || {}).ankAppr = {
+    label: 'Malleol öğe onayları',
+    get: () => (on() && Object.keys(appr).length ? JSON.parse(JSON.stringify(appr)) : null),
+    set(x) { appr = {}; if (x && typeof x === 'object') Object.entries(x).slice(0, 60).forEach(([k, v]) => { if (/^(screw:[0-9a-f]{1,16}|guide|wedge|drill)$/.test(k) && v && typeof v.by === 'string' && typeof v.sig === 'string') appr[k] = { by: v.by.slice(0, 120), at: typeof v.at === 'string' ? v.at.slice(0, 40) : '', sig: v.sig.slice(0, 40) }; }); renderAppr(); },
+  };
+  (window.PendingHooks = window.PendingHooks || []).push(() => (on() && pieces.length ? [...(!red.ok ? ['Redüksiyon'] : []), ...items().filter(it => !itemOk(it)).map(it => it.name)] : []));
 
   // ---------- outputs ----------
   // the reduced model: every piece's mesh moved to its reduced position, one STL in patient coordinates (LPS mm)
@@ -696,7 +740,49 @@ window.Ankle = (function () {
     const used = new Set();
     return kept().map(p => { let n = fileName(p.name); while (used.has(n)) n += '_2'; used.add(n); const m = bakedMesh([p]), data = St.stlOf(m); m.geometry.dispose(); return { name: `parcalar/${n}_redukte.stl`, data }; });
   }
-  function reportHTML() {
+  // the report's sections from the other malleolar modules (plan M8): joint measures before / after, screws, guide and
+  // wedge, the sample thresholds, the print guide with its material alternatives
+  const PRINT = [
+    ['SLA reçine (biyouyumlu)', 'Oturma yüzü yukarı, 30-45° eğik; destek yalnız dış yüzde', 'Destek dış yüzde, oturma yüzüne değmez', 'Buhar otoklav (ör. 121 °C / 134 °C) reçine üreticisinin onayladığı programla'],
+    ['PolyJet (MED610)', 'Oturma yüzü yukarı', 'Destek jeli tamamen temizlenir (delikler ve yuva dahil)', 'Otoklav uygun değil; düşük sıcaklık (EtO ya da hidrojen peroksit plazma)'],
+    ['SLS PA12', 'Uzun eksen tabla düzlemine paralel', 'Destek gerekmez; delik ve yuvadan toz temizlenir', 'Buhar otoklav (121 °C / 134 °C)'],
+  ];
+  function reportExtra() {
+    const f1 = x => (x == null ? '–' : fmt(x, 1)), out = [];
+    const LMr = window.AnkLM && AnkLM.result();
+    if (LMr && LMr.ct.ok && LMr.red.ok) {
+      const a = LMr.ct.m, b = LMr.red.m, row = (l, x, y) => `<tr><td>${xl(l)}</td><td>${x}</td><td>${y}</td></tr>`;
+      const st = b.steps.map(z => { const c = a.steps.find(y => y.name === z.name) || {}; return row(`${xl('Basamak')}: ${esc(xl(z.name))}`, f1(c.step), f1(z.step)) + row(`${xl('Aralık')}: ${esc(xl(z.name))}`, f1(c.gap), f1(z.gap)); }).join('');
+      out.push(`<h2>${xl('Eklem ölçüleri')}</h2><table><tr><th>${xl('Ölçü (mm)')}</th><th>${xl('BT')}</th><th>${xl('Redükte')}</th></tr>${st}${row('Üst açıklık (SCS)', f1(a.scs), f1(b.scs))}${row('Medial açıklık (MCS)', f1(a.mcs), f1(b.mcs))}${row('Talus kayması (MCS − SCS)', f1(a.shift), f1(b.shift))}${row('Tibiofibular açıklık', f1(a.tfcs), f1(b.tfcs))}</table>`);
+    }
+    if (window.AnkScrew && AnkScrew.screws().length) {
+      const an = AnkScrew.analyse(), is = AnkScrew.issues();
+      out.push(`<h2>${xl('Vidalar')}</h2><table><tr><th>${xl('Vida')}</th><th>${xl('Giriş')}</th><th>${xl('Çap')}</th><th>${xl('Boy (mm)')}</th><th>${xl('Karşı korteks (mm)')}</th><th>${xl('Geçtiği parçalar')}</th></tr>${an.map(z => `<tr><td>${esc(xl(`${(AnkScrew.KIND[z.s.kind] || {}).name || 'Vida'} ${AnkScrew.screws().filter(y => y.kind === z.s.kind).findIndex(y => y.id === z.s.id) + 1}`))}</td><td>${esc(xl(z.s.piece))}</td><td>Ø${fmt(z.s.D, 1)}</td><td>${z.s.L}</td><td>${z.lost || z.m.exit == null ? '–' : fmt(z.m.exit, 1)}</td><td>${z.lost ? '–' : esc(z.pieces.map(xl).join(' → '))}</td></tr>`).join('')}</table>
+        ${is.length ? `<ul>${is.map(i => `<li><b>${xl(i.lvl === 'crit' ? 'Kritik' : 'Uyarı')}</b> ${esc(xl(i.msg))}</li>`).join('')}</ul>` : ''}`);
+    }
+    const gi = window.AnkGuide && AnkGuide.ready() ? AnkGuide.info() : null;
+    if (gi) {
+      const q = AnkGuide.state().prm, w = gi.wedge, m = AnkGuide.MAT[q.mat] || AnkGuide.MAT.unset;
+      out.push(`<h2>${xl('Kesi guide\'ı ve kama')}</h2><table>
+        <tr><td>${xl('Kemik')}</td><td>${esc(xl(AnkGuide.state().piece))}</td></tr>
+        <tr><td>${xl('Eklemden uzaklık')}</td><td>${gi.joint ? `${xl('kesi')} ${fmt(gi.joint.slot, 1)} mm · ${xl('teller')} ${gi.joint.pins.map(z => (z ? fmt(z.d, 1) : '–')).join(' / ')} mm` : '–'}</td></tr>
+        <tr><td>${xl('Oturma')}</td><td>${gi.fit ? `p50 ${fmt(gi.fit.p50, 2)} · p99 ${fmt(gi.fit.p99, 2)} mm` : '–'} · ${xl('Temas alanı')} ${fmt(gi.contact, 0)} mm²</td></tr>
+        <tr><td>${xl('Yuva boşluğu')}</td><td>${gi.play != null ? fmt(gi.play, 1) + '°' : '–'} (${xl('yuva')} ${fmt(q.kerf, 2)} mm, ${xl('bıçak')} ${fmt(q.blade, 2)} mm)</td></tr>
+        <tr><td>${xl('Malzeme')}</td><td>${esc(xl(m.name))} · ${xl(q.sleeve === 'metal' ? 'Metal kovan' : 'Basılı delik')}</td></tr>
+        ${w ? `<tr><td>${xl('Kama')}</td><td>${fmt(w.deg, 1)}° (${xl('STL\'de ölçülen')} ${w.measured != null ? fmt(w.measured, 2) + '°' : '–'}) · ${xl('açılma')} ${fmt(w.open, 1)} mm</td></tr>` : ''}</table>`);
+    }
+    const sp = window.AnkScrew ? AnkScrew.LIM : null, lm = window.AnkLM ? AnkLM.LIM : null, jg = window.AnkGuide ? AnkGuide.JOINT : null;
+    out.push(`<h2>${xl('Örnek eşikler')}</h2><p class="m">${xl('Aşağıdaki eşikler literatürden örnek değerlerdir; klinik ekip belirler ve onaylar.')}</p><ul>
+      ${lm ? `<li>${xl(`Eklem basamağı ve aralığı ${lm.step} mm; medial açıklık ${lm.mcs} mm; tibiofibular açıklık ${lm.tfcs} mm; posterior parça %${lm.post}`)}</li>` : ''}
+      ${jg ? `<li>${xl(`Testere kesisi ve K-telleri eklem yüzeyinden en az ${jg.min} mm`)}</li>` : ''}
+      ${sp ? `<li>${xl(`Vida: karşı korteksten taşma ${sp.over} mm, eklem yüzeyine ${sp.joint} mm, vidalar arası ${sp.clear} mm, karşı parçada tutunma ${sp.purchase} mm`)}</li>` : ''}
+      <li>${xl(`Yuvada testere eğilmesi en çok ${St.SLOT_PLAY_MAX || 3}°`)}</li></ul>`);
+    out.push(`<h2>${xl('Baskı rehberi')}</h2><p class="m">${xl('Malzeme ve yöntem henüz seçilmedi; alternatifler. Değerler tipik başlangıçtır, üretici ve hastanenin sterilizasyon birimi doğrular.')}</p>
+      <table><tr><th>${xl('Malzeme')}</th><th>${xl('Yön')}</th><th>${xl('Destek')}</th><th>${xl('Sterilizasyon')}</th></tr>${PRINT.map(r => `<tr>${r.map(c => `<td>${esc(xl(c))}</td>`).join('')}</tr>`).join('')}</table>
+      <p class="m">${xl('Metal kovan seçildiyse kovanlar baskıdan sonra deliklere preslenir; delik çapı kovanın dış çapı artı malzemenin geçme payıdır. Basılan guide redükte modelin üstünde denenir.')}</p>`);
+    return out.join('');
+  }
+  function reportHTML(hashes) {
     const A = window.Audit, h = A ? A.planHash() : '', st = r => { const s = A ? A.status(r, h) : { state: 'none' }; return s.state === 'valid' ? `${xl('Onaylı')} · ${esc(s.e.name)}` : s.state === 'stale' ? xl('Plan değişti') : xl('Bekliyor'); };
     const rows = metrics.filter(m => m.role !== 'out').map(m => `<tr><td>${esc(m.name)}</td><td>${fmt(pieces[m.i].cm3, 1)}</td><td>${m.moved ? `${fmt(m.dist, 1)} mm · ${fmt(m.ang, 1)}°` : '–'}</td><td>${m.partner >= 0 ? esc(pieces[m.partner].name) : '–'}</td><td>${m.partner >= 0 ? fmt(m.contact, 0) : '–'}</td><td>${m.gap != null ? fmt(m.gap, 1) : '–'}</td><td>${fmt(m.over, 1)}</td></tr>`).join('');
     const ck = checks().map(c => `<li><b>${esc(xl(c[1]))}</b> ${esc(c[2])}</li>`).join('');
@@ -706,17 +792,20 @@ window.Ankle = (function () {
       <p>${esc(St.caseLine ? St.caseLine() : '')}</p>
       <p>${xl('Taraf')}: ${meta.side === 'R' ? xl('Sağ ayak bileği') : meta.side === 'L' ? xl('Sol ayak bileği') : xl('Bilinmiyor')} · ${xl('Kırık tipi')}: ${meta.cls ? esc(xl(meta.cls)) : xl('Seçilmedi')}</p>
       <h2>${xl('Parçalar ve redüksiyon')}</h2><table><tr><th>${xl('Parça')}</th><th>cm³</th><th>${xl('Hareket')}</th><th>${xl('Komşu')}</th><th>${xl('Temas mm²')}</th><th>${xl('Aralık mm')}</th><th>${xl('Çakışma mm')}</th></tr>${rows}</table>
+      ${reportExtra()}
       <h2>${xl('Kontroller')}</h2><ul>${ck || `<li>${xl('Tüm kontroller geçti.')}</li>`}</ul>
       <h2>${xl('Onay')}</h2><p>${xl('Redüksiyon')}: ${red.ok ? `${xl('Onaylı')} · ${esc(red.by)} · ${esc(red.at)}` : xl('Bekliyor')}</p>
-      <p>${xl('Mühendis (teknik)')}: ${st('eng')}<br>${xl('Cerrah (klinik)')}: ${st('sur')}</p><p class="m"><small>${xl('Plan özeti (SHA-256):')} ${h}</small></p>
+      ${items().length ? `<ul>${items().map(it => `<li>${esc(xl(it.name))}: ${itemOk(it) ? `${xl('Onaylı')} · ${esc(appr[it.k].by)} · ${esc(appr[it.k].at)}` : appr[it.k] ? xl('Plan değişti') : xl('Bekliyor')}</li>`).join('')}</ul>` : ''}
+      <p>${xl('Mühendis (teknik)')}: ${st('eng')}<br>${xl('Cerrah (klinik)')}: ${st('sur')}</p>
+      ${hashes && Object.keys(hashes).length ? `<h2>${xl('Dosya özetleri (SHA-256)')}</h2><table>${Object.entries(hashes).map(([n, h]) => `<tr><td>${esc(n)}</td><td><code>${h}</code></td></tr>`).join('')}</table>` : ''}<p class="m"><small>${xl('Plan özeti (SHA-256):')} ${h}</small></p>
       <p class="m"><small>${xl('Redükte model, parçaların planlanan konumdaki yüzeyleridir (LPS, mm). Plak ön bükme ve eğitim için; doğruluk klinik olarak doğrulanmadı.')}</small></p></body></html>`;
   }
-  const packReady = () => { const A = window.Audit; if (!A || !on() || !pieces.length) return false; const h = A.planHash(); return red.ok && A.status('eng', h).ok && A.status('sur', h).ok && !S.crit; };
+  const packReady = () => { const A = window.Audit; if (!A || !on() || !pieces.length) return false; const h = A.planHash(); return red.ok && allItemsOk() && A.status('eng', h).ok && A.status('sur', h).ok && !S.crit; };
   function renderOut() {
     const box = $('ankOut'); if (!box) return;
     const ready = packReady(), why = [];
     if (!pieces.length) why.push(xl('parça yok'));
-    else { if (!red.ok) why.push(xl('redüksiyon onayı')); const A = window.Audit, h = A ? A.planHash() : ''; if (A && !A.status('eng', h).ok) why.push(xl('mühendis onayı')); if (A && !A.status('sur', h).ok) why.push(xl('cerrah onayı')); if (S.crit) why.push(xl(`${S.crit} kritik kontrol`)); }
+    else { if (!red.ok) why.push(xl('redüksiyon onayı')); items().filter(it => !itemOk(it)).forEach(it => why.push(`${xl(it.name)} ${xl('onayı')}`)); const A = window.Audit, h = A ? A.planHash() : ''; if (A && !A.status('eng', h).ok) why.push(xl('mühendis onayı')); if (A && !A.status('sur', h).ok) why.push(xl('cerrah onayı')); if (S.crit) why.push(xl(`${S.crit} kritik kontrol`)); }
     box.innerHTML = `<ol class="deliver">
       <li><div><b>${xl('Redükte model STL\'i')}</b><p class="hint">${xl('Bütün parçalar planlanan konumda, tek dosya. Plak ön bükme için basılabilir; onay gerektirmez.')}</p></div><button id="ankStl" ${pieces.length ? '' : 'disabled'}><svg class="i"><use href="#i-download"/></svg>${xl('İndir')}</button></li>
       ${window.AnkGuide && AnkGuide.ready() ? `<li><div><b>${xl('Kesi guide\'ı ve kama')}</b><p class="hint">${xl('Üretim STL\'i alındıysa o, alınmadıysa tarayıcı önizlemesi ("BASMAYIN" adıyla) ve kama; redükte modelle aynı koordinatta. Pakete de girer.')}</p></div><button id="ankGStl">${xl('İndir')}</button></li>` : ''}
@@ -731,7 +820,7 @@ window.Ankle = (function () {
     $('ankPack').addEventListener('click', () => { if (!packReady()) return; St.offer(`${name()}_paket.zip`, St.zip(packFiles())); St.emit('exported'); });
   }
   // every STL of the package is in one frame (the reduced model's); the file says which and how to go back to the CT
-  function frameJSON() {
+  function frameJSON(hashes) {
     const g = window.AnkGuide && AnkGuide.ready() ? AnkGuide.state() : null, q4 = q => [q.x, q.y, q.z, q.w].map(x => Math.round(x * 1e6) / 1e6), m3 = v => [v.x, v.y, v.z].map(x => Math.round(x * 1000) / 1000);
     return JSON.stringify({
       cerceve: 'BT hasta koordinatları (DICOM LPS), mm; her parça planlanan (redükte) konumunda',
@@ -739,10 +828,16 @@ window.Ankle = (function () {
       donusum: "x' = q (x - c) + c + t, q = [x, y, z, w] birim kuaterniyon; BT konumuna dönüş: x = q^-1 (x' - c - t) + c",
       dosyalar: { 'redukte_model.stl': 'tüm parçalar', 'parcalar/*_redukte.stl': 'her parça ayrı', 'guide/*.stl': g ? `kesi guide'ı ve kama, "${g.piece}" parçasının hareketiyle taşınmış` : 'yok' },
       parcalar: kept().map(p => ({ ad: p.name, c: m3(p.c), t: m3(p.t), q: q4(p.q), tasindi: moved(p) })),
+      vidalar: window.AnkScrew ? AnkScrew.screws().map(z => { const w = AnkScrew.world(z); return { tur: z.kind, parca: z.piece, cap_mm: z.D, boy_mm: z.L, giris: w ? m3(w.E) : null, yon: w ? m3(w.d) : null }; }) : [],
+      onaylar: Object.assign({ reduksiyon: red.ok ? { by: red.by, at: red.at } : null }, Object.fromEntries(items().map(it => [it.name, itemOk(it) ? { by: appr[it.k].by, at: appr[it.k].at } : null]))),
+      sha256: hashes || undefined,
     }, null, 2);
   }
+  // every STL's SHA-256 (plan M7.2): written into cerceve.json and the report, so a printed file can be checked
+  function stlHashes(files) { const o = {}; if (window.Audit && Audit.sha256b) files.filter(f => /\.stl$/.test(f.name)).forEach(f => { o[f.name] = Audit.sha256b(f.data); }); return o; }
   function packFiles() {
-    const files = [{ name: 'redukte_model.stl', data: reducedStl() }, ...pieceFiles(), ...(window.AnkGuide ? AnkGuide.files() : []), { name: 'cerceve.json', data: frameJSON() }, { name: 'plan.json', data: JSON.stringify(St.planOf(), null, 2) }, { name: 'rapor.html', data: reportHTML() }];
+    const stls = [{ name: 'redukte_model.stl', data: reducedStl() }, ...pieceFiles(), ...(window.AnkGuide ? AnkGuide.files() : []), ...(window.AnkScrew ? AnkScrew.drillFiles() : [])], hs = stlHashes(stls);
+    const files = [...stls, { name: 'cerceve.json', data: frameJSON(hs) }, { name: 'plan.json', data: JSON.stringify(St.planOf(), null, 2) }, { name: 'rapor.html', data: reportHTML(hs) }];
     // the approval log (audit.js); the other export hooks write mandible files (navigation of cuts and screws)
     const extra = []; (window.ExportHooks || []).forEach(f => { try { f(extra); } catch (e) { /* optional */ } });
     extra.filter(f => f.name === 'onay_kaydi.json').forEach(f => files.push(f));
@@ -807,7 +902,7 @@ window.Ankle = (function () {
   // ---------- wiring ----------
   bus.addEventListener('bone', () => { if (on()) build(); else if (pieces.length) drop(); });
   // a new volume is a new case: its pieces come with the 'bone' event that came just before (the side found there is kept)
-  bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring)) { meta = { side: autoSide, cls: '' }; red = { ok: false }; splits = []; unmatched = []; } renderMeta(); render(); renderRoi(); });
+  bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring)) { meta = { side: autoSide, cls: '' }; red = { ok: false }; splits = []; unmatched = []; appr = {}; } renderMeta(); render(); renderRoi(); });
   bus.addEventListener('caseType', () => {
     // a built-in sample of the other case type is swapped for this type's sample (nothing planned on it yet)
     const isAnkle = n => /^ankle/.test(n);
@@ -843,5 +938,5 @@ window.Ankle = (function () {
     const A = window.Audit, h = A && pieces.length ? A.planHash() : '', both = !!(A && pieces.length && A.status('eng', h).ok && A.status('sur', h).ok);
     return { done: { stRed: pieces.length > 0 && pieces.some(moved) && !checks().some(c => c[0] === 'crit'), stAnkS: !!(window.AnkScrew && AnkScrew.done()), stAnkG: !!(window.AnkGuide && AnkGuide.ready()), st7: red.ok && both && !S.crit, stAnkOut: false }, ready: red.ok && both && !S.crit, pend: (red.ok ? 0 : 1) + (A && pieces.length && !A.status('eng', h).ok ? 1 : 0) + (A && pieces.length && !A.status('sur', h).ok ? 1 : 0) };
   }
-  return { on, planned, status, renderChecks, checks, pieces: () => pieces, selected: () => sel, metrics: () => metrics, select: choose, rename, _names: names, separate, splitPiece, splits: () => splits.map(x => ({ a: x.a.slice(), b: x.b.slice() })), labels: LB, unmatched: () => unmatched.slice(), roi: () => Object.assign({}, roi), roiInfo: () => roiInfo, setRoi, building: () => !!buildJob, sdfAt, toWorld, toOwn, moved, setMotion, reset, measure, reducedStl, pieceFiles, reportHTML, packFiles, frameJSON, packReady, approve, build, meta: () => meta, approved: () => red.ok, LIM };
+  return { on, planned, status, renderChecks, checks, pieces: () => pieces, selected: () => sel, metrics: () => metrics, select: choose, rename, _names: names, separate, splitPiece, splits: () => splits.map(x => ({ a: x.a.slice(), b: x.b.slice() })), labels: LB, unmatched: () => unmatched.slice(), roi: () => Object.assign({}, roi), roiInfo: () => roiInfo, setRoi, building: () => !!buildJob, sdfAt, toWorld, toOwn, moved, setMotion, reset, measure, reducedStl, pieceFiles, reportHTML, packFiles, frameJSON, packReady, approve, approveItem, items, itemOk, stlHashes, build, meta: () => meta, approved: () => red.ok, LIM };
 })();

@@ -10,6 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { test, run, assert, near } from './lib/t.mjs';
+import { saveAcc } from './lib/acc.mjs';
 import { studio, ready, REPO } from './lib/harness.mjs';
 
 const ANKLE = JSON.parse(fs.readFileSync(path.join(REPO, 'web', 'sample_ankle.json'), 'utf8'));
@@ -17,7 +18,7 @@ const fetchStub = async url => { if (/sample_ankle/.test(url)) return { json: as
 const P = studio({ extra: { fetch: fetchStub } });
 const St = await ready(P); const T = P.g.THREE, S = St.S, W = P.g;
 P.eval(`window.CaseType = (() => { let cur = 'mandible'; return { get: () => cur, set(x) { if (x !== cur) { cur = x; Studio.emit('caseType', x); } } }; })();`);
-P.load('audit.js'); P.load('ankle.js'); P.load('anklm.js'); P.load('ankscrew.js');
+P.load('audit.js'); P.load('ankle.js'); P.load('anklm.js'); P.load('ankguide.js'); P.load('ankscrew.js');
 const A = W.Ankle, SC = W.AnkScrew, G = P.eval('G');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const until = async (f, ms = 120000) => { const t0 = Date.now(); while (!f()) { if (Date.now() - t0 > ms) throw new Error('timeout'); await sleep(50); } };
@@ -109,8 +110,36 @@ test('saved with the plan and restored; templates give a reason when the anatomy
   x.forEach((s, k) => { const t = SC.screws()[k]; assert.equal(JSON.stringify([t.kind, t.piece, t.D, t.L]), JSON.stringify([s.kind, s.piece, s.D, s.L])); });
   W.PlanExt.ankScrews.set([{ kind: 'bad' }, { kind: 'mm', piece: 'X', c: [0, 0], E: [0, 0, 0], d: [0, 0, 1] }]); assert.equal(SC.screws().length, 0);
   W.PlanExt.ankScrews.set(x);
-  fs.mkdirSync(path.join(REPO, 'tests', 'realct'), { recursive: true });
-  W.__screwAcc = acc;
+});
+
+// the hole's axis measured on the guide mesh: the hole wall's vertices (within the hole radius + 0.3 mm of the planned
+// axis, outside the bone up to the sleeve top), their principal direction
+function holeAxis(mesh, s, r) {
+  const w = SC.world(s), p = A.pieces().find(q => q.name === s.piece), E = new T.Vector3(...s.E), d = new T.Vector3(...s.d).normalize();
+  const pos = mesh.geometry.attributes.position.array, pts = [];
+  for (let i = 0; i < pos.length; i += 3) {
+    const x = new T.Vector3(pos[i], pos[i + 1], pos[i + 2]), q = x.clone().sub(E), t = q.dot(d), rad = q.clone().addScaledVector(d, -t).length();
+    if (t < -25 || t > -0.5 || rad > r + 0.3) continue; pts.push(x);
+  }
+  void w; void p;
+  if (pts.length < 30) return null;
+  const c = pts.reduce((a, b) => a.add(b), new T.Vector3()).multiplyScalar(1 / pts.length), C = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+  pts.forEach(x => { const q = x.clone().sub(c).toArray(); for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) C[3 * i + j] += q[i] * q[j]; });
+  let e = d.toArray(); for (let it = 0; it < 100; it++) { const f = [0, 1, 2].map(i => C[3 * i] * e[0] + C[3 * i + 1] * e[1] + C[3 * i + 2] * e[2]), l = Math.hypot(...f); e = f.map(x => x / l); }
+  return { a: Math.acos(Math.min(1, Math.abs(new T.Vector3(...e).dot(d)))) * 180 / Math.PI, n: pts.length };
+}
+test('drill guide (M6.2): sleeves along the medial malleolus screws; each hole axis within 0.5° of the plan', async () => {
+  const r = await SC.drillGuide('Medial malleol'); assert.ok(r.ok, r.why);
+  const dg = SC.drillInfo(); assert.ok(dg); assert.equal(dg.info.pieces, 1, `pieces ${dg.info.pieces}`);
+  dg.info.sleeves.forEach(sl => assert.ok(sl.ok, JSON.stringify(sl)));
+  const ms = SC.screws().filter(s => s.piece === 'Medial malleol');
+  ms.forEach((s, k) => { const h = holeAxis(dg.mesh, s, dg.scs[k].sc.d / 2); assert.ok(h, 'hole wall found'); console.log(`  (hole ${k + 1}: ${h.a.toFixed(2)}° off the plan, ${h.n} wall vertices)`); assert.ok(h.a < 0.5, `${h.a}°`); acc[`hole_deg_${k}`] = h.a; });
+  assert.ok(!SC.drillChecks().some(c => c[0] === 'crit'), JSON.stringify(SC.drillChecks()));
+  assert.equal(SC.drillFiles().length, 1);
+  // a screw moved: the guide is stale
+  SC.set(ms[0].id, 'L', ms[0].L - 4); assert.equal(SC.drillInfo(), null); assert.ok(SC.drillChecks().some(c => /yeniden oluşturun/.test(c[2])));
+  SC.set(ms[0].id, 'L', ms[0].L);
 });
 
 await run('ankle M4/M5 (screw plan and checks)');
+saveAcc('ankscrew', acc);

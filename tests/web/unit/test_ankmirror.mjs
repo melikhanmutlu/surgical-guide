@@ -12,6 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { test, run, assert, near } from './lib/t.mjs';
+import { saveAcc } from './lib/acc.mjs';
 import { studio, ready, REPO } from './lib/harness.mjs';
 
 const OUT = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ankbil-')), 'bil.json');
@@ -74,7 +75,7 @@ test('the fitted motions are piece motions: saved with the plan', () => {
 test('panel: the mirror fit and the align button are shown', () => {
   W.AnkMirror && P.doc.getElementById('ankMirror');
   const box = $('ankMirror'); assert.ok(box && /RMS/.test(box.innerHTML), box && box.innerHTML);
-  fs.writeFileSync(path.join(path.dirname(OUT), 'acc.json'), JSON.stringify(acc));
 });
 
 await run('ankle M3 (mirror of the healthy side)');
+saveAcc('ankmirror', acc);

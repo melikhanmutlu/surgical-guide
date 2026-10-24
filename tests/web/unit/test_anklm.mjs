@@ -10,6 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { test, run, assert, near } from './lib/t.mjs';
+import { saveAcc } from './lib/acc.mjs';
 import { studio, ready, REPO } from './lib/harness.mjs';
 
 const ANKLE = JSON.parse(fs.readFileSync(path.join(REPO, 'web', 'sample_ankle.json'), 'utf8'));
@@ -101,8 +102,7 @@ test('no warnings before anything is moved (the CT position is the fracture, not
 test('speed: both poses measured in under 1.5 s', () => {
   reduceAll(); const t0 = Date.now(); LM.compute(false); LM.compute(true); const ms = Date.now() - t0;
   console.log(`  (two poses ${ms} ms)`); assert.ok(ms < 1500, `${ms} ms`);
-  fs.mkdirSync(path.join(REPO, 'tests', 'realct'), { recursive: true });
-  W.__ankAcc = acc;
 });
 
 await run('ankle M2 (landmarks and joint measures)');
+saveAcc('anklm', acc);

@@ -194,6 +194,67 @@ window.AnkScrew = (function () {
   }
   function changed() { cache = null; St.emit('changed'); refresh(); }
 
+  // ---------- drill guide (plan M6.2): sleeves along the planned screws of one piece ----------
+  // the drill for each screw diameter (solid screws: 2.7 -> 2.0, 3.5 -> 2.5, 4.0 cancellous -> 2.5, 4.5 -> 3.2 mm); the
+  // hole and the sleeve follow the cutting guide's material and sleeve choice (AnkGuide.holeOf)
+  const DRILL = { 2.7: 2.0, 3.5: 2.5, 4.0: 2.5, 4.5: 3.2 };
+  let dg = null;          // { key, piece, mesh, info, req }
+  const dgKey = name => JSON.stringify(screws.filter(z => z.piece === name)) + JSON.stringify(window.AnkGuide && AnkGuide.state() ? [AnkGuide.state().prm.mat, AnkGuide.state().prm.sleeve] : null);
+  const SLEEVE_H = 10;
+  async function drillGuide(name) {
+    const mine = screws.filter(s => s.piece === name), p = mine.length ? anchor(mine[0]) : null;
+    if (!p) return { why: 'Bu parçada vida yok.' };
+    const ent = mine.map(s => V(...s.E)), dirs = mine.map(s => V(...s.d).normalize());
+    const P0 = ent.reduce((a, b) => a.add(b), V()).multiplyScalar(1 / ent.length), e = 0.6;
+    // the seat normal: the bone's outward normal averaged over the entries
+    const n = ent.reduce((acc, x) => acc.add(V(A.sdfAt(p, V(x.x + e, x.y, x.z)) - A.sdfAt(p, V(x.x - e, x.y, x.z)), A.sdfAt(p, V(x.x, x.y + e, x.z)) - A.sdfAt(p, V(x.x, x.y - e, x.z)), A.sdfAt(p, V(x.x, x.y, x.z + e)) - A.sdfAt(p, V(x.x, x.y, x.z - e))).normalize()), V());
+    if (!(n.lengthSq() > 1e-6)) dirs.forEach(d => n.sub(d)); n.normalize();
+    // the guide's centre on the bone surface under the entries' mean
+    let P = null; const top = P0.clone().addScaledVector(n, 15); for (let t = 0; t < 40; t += 0.25) { const x = top.clone().addScaledVector(n, -t); if (A.sdfAt(p, x) <= 0) { P = x; break; } }
+    P = P || P0;
+    const ax = window.AnkGuide && AnkGuide.boneAxis ? AnkGuide.boneAxis(p) : V(0, 0, 1);
+    let u = ax.clone().addScaledVector(n, -ax.dot(n)); if (u.lengthSq() < 0.05) u = V(1, 0, 0).addScaledVector(n, -n.x); u.normalize();
+    const v = V().crossVectors(n, u).normalize();
+    let su = 0, sv = 0; ent.forEach(x => { const d = V().subVectors(x, P); su = Math.max(su, Math.abs(d.dot(u))); sv = Math.max(sv, Math.abs(d.dot(v))); });
+    const gq = window.AnkGuide ? AnkGuide.state() : null, prm = gq ? gq.prm : { mat: 'unset', sleeve: 'printed' };
+    const mat = window.AnkGuide ? (AnkGuide.MAT[prm.mat] || AnkGuide.MAT.unset) : { clear: 0.3, fit: 0.1, minWall: 2.5 };
+    const scs = mine.map((s, k) => { const h = window.AnkGuide ? AnkGuide.holeOf(DRILL[s.D] || 2.5, prm) : { d: (DRILL[s.D] || 2.5) + 0.1, D: (DRILL[s.D] || 2.5) + 2.5 }; return { entry: ent[k], dir: dirs[k], sc: { d: h.d, D: Math.max(h.D, h.d + 3), sleeveH: SLEEVE_H, len: s.L } }; });
+    const g = Object.assign({}, St.G_DEFAULT, { L: Math.min(60, Math.max(20, 2 * su + 14)), W: Math.min(40, Math.max(16, 2 * sv + 14)), wrap: 5, wall: Math.max(3, mat.minWall), clear: mat.clear, fit: 0, uc: 0, vc: 0, split: 0, rot: 0, roll: 0, bar: 0, stopP: 0, stopT: 0, stopB: 0, wrapU: null, boss: 0 });
+    const occ = x => { const sd = A.sdfAt(p, x); return sd === Infinity ? 0 : Math.max(0, Math.min(1, 0.5 - sd / 0.8)); };
+    St.busy(true, xl('Matkap guide\'ı oluşturuluyor…'), { f: 0, restart: true }); await St.sleep();
+    try {
+      const r = await St.buildGuide({ g, P, u, v, n, pls: [], scs, bone: x => A.sdfAt(p, x) <= 0, field: occ, h: 0.4 });
+      dg = { key: dgKey(name), piece: p, name, mesh: r.mesh, scs, req: { g, P, u, v, n, pls: [], scs, wrapProfile: r.result.wrapProfile, seatDir: r.result.seatDir, gap: null },
+        info: { volume: r.result.volume, contact: r.result.contact, pieces: r.result.pieces, seat: r.result.seat, sleeves: r.result.screwInfo.map((si, k) => ({ id: mine[k].id, ok: !!si.ok, inBone: si.inBone || 0, d: scs[k].sc.d })) } };
+      showDG(); St.emit('changed'); return { ok: true };
+    } catch (e) { return { why: String(e.message || e) }; }
+    finally { St.busy(false); render(); }
+  }
+  const dgLive = () => !!(dg && dg.key === dgKey(dg.name) && on() && A.pieces().includes(dg.piece));
+  function showDG() {
+    if (!dgLive()) { St.setPart('ankDrill', null, null); return; }
+    const g = new T.Group(), m = dg.mesh; m.position.copy(dg.piece.c).negate(); g.add(m);
+    const pv = dg.piece.pivot; if (pv) { g.position.copy(pv.position); g.quaternion.copy(pv.quaternion); }
+    St.setPart('ankDrill', xl('Matkap guide\'ı'), g, 0x6aa84f); St.renderParts && St.renderParts();
+  }
+  // the guide's files, in the plan frame (moved with its piece, as the cutting guide)
+  function drillFiles() {
+    if (!dgLive()) return [];
+    const stl = St.stlOf(dg.mesh), data = window.AnkGuide && AnkGuide.toPlan ? AnkGuide.toPlan(stl, dg.piece) : stl;
+    return [{ name: 'guide/vida_matkap_guide_onizleme_BASMAYIN.stl', data }];
+  }
+  function drillChecks() {
+    if (!on() || !dg) return [];
+    if (!dgLive()) return [['warn', 'Uyarı', xl('Vidalar ya da parçalar değişti; matkap guide\'ını yeniden oluşturun.'), 'ank']];
+    const o = [];
+    dg.info.sleeves.forEach(sl => { const s = screws.find(z => z.id === sl.id); if (!sl.ok && s) o.push(['crit', 'Kritik', xl(`${label(s)}: kovanın altında guide gövdesi yok ya da kemiğe ulaşmıyor.`), 'ank']); });
+    if (dg.info.pieces > 1) o.push(['warn', 'Uyarı', xl('Matkap guide\'ı birden fazla parçaya bölündü.'), 'ank']);
+    if (dg.info.seat && dg.info.seat.ok && !dg.info.seat.free) o.push(['crit', 'Kritik', xl('Matkap guide\'ı hiçbir yönde takılamıyor.'), 'ank']);
+    o.push(['warn', 'Uyarı', xl('Matkap guide\'ının yalnız tarayıcı önizlemesi var (dosya adı "BASMAYIN"); sunucuda üretim STL\'i bu sürümde yalnız kesi guide\'ı için alınır.'), 'ank']);
+    return o;
+  }
+  (window.ExtraChecks = window.ExtraChecks || []).push(drillChecks);
+
   // ---------- 3D: one cylinder per screw, coloured by its worst check ----------
   function show() {
     if (!on() || !screws.length) { St.setPart('ankScrews', null, null); St.renderParts && St.renderParts(); St.render(); return; }
@@ -234,6 +295,7 @@ window.AnkScrew = (function () {
     box.innerHTML = `<p class="hint more">${xl('Vidalar redükte konumda planlanır ve girdikleri parçayla birlikte hareket eder. Boy önerisi: vida yönünde karşı kortekse kadar olan kemik eksi 2 mm, 2 mm adımlarla. Şablonlar literatürden örnektir; cerrah seçer.')}</p>
       <div class="btns"><button id="asMM">${xl('Medial malleol (2 vida)')}</button><button id="asPost">${xl('Posterior malleol (2 vida)')}</button><button id="asSynd">${xl('Sindesmoz')}</button>
       <button id="asPick" aria-pressed="${picking}">${picking ? xl('Kemiğe tıklayın…') : xl('Tıklayarak ekle')}</button></div>
+      ${screws.length ? `<div class="btns">${[...new Set(screws.map(z => z.piece))].map(nm => `<button data-dg="${esc(nm)}">${xl('Matkap guide\'ı')}: ${esc(xl(nm))}</button>`).join('')}</div>${dgLive() ? `<p class="hint">${xl('Matkap guide\'ı')} (${esc(xl(dg.name))}): ${fmt(dg.info.volume / 1000, 1)} cm³ · ${xl('kovan')} ${dg.info.sleeves.filter(x => x.ok).length}/${dg.info.sleeves.length}</p>` : ''}` : ''}
       ${screws.length ? `<div class="tbl"><table><thead><tr><th>${xl('Vida')}</th><th>${xl('Giriş')}</th><th>${xl('Çap')}</th><th>${xl('Boy (mm)')}</th><th>${xl('Karşı korteks (mm)')}</th><th>${xl('Geçtiği parçalar')}</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : `<p class="hint">${xl('Henüz vida yok.')}</p>`}`;
     const tp = (id, k) => $(id) && $(id).addEventListener('click', () => { const r = template(k); if (r.why) St.alertMsg(xl(r.why)); });
     tp('asMM', 'mm'); tp('asPost', 'post'); tp('asSynd', 'synd');
@@ -241,9 +303,10 @@ window.AnkScrew = (function () {
     box.querySelectorAll('[data-sd]').forEach(el => el.addEventListener('change', () => setScrew(+el.dataset.sd, 'D', el.value)));
     box.querySelectorAll('[data-sl]').forEach(el => el.addEventListener('change', () => setScrew(+el.dataset.sl, 'L', el.value)));
     box.querySelectorAll('[data-sa]').forEach(el => el.addEventListener('click', () => setScrew(+el.dataset.sa, 'auto')));
+    box.querySelectorAll('[data-dg]').forEach(el => el.addEventListener('click', async () => { const r = await drillGuide(el.dataset.dg); if (r.why) St.alertMsg(xl(r.why)); }));
     box.querySelectorAll('[data-sx]').forEach(el => el.addEventListener('click', () => remove(+el.dataset.sx)));
   }
-  function refresh() { render(); show(); }
+  function refresh() { render(); show(); showDG(); }
 
   (window.PlanExt = window.PlanExt || {}).ankScrews = {
     label: 'Malleol vidaları',
@@ -265,5 +328,5 @@ window.AnkScrew = (function () {
   render();
 
   const done = () => screws.length > 0 && !checks().some(c => c[0] === 'crit');
-  return { on, issues, template, add, clickAt, remove, set: setScrew, suggest, march, analyse, checks, screws: () => screws.map(s => Object.assign({}, s)), world, done, segDist, LIM, KIND, render };
+  return { on, issues, drillGuide, drillFiles, drillChecks, drillInfo: () => (dgLive() ? dg : null), DRILL, template, add, clickAt, remove, set: setScrew, suggest, march, analyse, checks, screws: () => screws.map(s => Object.assign({}, s)), world, done, segDist, LIM, KIND, render };
 })();

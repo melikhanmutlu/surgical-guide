@@ -16,7 +16,7 @@ const fetchStub = async url => { if (/sample_ankle_ct\./.test(url)) return { jso
 const P = studio({ extra: { fetch: fetchStub } });
 const St = await ready(P); const T = P.g.THREE, S = St.S, W = P.g, G = P.eval('G');
 P.eval(`window.CaseType = (() => { let cur = 'mandible'; return { get: () => cur, set(x) { if (x !== cur) { cur = x; Studio.emit('caseType', x); } } }; })();`);
-P.load('audit.js'); P.load('ankle.js'); P.load('anklm.js'); P.load('ankmirror.js'); P.load('ankguide.js');
+P.load('audit.js'); P.load('ankle.js'); P.load('anklm.js'); P.load('ankmirror.js'); P.load('ankguide.js'); P.load('metrics.js'); P.load('refcmp.js');
 const A = W.Ankle, AG = W.AnkGuide;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const until = async (f, ms = 300000) => { const t0 = Date.now(); while (!f()) { if (Date.now() - t0 > ms) throw new Error('timeout'); await sleep(50); } };
@@ -114,6 +114,27 @@ test('package: preview named BASMAYIN, the wedge, and cerceve.json with the fram
   const names = AG.files().map(f => f.name); assert.deepEqual([...names], ['guide/kesi_guide_onizleme_BASMAYIN.stl', 'guide/kama.stl']);
   const fr = JSON.parse(A.frameJSON()); assert.match(fr.frame, /LPS/); assert.ok(fr.parcalar.some(p => p.ad === 'Talus'));
   assert.ok(fr.parcalar.every(p => p.t.length === 3 && p.q.length === 4));
+});
+
+// plan M6.1 on the real CT: the automatic placement gives a guide with no critical check
+test('automatic placement on the real CT: no critical check', async () => {
+  const keep = AG.state(); const r = AG.suggest(); assert.ok(!r.why, r.why); await AG.make();
+  const crit = AG.checks().filter(c => c[0] === 'crit'); console.log(`  (suggested ${r.height} mm over the dome, turned ${r.angle}°, cover ${(r.cover * 100).toFixed(0)} %; seat p50 ${AG.info().fit && AG.info().fit.p50.toFixed(2)} p99 ${AG.info().fit && AG.info().fit.p99.toFixed(2)} mm)`);
+  assert.equal(crit.length, 0, JSON.stringify(crit));
+  W.PlanExt.ankGuide.set(keep); await AG.make();
+});
+// plan M9 on the real CT: the reference guide made in another program (anonymised project data, not in the repository)
+const REF = '/mnt/project-files/surgical-guide-prototype/audit/denetim5/veri/malleol_ref_guide.stl', REFW = REF.replace('guide.stl', 'wedge.stl');
+// The project's reference guide lies 13-20 mm off every bone of this CT (in LPS and in RAS) and no rigid pose seats more
+// than a tenth of it: it was not made on this CT (or not in its coordinates). The comparison must say so, not force a fit.
+test('reference guide (when the project file is there): seated on the bone, or reported as not from this CT', () => {
+  if (!fs.existsSync(REF)) { console.log('  (reference guide file not present: skipped)'); return; }
+  const r = W.RefCmp.load(new Uint8Array(fs.readFileSync(REF)), 'ref.stl'); assert.ok(r, 'result');
+  if (fs.existsSync(REFW)) W.RefCmp.loadWedge(new Uint8Array(fs.readFileSync(REFW)), 'refw.stl');
+  if (!r.a) { console.log(`  (reference: ${r.why})`); assert.match(r.why, /aynı BT/); return; }
+  const a = r.a, c = r.cmp;
+  console.log(`  (reference: on ${a.piece.name}, ${a.same ? 'as loaded (same CT)' : `moved ${a.move.toFixed(1)} mm ${a.angle.toFixed(1)}°`}, clearance ${a.off.toFixed(2)} mm, spread median ${a.med.toFixed(2)} p90 ${a.p90.toFixed(2)} mm, n ${a.n}; vs studio guide: centres ${c ? c.centre.toFixed(1) : '-'} mm)`);
+  assert.ok(a.med < 1, `median ${a.med}`);
 });
 
 await run('ankle, real CT sample');

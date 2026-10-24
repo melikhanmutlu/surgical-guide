@@ -5,7 +5,9 @@
 // H7 çene tipine dönünce çene örneği, kondil işaretleri ve 8 adım geri gelir; H8 açılış (?ornek yok) malleol tipiyle anonim
 // gerçek ayak bileği BT örneğini açar: tibia, fibula, talus bulunur, atel parça sayılmaz; H9 gerçek örnekte distal tibia ön
 // yüzüne (talus kubbesinin 30 mm üstü) kesi guide'ı: gövde, yarık, iki K-teli, kama, kesi ve teller eklemden > 5 mm, sunucudan
-// su geçirmez üretim STL'i, pakette guide dosyası üretim STL'inden.
+// su geçirmez üretim STL'i, pakette guide dosyası üretim STL'inden; H10 (plan M6-M9) otomatik yerleşim, malzeme seçimi,
+// guide ve kama tek tek onaylanır, paket cerceve.json'da her STL'in SHA-256'sı dosyanın kendisiyle aynı, rapor özetleri
+// listeler, referans guide kıyası paneli görünür.
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -20,14 +22,14 @@ const H = require('./lib');
   const pieces = () => page.waitForFunction(() => window.Ankle && Ankle.pieces().length > 0 && !(Studio.loadBusy && Studio.loadBusy()), null, { timeout: 180000 });
   await h.goto(); await h.idle();
 
-  await h.run('H1', 'Vaka tipi', 'Çene → malleol → çene → malleol', 'Adımlar: st1, st2, stRed, stAnkG, st7, stAnkOut; çene tipinde st1..st8; örnek vaka tipe göre değişir', async () => {
+  await h.run('H1', 'Vaka tipi', 'Çene → malleol → çene → malleol', 'Adımlar: st1, st2, stRed, stAnkS, stAnkG, st7, stAnkOut; çene tipinde st1..st8; örnek vaka tipe göre değişir', async () => {
     await page.selectOption('#caseType', 'ankle'); await pieces(); await h.idle();
     const a = await order(), srcA = await h.ev(() => Studio.S.source.name);
     await page.selectOption('#caseType', 'mandible'); await page.waitForFunction(() => Studio.S.source && Studio.S.source.name === 'mandible' && !Studio.loadBusy(), null, { timeout: 180000 }); await h.idle();
     const m = await order();
     await page.selectOption('#caseType', 'ankle'); await pieces(); await h.idle();
     const b = await order();
-    const wantA = ['st1', 'st2', 'stRed', 'stAnkG', 'st7', 'stAnkOut'], wantM = ['st1', 'st2', 'st3', 'st4', 'st5', 'st6', 'st7', 'st8'];
+    const wantA = ['st1', 'st2', 'stRed', 'stAnkS', 'stAnkG', 'st7', 'stAnkOut'], wantM = ['st1', 'st2', 'st3', 'st4', 'st5', 'st6', 'st7', 'st8'];
     const ok = JSON.stringify(a) === JSON.stringify(wantA) && JSON.stringify(b) === JSON.stringify(wantA) && JSON.stringify(m) === JSON.stringify(wantM) && srcA === 'ankle';
     return { pass: ok, actual: JSON.stringify({ a, m, b, srcA }), evidence: await h.shot('H1_tip') };
   });
@@ -128,6 +130,32 @@ const H = require('./lib');
     const ok = r.pieces === 1 && r.pins.every(x => x >= 8) && Math.abs(r.open - r.depth * Math.tan(8 * Math.PI / 180)) < 0.1 && r.prod && r.prod.ok && r.prod.wt && r.prod.bodies === 1 && Math.abs(r.prod.vol - r.vol) / r.vol < 0.15 && r.crit === 0 && ms < 15000
       && r.joint && r.joint.slot > 5 && r.joint.pins.every(x => x > 5) && r.files[0] === 'guide/kesi_guide.stl';
     return { pass: ok, actual: JSON.stringify({ ...r, ms }), evidence: await h.shot('H9_guide') };
+  });
+
+  await h.run('H10', 'Öğe onayları ve özetler', 'Gerçek örnekte otomatik yerleşim, PA12 malzemesi, guide ve kamayı ayrı ayrı onayla, paketi indir', 'Kritik yok; paket bekler, iki öğe onaylanınca hazır; cerceve.json\'daki SHA-256 her STL\'in kendisiyle aynı; raporda dosya özetleri; referans kıyası paneli var', async () => {
+    await page.evaluate(() => { document.getElementById('stAnkG').open = true; }); await h.sleep(400);
+    const sug = await h.ev(() => { const r = AnkGuide.suggest(); AnkGuide.setMat('pa12'); return r; });
+    await h.ev(() => AnkGuide.make()); await h.idle();
+    const crit = await h.ev(() => window.ExtraChecks.flatMap(f => f()).filter(c => c[0] === 'crit').map(c => c[2]));
+    await page.evaluate(() => { document.getElementById('st7').open = true; }); await h.sleep(400);
+    await page.fill('#surgeon', 'Dr Deneme');
+    if (!(await h.ev(() => Ankle.approved()))) { await page.click('#ankOk'); await h.sleep(300); }
+    // the items first (the surgeon's plan approval waits for them), then the engineer and the surgeon
+    const before = await h.ev(() => ({ ready: Ankle.packReady(), items: Ankle.items().map(x => x.k) }));
+    for (const k of before.items) { await page.click(`[data-ank-item="${k}"]`); await h.sleep(300); }
+    await page.fill('#au_eng_n', 'Muh Deneme'); await page.click('[data-a="onay"][data-r="eng"]'); await h.sleep(400);
+    await page.click('[data-a="onay"][data-r="sur"]'); await h.sleep(600);
+    const after = await h.ev(() => Ankle.packReady());
+    await page.evaluate(() => { document.getElementById('stAnkOut').open = true; }); await h.sleep(400);
+    const msg = await h.ev(() => ({ t: document.getElementById('ankPackMsg').textContent, dis: document.getElementById('ankPack').disabled, crit: Studio.S.crit, red: Ankle.approved(), items: Ankle.items().map(x => [x.k, Ankle.itemOk(x)]) }));
+    if (msg.dis) return { pass: false, actual: JSON.stringify({ sug, crit, before, after, msg }), evidence: await h.shot('H10_onay') };
+    const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 120000 }), page.click('#ankPack')]);
+    const fp = path.join(h.outDir, 'H10_paket.zip'); await dl.saveAs(fp);
+    const list = H.zipList(fp), fr = JSON.parse(H.zipRead(fp, 'cerceve.json').toString('utf8')), rep = H.zipRead(fp, 'rapor.html').toString('utf8');
+    const stls = list.filter(n => /\.stl$/.test(n)), bad = stls.filter(n => fr.sha256[n] !== require('crypto').createHash('sha256').update(H.zipRead(fp, n)).digest('hex') || !rep.includes(fr.sha256[n]));
+    const refBox = await h.ev(() => !!document.getElementById('ankRef') && document.getElementById('ankRef').innerHTML.length > 0);
+    const ok = !sug.why && crit.length === 0 && !before.ready && before.items.includes('guide') && before.items.includes('wedge') && after && stls.some(n => /^guide\/kesi_guide/.test(n)) && bad.length === 0 && refBox;
+    return { pass: ok, actual: JSON.stringify({ sug, crit, before, after, stls, bad, refBox }), evidence: await h.shot('H10_onay') };
   });
 
   await h.done();

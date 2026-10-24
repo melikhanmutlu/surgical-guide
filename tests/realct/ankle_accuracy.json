@@ -1,0 +1,104 @@
+{
+ "not": "Örnek eşikler (araştırma değeri, klinik karar değil). Sentetik fantomlarda ölçüldü.",
+ "tarih": "2026-10-24",
+ "satirlar": [
+  {
+   "ad": "Arka basamak, redükte (sentetik)",
+   "olcum": -0.19,
+   "esik": 0.3,
+   "birim": "mm",
+   "gecti": true
+  },
+  {
+   "ad": "2 mm basamak ölçümü hatası",
+   "olcum": -0.059,
+   "esik": 0.3,
+   "birim": "mm",
+   "gecti": true
+  },
+  {
+   "ad": "2 mm MCS açılması ölçüm hatası",
+   "olcum": -0.172,
+   "esik": 0.3,
+   "birim": "mm",
+   "gecti": true
+  },
+  {
+   "ad": "2 mm TFCS açılması ölçüm hatası",
+   "olcum": -0.134,
+   "esik": 0.3,
+   "birim": "mm",
+   "gecti": true
+  },
+  {
+   "ad": "Ayna şablonu RMS",
+   "olcum": 0.05,
+   "esik": 0.5,
+   "birim": "mm",
+   "gecti": true
+  },
+  {
+   "ad": "Aynaya hizalama, parça yüzeyi",
+   "olcum": 0.455,
+   "esik": 0.5,
+   "birim": "mm",
+   "gecti": true
+  },
+  {
+   "ad": "Aynaya hizalama, lateral malleol merkezi",
+   "olcum": 0.127,
+   "esik": 0.5,
+   "birim": "mm",
+   "gecti": true
+  },
+  {
+   "ad": "Vida boyu, karşı korteks farkı",
+   "olcum": 0.4,
+   "esik": 1,
+   "birim": "mm",
+   "gecti": true
+  },
+  {
+   "ad": "Matkap guide deliği ekseni",
+   "olcum": 0.347,
+   "esik": 0.5,
+   "birim": "°",
+   "gecti": true
+  },
+  {
+   "ad": "Tibia ekseni",
+   "olcum": 0.256,
+   "esik": 3,
+   "birim": "°",
+   "gecti": true
+  },
+  {
+   "ad": "Guide oturma yüzü p50",
+   "olcum": 0.042,
+   "esik": 0.3,
+   "birim": "mm",
+   "gecti": true
+  },
+  {
+   "ad": "Kama açısı (8°) STL'de",
+   "olcum": -0.02,
+   "esik": 0.2,
+   "birim": "°",
+   "gecti": true
+  },
+  {
+   "ad": "Kama açısı (14°) STL'de",
+   "olcum": -0.038,
+   "esik": 0.2,
+   "birim": "°",
+   "gecti": true
+  },
+  {
+   "ad": "Referans guide hizalaması (2 mm kalkık, 5° eğik)",
+   "olcum": 0.851,
+   "esik": 1,
+   "birim": "mm",
+   "gecti": true
+  }
+ ]
+}
