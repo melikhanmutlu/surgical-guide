@@ -2930,11 +2930,23 @@
     if (!name) { $('apprMsg').textContent = 'Önce onaylayan cerrahın adını yazın.'; $('surgeon').focus(); return; }
     const critRef = new Set((S.checkList || []).filter(c => c[0] === 'crit').map(c => c[3]));
     const items = [['lesion', S.lesion, 'Rezeksiyon aralığı']].concat(S.planes.map((p, i) => ['p' + i, p, `Kesi ${i + 1}`]), S.screws.map((sc, i) => ['s' + i, sc, `Vida ${i + 1}`]));
+    // C5: an item with a warning is asked about on its own (its warnings shown); a yes is written to the audit record
+    const warns = new Map(); (S.checkList || []).filter(c => c[0] === 'warn' && c[3]).forEach(c => { if (!warns.has(c[3])) warns.set(c[3], []); warns.get(c[3]).push(c[2]); });
     let n = 0; const left = [];
-    items.forEach(([ref, o, label]) => { if (o.ok) return; if (critRef.has(ref)) { left.push(label); return; } stamp(o); n++; });
+    items.forEach(([ref, o, label]) => {
+      if (o.ok) return; if (critRef.has(ref)) { left.push(label); return; }
+      const w = warns.get(ref);
+      if (w) {
+        if (!confirm(`${xl(label)}: ${w.join(' ')}\n\n${xl('Bu öğeyi uyarıya rağmen onaylıyor musunuz?')}`)) { left.push(label); return; }
+        stamp(o); n++;
+        if (window.Audit && Audit.note) Audit.note('sur', name, `${xl('Uyarıya rağmen onaylandı')}: ${xl(label)}: ${w.join(' ')}`);
+        return;
+      }
+      stamp(o); n++;
+    });
     if (window.Fibula && Fibula.active() && !Fibula.approved()) { if ($('fibApprove').disabled) left.push('Fibula planı'); else { $('fibApprove').click(); n++; } }
     renderElements(); syncLesion(); renderAppr(); renderJSON(); emit('changed');
-    $('apprMsg').textContent = left.length ? xl(`${n} öğe onaylandı. Onaylanamayan (kritik kontrol ya da hazır olmayan fibula guide'ı): `) + left.map(xl).join(', ') + '.' : n ? xl(`${n} öğe onaylandı.`) : '';
+    $('apprMsg').textContent = left.length ? xl(`${n} öğe onaylandı. Onaylanmayan (kritik kontrol, onaylanmayan uyarı ya da hazır olmayan fibula guide'ı): `) + left.map(xl).join(', ') + '.' : n ? xl(`${n} öğe onaylandı.`) : '';
   }
   // the package lock as renderAppr last set it: the top bar status (ui.js) reads this instead of counting on its own, so it
   // never shows "Onay bekliyor (1)" over an open package or "Onaylı plan" over a locked one; every lock change is announced

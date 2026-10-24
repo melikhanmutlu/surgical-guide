@@ -179,5 +179,7 @@ window.Audit = (function () {
   let t = null;
   ['changed', 'parts', 'planApplied'].forEach(ev => bus.addEventListener(ev, () => { clearTimeout(t); t = setTimeout(render, 200); }));
   render();
-  return { log: () => log, verify, planHash, status, sha256, chain: () => chain, staleOnOpen: () => [...staleOnOpen] };
+  // a note written by another part of the studio (C5: an item approved in spite of a warning); never on a broken chain
+  function noteBy(role, name, comment) { if (!chain.ok || !name || !comment) return false; append(role, 'not', name, comment); render(); return true; }
+  return { log: () => log, verify, planHash, status, sha256, chain: () => chain, staleOnOpen: () => [...staleOnOpen], note: noteBy };
 })();

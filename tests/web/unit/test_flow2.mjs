@@ -95,6 +95,22 @@ test('Tüm öğeleri onayla: one action approves every item; without a name noth
   S.checkList = [];
 });
 
+test('C5: "Tüm öğeleri onayla" asks about a warned item on its own; a no leaves it open, a yes is written to the audit record', async () => {
+  await plan(); St.unapproveAll(); S.crit = 0; S.qc = []; $('surgeon').value = 'Dr X';
+  S.checkList = [['warn', 'Uyarı', 'Kesi 2 yuvası bıçaktan 0,6 mm geniş.', 'p1']]; St.renderAppr();
+  const asked = []; W.confirm = t => { asked.push(t); return false; };
+  $('apprAll').click();
+  assert.equal(asked.length, 1, 'asked once, for the warned item'); assert.match(asked[0], /Kesi 2.*0,6 mm geniş/s);
+  assert.equal(S.planes[1].ok, false, 'a no leaves it open'); assert.ok(S.lesion.ok && S.planes[0].ok && S.screws.every(c => c.ok), 'the rest approved');
+  assert.match($('apprMsg').textContent, /Kesi 2/);
+  const n0 = W.Audit.log().length; W.confirm = () => true;
+  $('apprAll').click();
+  assert.equal(S.planes[1].ok, true);
+  const e = W.Audit.log()[n0]; assert.ok(e && e.action === 'not' && e.role === 'sur' && e.name === 'Dr X' && /Uyarıya rağmen onaylandı: Kesi 2: Kesi 2 yuvası/.test(e.comment), JSON.stringify(e));
+  assert.ok(W.Audit.chain().ok);
+  S.checkList = []; W.confirm = () => true;
+});
+
 test('reports: the engineer and the surgeon are printed with their approval times; production state and footer match the package', async () => {
   await plan(); S.crit = 0; S.qc = []; $('surgeon').value = 'Dr X'; S.prod = null;
   [S.lesion, ...S.planes, ...S.screws].forEach(o => St.stamp(o)); signOff('eng', 'sur'); St.renderAppr(); await frames();
