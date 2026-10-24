@@ -124,6 +124,32 @@ test('E6 / D6: after "align screws to the plate" the summary counts them matched
   assert.equal($('plMsg').textContent, '', 'no "screws placed" next to "no plate line"');
 });
 
+// C10 (plan after P0): the guide's screw holes are drilled before the plate goes on. A guide hole next to a plate hole (not
+// on it) leaves the plate screw in the drill hole's wall: critical, with the align fix; one on the hole but tilted from
+// the plate screw's axis is a warning (the plate screw cannot take the pre-drilled track).
+test('C10: a guide screw beside a plate hole is critical, aligning clears it; on the hole but tilted 20 deg is a warning', async () => {
+  await volume(bar, BAR_BOX);
+  await plan(10, { L: 50 });
+  const rows = () => plateChecks().filter(c => /Guide vidası \d+('in deliği| plak deliğinin üstünde)/.test(c[2]));
+  W.Plate.placeScrews();
+  assert.equal(JSON.stringify(rows().map(r => r[2])), '[]', 'aligned: no conflict');
+  assert.equal(W.Plate.conflicts().hit.length, 0);
+  // 2 mm along the plate (2.4 mm plate screw, 2 mm guide screw): the holes overlap -> collides
+  S.screws[0].u += 2 * Math.sign(S.screws[0].u || 1);
+  const c = rows().filter(r => r[0] === 'crit');
+  assert.equal(c.length, 1, JSON.stringify(rows()));
+  assert.match(c[0][2], /Guide vidası 1'in deliği plak vidası \d+ ile çakışıyor/);
+  assert.equal(c[0][4][0][0], 'plateAlign');
+  assert.equal(W.Plate.summary().guide_deligiyle_cakisan, 1);
+  await St.runFix('plateAlign');
+  assert.equal(rows().length, 0, 'aligned again: ' + JSON.stringify(rows()));
+  // on the hole but tilted
+  S.screws[0].tiltV = 20;
+  const w = rows(); assert.equal(w.length, 1, JSON.stringify(w)); assert.equal(w[0][0], 'warn'); assert.match(w[0][2], /ekseni plak vidasından 2\d° farklı/);
+  S.screws[0].tiltV = 0;
+  // the report names the insertion order
+});
+
 test('two-guide layout: plate screws carry the piece of their side and land on their holes', async () => {
   await volume(bar, BAR_BOX);
   await plan(10, { L: 50, split: 2 });

@@ -314,6 +314,42 @@ window.Plate = (function () {
     last.holes.forEach(h => { h.matched = sw.some(s => s.entry && s.entry.distanceTo(h.p) < 1.5); });
   }
 
+  // ---------- guide screws and plate screws together (C10) ----------
+  // The guide's screw holes are drilled before the cuts; after the guide comes off the plate goes on. A guide screw hole
+  // on a plate hole is the pre-drilled hole of that plate screw (its axis must then follow the plate screw's, or the
+  // screw cannot take the track); a guide screw hole next to a plate hole, or a track crossing a plate screw's in the
+  // bone, leaves the plate screw in a hole wall or a bone bridge too thin to hold: critical. Only the screws in the
+  // remaining bone count (the resected piece goes with its holes).
+  const MATCH = 1.5, AXIS_WARN = 10, BRIDGE = 1.0, CROSS = 30;   // mm, °, mm (sample values)
+  function segDist(p0, d0, l0, p1, d1, l1) {
+    // closest distance between the segments p0 + s d0 (0..l0) and p1 + t d1 (0..l1), d0 / d1 unit
+    const r = p0.clone().sub(p1), b = d0.dot(d1), c = d0.dot(r), f = d1.dot(r), den = 1 - b * b;
+    let sN = den > 1e-9 ? Math.max(0, Math.min(l0, (b * f - c) / den)) : 0, t = Math.max(0, Math.min(l1, b * sN + f));
+    sN = Math.max(0, Math.min(l0, b * t - c));
+    return p0.clone().addScaledVector(d0, sN).sub(p1.clone().addScaledVector(d1, t)).length();
+  }
+  function conflicts(R = last) {
+    if (!R || !S.screws.length) return { hit: [], tilt: [], cross: [] };
+    const { A, B } = R.E, hit = [], tilt = [], cross = [], holes = R.holes.filter(h => h.usable && h.len);
+    St.screwsWorld().forEach((w, i) => {
+      if (!w.entry) return;
+      const sa = w.entry.clone().sub(A.p).dot(A.N), kept = sa < -A.w / 2 || (!R.E.condyle && w.entry.clone().sub(B.p).dot(B.N) > B.w / 2);
+      if (!kept) return;
+      const dg = w.sc.d || 2, lg = w.sc.len || 10;
+      holes.forEach((h, k) => {
+        const dp = h.n.clone().negate(), on = w.entry.distanceTo(h.p) < MATCH;
+        if (on) { const a = THREE.MathUtils.radToDeg(Math.acos(Math.max(-1, Math.min(1, w.dir.dot(dp))))); if (a > AXIS_WARN) tilt.push({ screw: i, hole: k, deg: a }); return; }
+        const gap = segDist(w.entry, w.dir, lg, h.p, dp, h.len) - (dg + P.d) / 2;
+        if (gap >= BRIDGE) return;
+        // side by side (axes within CROSS of each other): the plate screw lands in the drill hole's wall; across: the
+        // plate screw passes through the guide screw's track and loses part of its thread hold
+        const a = THREE.MathUtils.radToDeg(Math.acos(Math.min(1, Math.abs(w.dir.dot(dp)))));
+        (a < CROSS ? hit : cross).push({ screw: i, hole: k, gap, deg: a });
+      });
+    });
+    return { hit, tilt, cross };
+  }
+
   // ---------- files ----------
   function mergedSTL(objs) {
     const pos = [], idx = [];
@@ -349,6 +385,7 @@ window.Plate = (function () {
       bukme_deg: { kalinlik_yonunde: Math.round(last.bend.outPlane), kenar_yonunde: Math.round(last.bend.inPlane), burulma: Math.round(last.bend.twist) },
       kritik: critical().map(c => c.text),
       guide_ile_eslesen: last.holes.filter(h => h.matched).length, greft_eklemine_yakin: last.holes.filter(h => h.why === 'joint').length, grefte_tutunmuyor: last.holes.filter(h => h.why === 'graft').length,
+      guide_deligiyle_cakisan: conflicts().hit.length, guide_ekseni_farkli: conflicts().tilt.length, guide_deliginden_gecen: conflicts().cross.length,
       vida_listesi: screwList(),
       delikler: last.holes.map((h, i) => ({ no: i + 1, bolge: h.region, segment: h.seg == null ? null : h.seg + 1, kullanilabilir: h.usable, neden: h.why === 'cut' ? 'kesiye yakın' : h.why === 'joint' ? 'greft eklemine yakın' : h.why === 'graft' ? `greftte ${minBone()} mm kemik yok` : null, greftte_kemik_mm: h.graft == null ? null : h.graft,
         kesiye_mm: +h.dCut.toFixed(1), eklem_mm: Number.isFinite(h.dJoint) ? +h.dJoint.toFixed(1) : null, vida_boyu_mm: h.usable ? h.len : null, kemik_kalinligi_mm: +h.thick.toFixed(1), bikortikal: h.usable && h.len ? h.bi : null,
@@ -378,6 +415,11 @@ window.Plate = (function () {
     const mono = last.holes.filter(h => h.usable && h.len && !h.bi).length, none = last.holes.filter(h => h.usable && !h.len).length;
     if (mono) out.push(['info', 'Bilgi', xl(`${mono} plak deliğinde karşı korteks 30 mm içinde bulunamadı ya da standart boydan uzun; bu vidalar monokortikal kalır.`), 'guide']);
     if (none) out.push(['warn', 'Uyarı', `${none} kullanılabilir plak deliğinin altında kemik yok.`, 'guide']);
+    // C10: guide screw holes against the plate screws (critical: the plate screw would sit in a drill hole's wall)
+    const cf = conflicts(), hs = last.holes.filter(h => h.usable && h.len);
+    cf.hit.forEach(c => out.push(['crit', 'Kritik', xl(`Guide vidası ${c.screw + 1}'in deliği plak vidası ${last.holes.indexOf(hs[c.hole]) + 1} ile çakışıyor (aradaki kemik ${fmt(Math.max(0, c.gap), 1)} mm, en az ${fmt(BRIDGE, 1)} mm olmalı); plak vidası guide deliğinin duvarına gelir.`) + ' ' + xl('Guide vidalarını plak deliklerine hizalayın ya da vidayı kaydırın.'), 'guide', critical().length ? [] : [['plateAlign', 'Vidaları plağa hizala']]]));
+    cf.cross.forEach(c => out.push(['warn', 'Uyarı', xl(`Plak vidası ${last.holes.indexOf(hs[c.hole]) + 1} kemikte guide vidası ${c.screw + 1}'in deliğinden geçiyor (eksenler arası ${fmt(c.deg, 0)}°); plak vidası tutunmasının bir kısmını kaybeder.`) + ' ' + xl('Guide vidalarını plak deliklerine hizalayın ya da vidayı kaydırın.'), 'guide', critical().length ? [] : [['plateAlign', 'Vidaları plağa hizala']]]));
+    cf.tilt.forEach(c => out.push(['warn', 'Uyarı', xl(`Guide vidası ${c.screw + 1} plak deliğinin üstünde ama ekseni plak vidasından ${fmt(c.deg, 0)}° farklı (en çok ${AXIS_WARN}°); plak vidası önceden açılan deliği izleyemez.`) + ' ' + xl('Guide vidalarını plak deliklerine hizalayın.'), 'guide', critical().length ? [] : [['plateAlign', 'Vidaları plağa hizala']]]));
     const m = last.holes.filter(h => h.matched).length, gs = S.screws.length;
     if (gs && m < gs && S.screws.some(s => s.plate)) out.push(['info', 'Bilgi', xl(`${gs} guide vidasından ${m} tanesi plak deliğiyle çakışıyor.`), 'guide']);
     return out;
@@ -385,7 +427,7 @@ window.Plate = (function () {
   (window.ReportSections = window.ReportSections || []).push(d => {
     const s = summary(); if (!s) return;
     if (d.keep) d.keep(380); d.h2('Plak');
-    d.table(['Özellik', 'Değer'], [['Sistem', `${s.sistem} · ${fmt(s.genislik_mm)} × ${fmt(s.kalinlik_mm)} mm · ${xl(`${fmt(s.delik_araligi_mm)} mm aralık`)}`], ['Uzunluk / delik', `${s.uzunluk_mm} mm · ${s.holes} delik`], ['Kullanılabilir delik', `kalan 1: ${s.kullanilabilir.A} · defekt: ${s.kullanilabilir.defekt} · kalan 2: ${s.kullanilabilir.B}`], ['Kesiye yakın (boş bırakılacak)', `${s.kesiye_yakin}`], ['Toplam bükme', `kalınlık yönünde ${s.bukme_deg.kalinlik_yonunde}° · kenar yönünde ${s.bukme_deg.kenar_yonunde}°`], ['Guide vidalarıyla eşleşen delik', `${s.guide_ile_eslesen}`], ['Greft eklemine yakın (boş bırakılacak)', `${s.greft_eklemine_yakin}`], ['Grefte tutunmuyor (boş bırakılacak)', `${s.grefte_tutunmuyor}`], ['Vida boyları (bikortikal)', screwText(s)], ['Not', 'Vida boyları kemik modelinden ölçülür; sinir kanalı ve diş kökleri ayrıca kontrol edilmelidir.']], [0.34, 0.66]);
+    d.table(['Özellik', 'Değer'], [['Sistem', `${s.sistem} · ${fmt(s.genislik_mm)} × ${fmt(s.kalinlik_mm)} mm · ${xl(`${fmt(s.delik_araligi_mm)} mm aralık`)}`], ['Uzunluk / delik', `${s.uzunluk_mm} mm · ${s.holes} delik`], ['Kullanılabilir delik', `kalan 1: ${s.kullanilabilir.A} · defekt: ${s.kullanilabilir.defekt} · kalan 2: ${s.kullanilabilir.B}`], ['Kesiye yakın (boş bırakılacak)', `${s.kesiye_yakin}`], ['Toplam bükme', `kalınlık yönünde ${s.bukme_deg.kalinlik_yonunde}° · kenar yönünde ${s.bukme_deg.kenar_yonunde}°`], ['Guide vidalarıyla eşleşen delik', `${s.guide_ile_eslesen}`], ['Greft eklemine yakın (boş bırakılacak)', `${s.greft_eklemine_yakin}`], ['Grefte tutunmuyor (boş bırakılacak)', `${s.grefte_tutunmuyor}`], ['Vida boyları (bikortikal)', screwText(s)], ['Takılma sırası', 'Guide oturtulur, vida delikleri açılır ve kesiler yapılır; guide çıkarılır; ön bükülmüş plak guide deliklerine denk gelen deliklerinden vidalanır, sonra kalan delikler.'], ['Guide deliğiyle çakışan plak vidası', `${s.guide_deligiyle_cakisan}`], ['Not', 'Vida boyları kemik modelinden ölçülür; sinir kanalı ve diş kökleri ayrıca kontrol edilmelidir.']], [0.34, 0.66]);
   });
 
   // ---------- slices: plate cross-section where it meets the slice ----------
@@ -446,5 +488,6 @@ window.Plate = (function () {
   bus.addEventListener('planApplied', () => { if (P.on) later(); });
   bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring)) { P = Object.assign({}, DEF); last = null; draw(); render(); } });
   render();
-  return { summary, compute, update, placeScrews, get: () => last, params: () => P, missing: () => !!(P.on && !last), critical, assess, LIM };
+  (window.FixHooks = window.FixHooks || {}).plateAlign = async () => { if (last && !critical().length) placeScrews(); };
+  return { summary, conflicts, compute, update, placeScrews, get: () => last, params: () => P, missing: () => !!(P.on && !last), critical, assess, LIM };
 })();

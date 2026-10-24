@@ -2539,4 +2539,12 @@ window.I18N_EN = {
 "En kısa segment kuralı bu plan için # mm yapıldı; segment sayısı #.": "The shortest segment rule for this plan is now # mm; segment count #.",
 "Rezeke edilen kemiğin hattı sağlam tarafın ayna görüntüsünden en çok # mm (ortalama # mm) ayrılıyor; tümör kemiği genişletmiş olabilir ve greftler bu bozuk konturu izler.": "The resected bone's line is up to # mm (mean # mm) away from the healthy side's mirror image; the tumour may have expanded the bone, and the grafts follow that distorted contour.",
 "Hedef konturu sağlam taraftan almak için \"Sağlam tarafı aynala\"yı açın; asimetri doğalsa böyle bırakabilirsiniz.": "To take the target contour from the healthy side, turn on \"Mirror healthy side\"; if the asymmetry is natural, you can leave it as it is.",
+"Guide vidası #'in deliği plak vidası # ile çakışıyor (aradaki kemik # mm, en az # mm olmalı); plak vidası guide deliğinin duvarına gelir.": "The hole of guide screw # collides with plate screw # (bone between them # mm, at least # mm needed); the plate screw would land in the wall of the guide hole.",
+"Guide vidalarını plak deliklerine hizalayın ya da vidayı kaydırın.": "Align the guide screws to the plate holes or move the screw.",
+"Guide vidası # plak deliğinin üstünde ama ekseni plak vidasından #° farklı (en çok #°); plak vidası önceden açılan deliği izleyemez.": "Guide screw # is on a plate hole but its axis differs from the plate screw by #° (at most #°); the plate screw cannot follow the pre-drilled hole.",
+"Guide vidalarını plak deliklerine hizalayın.": "Align the guide screws to the plate holes.",
+"Takılma sırası": "Insertion order",
+"Guide oturtulur, vida delikleri açılır ve kesiler yapılır; guide çıkarılır; ön bükülmüş plak guide deliklerine denk gelen deliklerinden vidalanır, sonra kalan delikler.": "The guide is seated, the screw holes are drilled and the cuts made; the guide comes off; the pre-bent plate is screwed first through the holes that match the guide holes, then the rest.",
+"Guide deliğiyle çakışan plak vidası": "Plate screws colliding with a guide hole",
+"Plak vidası # kemikte guide vidası #'in deliğinden geçiyor (eksenler arası #°); plak vidası tutunmasının bir kısmını kaybeder.": "Plate screw # passes through the hole of guide screw # in the bone (#° between the axes); the plate screw loses part of its hold.",
 };
