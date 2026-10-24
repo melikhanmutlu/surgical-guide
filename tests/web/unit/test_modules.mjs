@@ -57,6 +57,26 @@ test('mfg: plan extension round trip, and a new (non-restoring) volume resets th
   W.PlanExt.mfg.set(x); assert.equal(W.PlanExt.mfg.get().prof, 'sla');
   St.emit('volume', { restoring: false }); assert.equal(W.Mfg.get().prof, null);
 });
+// D2 (plan after P0): print presets for resin (SLA, PolyJet) and PA12 SLS, the drill hole choice (printed / metal
+// sleeve; not chosen by default, the clinical team picks) and a build direction that keeps supports off the contact
+test('D2: PolyJet and PA12 presets, the sleeve choice is stored only when made, the build direction keeps supports off the contact surface', async () => {
+  assert.ok(W.Mfg.presets.polyjet && W.Mfg.presets.sls && W.Mfg.presets.sla, Object.keys(W.Mfg.presets).join());
+  assert.equal(W.Mfg.get().prof, null, 'no profile until one is chosen (the default stays)');
+  fire('mfProf', 'change', 'polyjet');
+  assert.equal(W.Mfg.get().sleeve, undefined); assert.ok(!('sleeve' in W.PlanExt.mfg.get()), 'not chosen: not in the plan');
+  assert.ok(checks().some(c => /metal kovan ya da basılı delik seçilmedi/.test(c[2])));
+  fire('mfSleeve', 'change', '1'); assert.equal(W.Mfg.get().sleeve, 1); assert.equal(W.PlanExt.mfg.get().sleeve, 1);
+  assert.ok(checks().some(c => /Metal kovan seçildi/.test(c[2])));
+  W.PlanExt.mfg.set({ prof: 'sls', sleeve: 'x' }); assert.equal(W.Mfg.get().sleeve, undefined, 'a damaged value is dropped');
+  W.PlanExt.mfg.set({ prof: 'sls', sleeve: 0 }); assert.equal(W.Mfg.get().sleeve, 0);
+  await St.regenerate(); await St.settled();
+  const b = W.Mfg.buildDir(); assert.ok(b, 'a build direction');
+  assert.equal(JSON.stringify(b.axis), JSON.stringify([-0, -0, -1].map(x => +x.toFixed(4))), 'bone side up: build axis -n');
+  assert.equal(b.contactSupportMm2, 0, 'no support on the contact surface');
+  assert.ok(b.reverseContactMm2 > 100, 'the other way up the contact surface would carry supports: ' + b.reverseContactMm2);
+  assert.ok(W.Mfg.summary().baski_yonu && W.Mfg.summary().matkap_delikleri === 'basılı delik');
+  St.emit('volume', { restoring: false });
+});
 test('mfg: a damaged plan with an unknown profile key does not break the checks list', () => {
   try { W.PlanExt.mfg.set({ prof: 'nonexistent' }); } catch (e) { /* applyPlan catches and calls set(null) */ W.PlanExt.mfg.set(null); }
   assert.ok(!checks().some(x => x[0] === 'err'), JSON.stringify(checks().filter(x => x[0] === 'err')));
