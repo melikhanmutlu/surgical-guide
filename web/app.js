@@ -2618,9 +2618,9 @@
       : [['u', 'Konum (eksen boyunca)', -80, 80, 0.5, 'mm'], ['v', 'Konum (yanal)', -15, 15, 0.5, 'mm'], ['tiltU', 'Eğim (eksen yönünde)', -89, 89, 1, '°'], ['tiltV', 'Eğim (yanal)', -89, 89, 1, '°'],
          ['d', 'Matkap çapı', 1.2, 4, 0.1, 'mm'], ['D', 'Kovan dış çapı', 3, 8, 0.1, 'mm'], ['sleeveH', 'Kovan yüksekliği', 0, 12, 0.5, 'mm'], ['len', 'Vida boyu', 6, 40, 1, 'mm']];
     box.innerHTML = `<h3 class="sub">${isP ? 'Kesi' : 'Vida'} ${i + 1}</h3>` + fields.map(([k, t, mn, mx, st, unit]) => `<div class="ctl"><div class="ctl-row"><label for="f_${k}">${t}</label><output id="o_${k}">${fmt(o[k], st < 1 ? 1 : 0)} ${unit}</output></div><input type="range" id="f_${k}" min="${mn}" max="${mx}" step="${st}" value="${o[k]}"></div>`).join('') +
-      `<p class="hint">${apprText(o)}</p><p class="hint more">3B görünümde kesiyi ya da vidayı tutup sürükleyebilir, tutamaçla da taşıyabilirsiniz (W taşı, E döndür).</p>` +
+      `<p class="hint">${apprText(o)}</p><p class="hint more">3B görünümde kesiyi ya da vidayı tutup sürükleyebilir, tutamaçla da taşıyabilirsiniz (W taşı, E döndür). Taşıma eksenleri varsayılan olarak kesiyle birlikte döner: biri kesiye dik, ikisi kesi düzleminde.</p>` +
       `<div class="btns end"><button id="delEl" class="sm"><svg class="i"><use href="#i-trash"/></svg>${isP ? 'Kesiyi sil' : 'Vidayı sil'}</button></div>`;
-    fields.forEach(([k, , , , st, unit]) => $('f_' + k).addEventListener('input', e => { const c0 = isP && /yaw|pitch/.test(k) ? planesWorld()[i].p : null; o[k] = +e.target.value; if (c0) { pivotCut(o, c0); syncSliders(o); } if (!isP && /^(u|v|tilt)/.test(k)) o.hand = 1; unapprove(o); $('o_' + k).textContent = `${fmt(o[k], st < 1 ? 1 : 0)} ${unit}`; schedule(isP, true); }));
+    fields.forEach(([k, , , , st, unit]) => $('f_' + k).addEventListener('input', e => { const c0 = isP && /yaw|pitch/.test(k) ? planesWorld()[i].p : null; o[k] = +e.target.value; if (c0) { pivotCut(o, c0); syncSliders(o); syncGizmo(); } if (!isP && /^(u|v|tilt)/.test(k)) o.hand = 1; unapprove(o); $('o_' + k).textContent = `${fmt(o[k], st < 1 ? 1 : 0)} ${unit}`; schedule(isP, true); }));
     $('delEl').addEventListener('click', () => { (isP ? S.planes : S.screws).splice(i, 1); S.sel = null; unapproveAll(); schedule(isP); });
   }
   function renderMeasures() {
@@ -3282,11 +3282,38 @@
     }
   }
   // ---------- 3D handles: drag the selected cut or screw along / around the guide axes ----------
-  // x = along the bone (u), y = lateral (v), z = seating normal (n). A cut moves only along x and turns
-  // about y and z; a screw moves in x/y (it always starts on the bone surface) and tilts about x and y.
+  // x = along the bone (u), y = lateral (v), z = seating normal (n). A cut turns about y and z; it moves on the axes
+  // the "Taşıma ekseni" list picks (cutMoveBasis): its own normal and two in-plane axes (the default: they turn with the
+  // cut), the world x-y-z axes, or only along the guide axis x (the older handle). A screw moves in x/y (it always
+  // starts on the bone surface) and tilts about x and y.
   const gizmo = THREE.TransformControls ? new THREE.TransformControls(camera, renderer.domElement) : null;
   const proxy = new THREE.Object3D(); scene.add(proxy);
   const gz = { mode: 'translate', start: null, used: false };
+  const moveSpace = () => { const v = $('moveSpace') && $('moveSpace').value; return v === 'world' || v === 'guide' ? v : 'cut'; };
+  // the axes a cut's move handle shows: cut = x along the cut's normal N (the plane moves square to itself), y and z in
+  // the plane (only its point on the bone moves); world = the scene's x-y-z; guide = the guide frame (x only)
+  function cutMoveBasis(i, space = moveSpace()) {
+    const pw = planesWorld()[i]; if (!pw) return null;
+    if (space === 'world') return { p: pw.p, x: V(1, 0, 0), y: V(0, 1, 0), z: V(0, 0, 1) };
+    const { u, v, n } = frameAxes();
+    if (space === 'guide') return { p: pw.p, x: u, y: v, z: n };
+    let N = pw.N.clone(); if (N.dot(u) < 0) N.negate();
+    let a = V().crossVectors(n, N); if (a.lengthSq() < 1e-6) a = v.clone();
+    a.normalize();
+    return { p: pw.p, x: N, y: a, z: V().crossVectors(N, a).normalize() };
+  }
+  // the cut moved so that it passes through point c with its normal unchanged: off is where the plane crosses the guide
+  // axis, pv / pn the point's place in the plane (planesWorld puts the cut point back at c). False when the plane
+  // cannot be written on the guide axis (it is almost parallel to it) or c lies too far out.
+  function moveCutTo(o, c, N) {
+    const { u, v, n } = frameAxes(), d = c.clone().sub(S.anchor.p), nu = N.dot(u);
+    if (Math.abs(nu) < 0.05) return false;
+    const off = N.dot(d) / nu;
+    if (Math.abs(off) > CUT_OFF_MAX) return false;
+    o.off = Math.round(off * 10) / 10;
+    o.pv = Math.max(-80, Math.min(80, Math.round(d.dot(v) * 10) / 10)); o.pn = Math.max(-80, Math.min(80, Math.round(d.dot(n) * 10) / 10));
+    return true;
+  }
   if (gizmo) {
     gizmo.setSize(0.8); gizmo.setSpace('local'); scene.add(gizmo);
     gizmo.addEventListener('change', render);
@@ -3316,24 +3343,27 @@
       gizmo.setMode('rotate'); gizmo.showX = false; gizmo.showY = false; gizmo.showZ = true; gizmo.attach(proxy); render(); return;
     }
     $('gizmoSeg').hidden = !so; $('dragBox').hidden = !(so && so.isP);
+    const t = gz.mode === 'translate';
+    if ($('moveBox')) $('moveBox').hidden = !(so && so.isP && t && !fib);
     if (!so || fib) { gizmo.detach(); render(); return; }
     if (gz.start) return;
     const { P, u, v, n } = so.isP ? Object.assign({ P: S.anchor.p }, frameAxes()) : screwFrame(so.o);
-    proxy.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(u, v, n));
+    if (so.isP && t) { const b = cutMoveBasis(so.i); proxy.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(b.x, b.y, b.z)); }
+    else proxy.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(u, v, n));
     if (so.isP) proxy.position.copy(planesWorld()[so.i].p);
     else { const sw = screwWorld(so.o); proxy.position.copy(sw.entry || P.clone().add(u.clone().multiplyScalar(so.o.u)).add(v.clone().multiplyScalar(so.o.v))); }
     proxy.updateMatrixWorld();
     gizmo.setMode(gz.mode);
-    const t = gz.mode === 'translate';
+    const guideOnly = so.isP && moveSpace() === 'guide';
     gizmo.showX = so.isP ? t : true;
-    gizmo.showY = so.isP ? !t : true;
-    gizmo.showZ = so.isP && !t;
+    gizmo.showY = so.isP ? (t ? !guideOnly : true) : true;
+    gizmo.showZ = so.isP ? (t ? !guideOnly : true) : false;
     gizmo.attach(proxy); render();
   }
   function gizmoStart() {
     if (S.guideSel) { const { u, v } = frameAxes(); return { guide: true, q0: proxy.quaternion.clone(), rot0: S.g.rot, u0: u, v0: v, key: String(S.g.rot) }; }
     const so = selObj(); if (!so) return null;
-    const o = so.o, st = { so, p0: proxy.position.clone(), q0: proxy.quaternion.clone(), o0: Object.assign({}, o), key: [o.off, o.yaw, o.pitch, o.u, o.v, o.tiltU, o.tiltV].join() };
+    const o = so.o, st = { so, p0: proxy.position.clone(), q0: proxy.quaternion.clone(), o0: Object.assign({}, o), space: moveSpace(), key: [o.off, o.yaw, o.pitch, o.pv, o.pn, o.u, o.v, o.tiltU, o.tiltV].join() };
     if (so.isP) { const pw = planesWorld()[so.i]; st.N0 = pw.N.clone(); st.c0 = pw.p.clone(); } else st.d0 = screwWorld(so.o).dir.clone();
     return st;
   }
@@ -3431,7 +3461,9 @@
     const { so, p0, q0, o0 } = gz.start, o = so.o, { u, v, n } = so.isP ? frameAxes() : screwFrame(o);
     const d = proxy.position.clone().sub(p0), dq = proxy.quaternion.clone().multiply(q0.clone().invert());
     if (so.isP) {
-      if (gz.mode === 'translate') o.off = clampR(o0.off + d.dot(u), -CUT_OFF_MAX, CUT_OFF_MAX, 0.5);
+      if (gz.mode === 'translate' && gz.start.space === 'guide') o.off = clampR(o0.off + d.dot(u), -CUT_OFF_MAX, CUT_OFF_MAX, 0.5);
+      // (the handle's own axes or the world's: the cut point follows the handle, the angle stays)
+      else if (gz.mode === 'translate') moveCutTo(o, gz.start.c0.clone().add(d), gz.start.N0);
       else {
         const N = gz.start.N0.clone().applyQuaternion(dq);
         o.yaw = clampR(THREE.MathUtils.radToDeg(Math.atan2(N.dot(v), N.dot(u))), -89, 89, 0.5);
@@ -3446,7 +3478,7 @@
         o.tiltV = clampR(THREE.MathUtils.radToDeg(Math.atan2(D.dot(v), -D.dot(n))), -89, 89, 1);
       }
     }
-    const key = [o.off, o.yaw, o.pitch, o.u, o.v, o.tiltU, o.tiltV].join();
+    const key = [o.off, o.yaw, o.pitch, o.pv, o.pn, o.u, o.v, o.tiltU, o.tiltV].join();
     if (key === gz.start.key) return;
     gz.start.key = key; gz.start.moved = true;
     if (!so.isP) o.hand = 1;                                       // a screw the surgeon moved stays where it is
@@ -3467,6 +3499,7 @@
   function setGizmoMode(m) { gz.mode = m; $('gzT').setAttribute('aria-pressed', m === 'translate'); $('gzR').setAttribute('aria-pressed', m === 'rotate'); syncGizmo(); }
   $('gzT').addEventListener('click', () => setGizmoMode('translate'));
   $('gzR').addEventListener('click', () => setGizmoMode('rotate'));
+  if ($('moveSpace')) $('moveSpace').addEventListener('change', syncGizmo);
   document.addEventListener('keydown', e => {
     if (/INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName) && document.activeElement.type !== 'range') return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -4283,7 +4316,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   function serverUrl() { return ($('aiUrl').value || '').trim().replace(/\/+$/, ''); }
   function select(sel) { if (sel) S.guideSel = false; S.sel = sel; emit('select', sel); renderElements(); rebuildElementParts(S.result ? S.result.pls : planesWorld(), S.result ? S.result.screwInfo : []); applyExplode(); render(); }
   window.Studio = { bg: bgCall, loadSample, sampleFor, SAMPLES, chooseAxis, nearestPiece, netsOf, blurNetsOf, renamePart, partName, guideBuilds: () => guideBuilds, mandibleView, endModes, onEndModes, startLoad, loadStopped, loadBusy: () => committing, LOAD_CANCELLED, renderComps, setGuideRot, setGuideRoll, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, setOpacity, resEnds, splitGap, cutMisses, evalScrew, resectedAt, resectedNear, resPiece, boneTrack, cutAlongBone, bestScrew,
-    boneSections, autoPrep, exportPackage, sha256Bytes, prodRecord, sizeBody, autoBody, buildGuideSet, cutsAngle, cutFrame, pieceFrames, pieceBody, screwBodyOn, pieceWrapTop, frameAt, stumpGap, mergeStl, mergeMeshes, AUTO_DEFAULT, G_DEFAULT, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, busyFrac, busySpan, busyText, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume, boneField, simplifyMesh, BAR, barPlan, barSdf, buildBarMesh, placeLug, longCase, axisOffBone, ramusAxis, stopSides, LONG_MM, CUT_OFF_MAX, prodKey, productionSTL, exportOne, softOcc, boneDoubt, boneKey, runFix, printIssues, printLine, serverBar, guideField, lockState: () => lock, bonelessCut, qualityCheck, syncQC, segEdits, editsAt, slotDefault, slotDepth, slotPlay, SLOT_PLAY_MAX, reframe, exclusive, settled, makeGuide, screwSlotGap, screwsNearSlots, clearScrew, clearSlotScrews, sleeveSlotGap, SCREW_SLOT_GAP, SCREW_SLOT_MIN, prodReply, prodWhy, gateChecks, swInfo, swLine, sfetch, reportHTML, lesionMargins, anchorFromSlice, ramusAxis };
+    boneSections, autoPrep, exportPackage, sha256Bytes, prodRecord, sizeBody, autoBody, buildGuideSet, cutsAngle, cutFrame, pieceFrames, pieceBody, screwBodyOn, pieceWrapTop, frameAt, stumpGap, mergeStl, mergeMeshes, AUTO_DEFAULT, G_DEFAULT, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, gz, gizmoStart, gizmoApply, cutMoveBasis, moveCutTo, moveSpace, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, busyFrac, busySpan, busyText, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume, boneField, simplifyMesh, BAR, barPlan, barSdf, buildBarMesh, placeLug, longCase, axisOffBone, ramusAxis, stopSides, LONG_MM, CUT_OFF_MAX, prodKey, productionSTL, exportOne, softOcc, boneDoubt, boneKey, runFix, printIssues, printLine, serverBar, guideField, lockState: () => lock, bonelessCut, qualityCheck, syncQC, segEdits, editsAt, slotDefault, slotDepth, slotPlay, SLOT_PLAY_MAX, reframe, exclusive, settled, makeGuide, screwSlotGap, screwsNearSlots, clearScrew, clearSlotScrews, sleeveSlotGap, SCREW_SLOT_GAP, SCREW_SLOT_MIN, prodReply, prodWhy, gateChecks, swInfo, swLine, sfetch, reportHTML, lesionMargins, anchorFromSlice, ramusAxis };
   bus.addEventListener('planeDragged', () => { renderElements(); schedule(true, 'drag'); });
   // messages assembled at run time are written in the language that was active: write them again when it changes
   if (window.addEventListener) window.addEventListener('langchange', () => { try { renderChecks(); renderAppr(); syncLesion(); } catch (e) { /* no case open yet */ } });
