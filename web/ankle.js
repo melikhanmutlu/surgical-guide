@@ -708,6 +708,10 @@ window.Ankle = (function () {
       out.push({ k: 'guide', name: 'Kesi guide\'ı', go: 'stAnkG', sig: hsh(JSON.stringify([gs, prod]) + mot(gp)), crit: ck.some(c => c[0] === 'crit') });
       if (o.wedge) out.push({ k: 'wedge', name: 'Kama', go: 'stAnkG', sig: hsh(JSON.stringify([gs.P, gs.n, gs.prm.off, gs.prm.tiltA, gs.prm.tiltB, gs.prm.deg]) + mot(gp)), crit: false });
     }
+    if (window.AnkPlate && AnkPlate.ready()) {
+      const o = AnkPlate.parts(), gp = o.o.f.p, prod = o.prod && o.prod.productionOk ? [o.prod.volume, o.prod.stl.length] : null;
+      out.push({ k: 'plate', name: 'Dış plak', go: 'stAnkG', sig: hsh(JSON.stringify([AnkPlate.state(), window.AnkGuide && AnkGuide.state(), AnkPlate.screwList(), prod]) + mot(gp)), crit: AnkPlate.checks().some(c => c[0] === 'crit') });
+    }
     return out;
   }
   const itemOk = it => !!(appr[it.k] && appr[it.k].sig === it.sig);
@@ -723,7 +727,7 @@ window.Ankle = (function () {
   (window.PlanExt = window.PlanExt || {}).ankAppr = {
     label: 'Malleol öğe onayları',
     get: () => (on() && Object.keys(appr).length ? JSON.parse(JSON.stringify(appr)) : null),
-    set(x) { appr = {}; if (x && typeof x === 'object') Object.entries(x).slice(0, 60).forEach(([k, v]) => { if (/^(screw:[0-9a-f]{1,16}|guide|wedge|drill)$/.test(k) && v && typeof v.by === 'string' && typeof v.sig === 'string') appr[k] = { by: v.by.slice(0, 120), at: typeof v.at === 'string' ? v.at.slice(0, 40) : '', sig: v.sig.slice(0, 40) }; }); renderAppr(); },
+    set(x) { appr = {}; if (x && typeof x === 'object') Object.entries(x).slice(0, 60).forEach(([k, v]) => { if (/^(screw:[0-9a-f]{1,16}|guide|wedge|drill|plate)$/.test(k) && v && typeof v.by === 'string' && typeof v.sig === 'string') appr[k] = { by: v.by.slice(0, 120), at: typeof v.at === 'string' ? v.at.slice(0, 40) : '', sig: v.sig.slice(0, 40) }; }); renderAppr(); },
   };
   (window.PendingHooks = window.PendingHooks || []).push(() => (on() && pieces.length ? [...(!red.ok ? ['Redüksiyon'] : []), ...items().filter(it => !itemOk(it)).map(it => it.name)] : []));
 
@@ -836,8 +840,8 @@ window.Ankle = (function () {
   // every STL's SHA-256 (plan M7.2): written into cerceve.json and the report, so a printed file can be checked
   function stlHashes(files) { const o = {}; if (window.Audit && Audit.sha256b) files.filter(f => /\.stl$/.test(f.name)).forEach(f => { o[f.name] = Audit.sha256b(f.data); }); return o; }
   function packFiles() {
-    const stls = [{ name: 'redukte_model.stl', data: reducedStl() }, ...pieceFiles(), ...(window.AnkGuide ? AnkGuide.files() : []), ...(window.AnkScrew ? AnkScrew.drillFiles() : [])], hs = stlHashes(stls);
-    const files = [...stls, { name: 'cerceve.json', data: frameJSON(hs) }, { name: 'plan.json', data: JSON.stringify(St.planOf(), null, 2) }, { name: 'rapor.html', data: reportHTML(hs) }];
+    const stls = [{ name: 'redukte_model.stl', data: reducedStl() }, ...pieceFiles(), ...(window.AnkGuide ? AnkGuide.files() : []), ...(window.AnkCorr ? AnkCorr.files() : []), ...(window.AnkPlate ? AnkPlate.files().filter(f => /\.stl$/.test(f.name)) : []), ...(window.AnkScrew ? AnkScrew.drillFiles() : [])], hs = stlHashes(stls);
+    const files = [...stls, ...(window.AnkPlate ? AnkPlate.files().filter(f => !/\.stl$/.test(f.name)) : []), { name: 'cerceve.json', data: frameJSON(hs) }, { name: 'plan.json', data: JSON.stringify(St.planOf(), null, 2) }, { name: 'rapor.html', data: reportHTML(hs) }];
     // the approval log (audit.js); the other export hooks write mandible files (navigation of cuts and screws)
     const extra = []; (window.ExportHooks || []).forEach(f => { try { f(extra); } catch (e) { /* optional */ } });
     extra.filter(f => f.name === 'onay_kaydi.json').forEach(f => files.push(f));

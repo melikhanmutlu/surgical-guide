@@ -7,7 +7,8 @@
 // yüzüne (talus kubbesinin 30 mm üstü) kesi guide'ı: gövde, yarık, iki K-teli, kama, kesi ve teller eklemden > 5 mm, sunucudan
 // su geçirmez üretim STL'i, pakette guide dosyası üretim STL'inden; H10 (plan M6-M9) otomatik yerleşim, malzeme seçimi,
 // guide ve kama tek tek onaylanır, paket cerceve.json'da her STL'in SHA-256'sı dosyanın kendisiyle aynı, rapor özetleri
-// listeler, referans guide kıyası paneli görünür.
+// listeler, referans guide kıyası paneli görünür; H11 düzeltme önizlemesi: distal tibia ve talus kama açısı kadar döner;
+// H12 düzeltilmiş tibiaya dış plak, sunucuda üretim STL'i, plak onayı ve pakette plak + vida listesi.
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -156,6 +157,57 @@ const H = require('./lib');
     const refBox = await h.ev(() => !!document.getElementById('ankRef') && document.getElementById('ankRef').innerHTML.length > 0);
     const ok = !sug.why && crit.length === 0 && !before.ready && before.items.includes('guide') && before.items.includes('wedge') && after && stls.some(n => /^guide\/kesi_guide/.test(n)) && bad.length === 0 && refBox;
     return { pass: ok, actual: JSON.stringify({ sug, crit, before, after, stls, bad, refBox }), evidence: await h.shot('H10_onay') };
+  });
+
+  await h.run('H11', 'Düzeltme önizlemesi', 'Gerçek örnekte "Düzeltilmiş hali göster": distal tibia ve talus menteşe çevresinde kama açısı kadar döner', 'Önizleme < 15 s; eklemin dönüşü kama açısıyla aynı (±0,5°); asıl tibia gizli, düzeltilmiş tibia görünür; onaylar düşmez; geri dönünce asıl tibia görünür', async () => {
+    await page.evaluate(() => { document.getElementById('stAnkG').open = true; }); await h.sleep(400);
+    const ready0 = await h.ev(() => Ankle.packReady());
+    const t0 = Date.now(); await page.click('#acShow');
+    await page.waitForFunction(() => window.AnkCorr && AnkCorr.live() && AnkCorr.visible(), null, { timeout: 120000 }); const ms = Date.now() - t0; await h.idle();
+    const r = await h.ev(() => { const m = AnkCorr.info(), tib = Ankle.pieces().findIndex(p => p.role === 'tibia'), deg = AnkGuide.state().prm.deg;
+      return { deg, turn: +Math.hypot(m.coronal, m.sagittal, m.axial).toFixed(2), side: m.side, open: +m.open.toFixed(1), plaf: m.plafondMove && +m.plafondMove.toFixed(1), origHidden: !Studio.parts['ank' + tib].visible, corr: !!(Studio.parts.ankCorr && Studio.parts.ankCorr.visible), ready: Ankle.packReady(), files: AnkCorr.files().map(f => f.name) }; });
+    await page.evaluate(() => { const b = document.querySelector('#ankCorrBox'); if (b) b.scrollIntoView(); }); await h.sleep(300);
+    const shot = await h.shot('H11_duzeltme');
+    await page.click('#acShow'); await h.sleep(500);
+    const back = await h.ev(() => { const tib = Ankle.pieces().findIndex(p => p.role === 'tibia'); return Studio.parts['ank' + tib].visible && !Studio.parts.ankCorr; });
+    const ok = ms < 15000 && Math.abs(r.turn - r.deg) < 0.5 && r.origHidden && r.corr && r.ready === ready0 && r.files.length === 2 && back;
+    return { pass: ok, actual: JSON.stringify({ ...r, ready0, back, ms }), evidence: shot };
+  });
+
+  await h.run('H12', 'Dış plak', 'Gerçek örnekte düzeltilmiş tibiaya plak oluştur, sunucudan üretim STL\'i al, plağı onayla, paketi indir', 'Tek gövde, 3 + 2 vida kemikte, kritik yok, üretim STL\'i su geçirmez tek gövde; plak onaylanana kadar paket bekler; pakette plak.stl ve vida listesi, SHA-256 dosyayla aynı', async () => {
+    await page.evaluate(() => { document.getElementById('stAnkG').open = true; }); await h.sleep(400);
+    // the suggested cut is 25 mm over the dome: too little distal bone for two screws 5 mm off the joint (H12 run
+    // 2026-10-25: distal screw 2 at 0.2 mm, critical). The cut is raised 12 mm and the guide built again
+    // the 3rd distal hole (28 mm under the cut) still reaches the plafond there (critical, 0.2 mm): two distal holes
+    await h.ev(async () => { AnkGuide.set('off', 12); await AnkGuide.make(); AnkPlate.set('nD', 2); });  await h.idle();
+    const t0 = Date.now(); await page.click('#apMake');
+    await page.waitForFunction(() => window.AnkPlate && AnkPlate.ready(), null, { timeout: 180000 }); const ms = Date.now() - t0; await h.idle();
+    await h.ev(() => AnkPlate.production()); await h.idle(300000);
+    const r = await h.ev(() => { const i = AnkPlate.info(), o = AnkPlate.parts(), p = o.prod;
+      return { pieces: i.pieces, vol: Math.round(i.volume), len: Math.round(i.length), contact: Math.round(i.contact), screws: AnkPlate.screwList().map(x => `${x.taraf[0]}${x.no}:${x.boy_mm}/${x.kemikte_mm}/${x.kesiye_mm}/${x.ekleme_mm}`),
+        crit: AnkPlate.checks().filter(c => c[0] === 'crit').map(c => c[2]), prod: p && { ok: p.productionOk, wt: p.watertight, bodies: p.bodies, vol: Math.round(p.volume), issues: (p.issues || []).map(x => x.code) }, shown: !!(Studio.parts.ankPlate && Studio.parts.ankPlate.visible), items: Ankle.items().map(x => x.k), ready: Ankle.packReady() }; });
+    await page.evaluate(() => { const b = document.querySelector('#ankPlateBox'); if (b) b.scrollIntoView(); }); await h.sleep(300);
+    const shot = await h.shot('H12_plak');
+    await page.evaluate(() => { document.getElementById('st7').open = true; }); await h.sleep(400);
+    // the raised cut changed the guide and the wedge: every pending item is approved again
+    const pend = await h.ev(() => Ankle.items().filter(x => !Ankle.itemOk(x)).map(x => x.k));
+    for (const k of pend) { await page.click(`[data-ank-item="${k}"]`); await h.sleep(300); }
+    // the plan changed (cut, plate): the engineer and the surgeon sign it again
+    if (!(await h.ev(() => Ankle.approved()))) { await page.click('#ankOk'); await h.sleep(300); }
+    await page.fill('#au_eng_n', 'Muh Deneme'); await page.click('[data-a="onay"][data-r="eng"]'); await h.sleep(400);
+    await page.click('[data-a="onay"][data-r="sur"]'); await h.sleep(600);
+    const after = await h.ev(() => Ankle.packReady());
+    await page.evaluate(() => { document.getElementById('stAnkOut').open = true; }); await h.sleep(400);
+    let pack = null;
+    if (after) {
+      const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 120000 }), page.click('#ankPack')]);
+      const fp = path.join(h.outDir, 'H12_paket.zip'); await dl.saveAs(fp);
+      const list = H.zipList(fp), fr = JSON.parse(H.zipRead(fp, 'cerceve.json').toString('utf8'));
+      const stl = list.find(n => /^plak\/plak/.test(n)); pack = { stl, csv: list.includes('plak/plak_vidalari.csv'), corr: list.includes('duzeltme/duzeltilmis_tibia.stl'), sha: !!stl && fr.sha256[stl] === require('crypto').createHash('sha256').update(H.zipRead(fp, stl)).digest('hex') };
+    }
+    const ok = r.pieces === 1 && r.screws.length === 5 && r.screws.every(x => !/:null\//.test(x)) && r.crit.length === 0 && r.prod && r.prod.ok && r.prod.wt && r.prod.bodies === 1 && Math.abs(r.prod.vol - r.vol) / r.vol < 0.2
+      && r.shown && r.items.includes('plate') && !r.ready && after && pack && pack.stl === 'plak/plak.stl' && pack.csv && pack.corr && pack.sha;
+    return { pass: ok, actual: JSON.stringify({ ...r, after, pack, ms }), evidence: shot };
   });
 
   await h.done();

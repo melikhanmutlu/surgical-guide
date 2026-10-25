@@ -503,5 +503,5 @@ window.AnkGuide = (function () {
   bus.addEventListener('ankPieces', () => { drop(); render(); });
   if ($('stAnkG')) $('stAnkG').addEventListener('toggle', () => { if (!$('stAnkG').open) { picking = false; } render(); });
   render();
-  return { on, place, suggest, setMat, boneAxis, seatFit, wedgeAngle, holeOf, MAT, make, production, frame, cutPlane, pins, section, files, ready, checks, joint, toPlan, JOINT, state: () => st, info: () => (out ? out.info : null), parts: () => out, LIM, DEF, set: (k, v) => { if (st) { st.prm = Object.assign({}, st.prm, { [k]: clamp(k, v) }); changed(); } } };
+  return { on, place, suggest, setMat, boneAxis, seatFit, wedge, wedgeAngle, holeOf, MAT, make, production, frame, cutPlane, pins, section, files, ready, checks, joint, toPlan, JOINT, state: () => st, info: () => (out ? out.info : null), parts: () => out, LIM, DEF, set: (k, v) => { if (st) { st.prm = Object.assign({}, st.prm, { [k]: clamp(k, v) }); changed(); } } };
 })();
