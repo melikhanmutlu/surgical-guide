@@ -1944,7 +1944,7 @@
     lFields.forEach(([k, , , , , unit]) => { $('l_' + k).value = S.lesion[k]; $('lo_' + k).textContent = `${fmt(S.lesion[k])} ${unit}`; });
     $('l_type').value = S.lesion.type || '';
     $('resType').value = S.lesion.condyle || ''; $('resTypeHint').hidden = !S.lesion.condyle;
-    $('lesStatus').textContent = !S.anchor ? '' : S.lesion.ok ? `${xl('Sınır onaylandı')}${S.lesion.by ? ' · ' + S.lesion.by : ''}.` : 'Sınır onayı bekliyor (7. adım).';
+    $('lesStatus').textContent = !S.anchor ? '' : S.lesion.ok ? `${xl('Sınır onaylandı')}${S.lesion.by ? ' · ' + S.lesion.by : ''}.` : 'Sınır onayı bekliyor (Doğrulama ve onay).';
   }
   lFields.forEach(([k]) => $('l_' + k).addEventListener('input', e => { S.lesion[k] = +e.target.value; unapprove(S.lesion); syncLesion(); updateLesionPart(); renderAppr(); render(); emit('parts'); emit('changed'); }));
   $('l_type').addEventListener('change', e => {
@@ -2602,7 +2602,7 @@
   bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring) && Object.keys(partNames).length) PlanExt.names.set(null); });
   // cuts are edited in the resection step, screws in their own step; approval happens only in the review step
   const DF = k => t => (window.DateFmt ? DateFmt[k](t) : k === 'time' ? new Date(t).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }) : new Date(t).toLocaleString('tr-TR'));   // dates.js: the interface language
-  const apprText = o => o.ok ? `${xl('Onaylı')}${o.by ? ' · ' + esc(o.by) : ''}${o.at ? ' · ' + DF('time')(o.at) : ''}. ${xl('Değişiklik onayı kaldırır.')}` : 'Sistem önerisi; cerrah onayı İnceleme ve onay adımında verilir.';
+  const apprText = o => o.ok ? `${xl('Onaylı')}${o.by ? ' · ' + esc(o.by) : ''}${o.at ? ' · ' + DF('time')(o.at) : ''}. ${xl('Değişiklik onayı kaldırır.')}` : 'Sistem önerisi; cerrah onayı Doğrulama ve onay adımında verilir.';
   function renderElements() {
     const btn = (k, o, i, name) => `<button class="el ${S.sel === k + i ? 'on' : ''}" data-s="${k}${i}" aria-pressed="${S.sel === k + i}">${name} ${i + 1}<span class="dot ${o.ok ? 'ok' : ''}" title="${o.ok ? 'Onaylı' : 'Onay bekliyor'}"><span class="sr-only">${o.ok ? 'onaylı' : 'onay bekliyor'}</span></span></button>`;
     $('plList').innerHTML = S.planes.map((p, i) => btn('p', p, i, 'Kesi')).join('');
@@ -3756,7 +3756,7 @@
   $('planReset').addEventListener('click', resetPlan);
   ['parts', 'changed', 'volume', 'planApplied'].forEach(t => bus.addEventListener(t, syncSeq));
   $('addPlane').addEventListener('click', () => { if (!S.anchor) return; S.planes.push({ off: 0, yaw: 0, pitch: 0, w: slotDefault() }); S.sel = 'p' + (S.planes.length - 1); schedule(true); });
-  $('addScrew').addEventListener('click', () => { if (!S.anchor) return; if (!S.guideOn) { alertMsg('Önce 3. adımda "Guide oluştur"a basın.'); return; } setMode('screw'); });
+  $('addScrew').addEventListener('click', () => { if (!S.anchor) return; if (!S.guideOn) { alertMsg('Önce Guide\'lar adımında "Guide oluştur"a basın.'); return; } setMode('screw'); });
   $('explode').addEventListener('input', e => { S.explode = +e.target.value; $('explodeO').textContent = fmt(S.explode, 0) + ' mm'; applyExplode(); render(); });
   $('showAll').addEventListener('click', () => { Object.values(parts).forEach(pt => { pt.visible = true; pt.obj.visible = true; }); renderParts(); render(); });
   $('guideOnly').addEventListener('click', () => { Object.values(parts).forEach(pt => { pt.visible = /guide/.test(pt.id) || pt.id.startsWith('screw'); pt.obj.visible = pt.visible; }); renderParts(); if (parts.guide) fitTo(parts.guide.obj); });

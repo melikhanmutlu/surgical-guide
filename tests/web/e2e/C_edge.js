@@ -116,8 +116,8 @@ const VERI = process.env.VERI || '/mnt/project-files/surgical-guide-prototype/au
     await page.evaluate(() => { const d = document.getElementById('secBounds'); if (!d.open) d.querySelector('summary').click(); });
     await h.setRange('#l_from', -20); await h.setRange('#l_to', 20); await h.setRange('#l_margin', 3);
     await page.click('#suggest'); await h.settle();
-    if (await page.isEnabled('#guideMake')) { await page.click('#guideMake'); await h.settle(); }
-    await page.click('#resRemove').catch(() => {}); await h.settle();
+    await h.openStep(5); if (await page.isEnabled('#guideMake')) { await page.click('#guideMake'); await h.settle(); }
+    await h.openStep(3); await page.click('#resRemove').catch(() => {}); await h.settle();
     const s = await st(), stat = await page.textContent('#guideStat');
     const scr = await h.ev(() => Studio.S.screws.map(x => x ? [x.u, x.v] : null));
     const warn = await h.ev(() => [...document.querySelectorAll('#checks li')].map(l => l.className.replace('checks', '').trim().slice(0, 5) + ': ' + l.textContent.trim().slice(0, 100)));
@@ -182,8 +182,8 @@ const VERI = process.env.VERI || '/mnt/project-files/surgical-guide-prototype/au
     await h.openStep(3); await page.click('#autoPrep'); await h.settle();
     const out = [];
     for (const per of ['1', '2']) {
-      await seg('perSide', per); await h.settle();
-      await page.evaluate(() => { const d = document.getElementById('secBounds'); if (!d.open) d.querySelector('summary').click(); });
+      await h.openStep(5); await seg('perSide', per); await h.settle();
+      await h.openStep(3); await page.evaluate(() => { const d = document.getElementById('secBounds'); if (!d.open) d.querySelector('summary').click(); });
       await h.setRange('#l_from', -30); await h.setRange('#l_to', 30); await h.setRange('#l_margin', 10);
       await page.click('#suggest'); await h.settle();
       const s = await st(), scr = await h.ev(() => Studio.S.screws.map(x => x ? x.u : null));
@@ -197,7 +197,6 @@ const VERI = process.env.VERI || '/mnt/project-files/surgical-guide-prototype/au
     await h.openStep(3); await page.click('#planReset'); await h.settle(); await page.click('#autoPrep'); await h.settle();
     const a0 = await h.ev(() => Studio.S.anchor.p.toArray().map(x => +x.toFixed(2)));
     await page.click('#pickAnchor');
-    await page.evaluate(() => { const d = document.getElementById('secLes'); if (!d.open) d.querySelector('summary').click(); });
     await page.click('#lesPaint button[data-t="paint"]'); await h.sleep(300);
     const mode = await h.ev(() => Studio.S.mode);
     const pts = await h.hits('bone', 20); const p = pts[Math.floor(pts.length * 0.3)];

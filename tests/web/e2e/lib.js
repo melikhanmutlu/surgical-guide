@@ -57,6 +57,9 @@ async function start(opt = {}) {
   await context.addInitScript(() => {
     addEventListener('securitypolicyviolation', e => console.error(`CSP violation: ${e.violatedDirective} ${e.blockedURI || ''} (${e.sourceFile || ''}:${e.lineNumber || ''})`));
   });
+  // the simple panel folds extra settings into "Gelişmiş" sections; the scenarios drive every control, so they run with
+  // "Tüm ayarları açık göster" on unless a scenario asks for the simple panel (opt.simple)
+  if (!opt.simple) await context.addInitScript(() => { try { if (localStorage.getItem('gs.advAll') == null) localStorage.setItem('gs.advAll', '1'); } catch (e) { /* storage blocked */ } });
   const page = await context.newPage();
   page.setDefaultTimeout(opt.timeout || 120000);
   const log = [];          // every console line

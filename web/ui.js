@@ -65,11 +65,16 @@ window.UI = (function () {
     const lock = St.lockState ? St.lockState() : { ready: !$('expZip').disabled, pend: St.pendingList().length }, pend = S.anchor ? lock.pend : AK && planned ? AK.pend : 0;
     tag($('tag7'), !planned ? '' : S.crit ? 'crit' : done.st7 ? 'ok' : 'warn', !planned ? '' : S.crit ? `${S.crit} kritik` : done.st7 ? 'Onaylı' : `${pend} bekliyor`);
     tag($('tag8'), done.st8 ? 'ok' : '', done.st8 ? 'Alındı' : '');
-    const counted = steps.filter(d => !d.hidden && (d.id !== 'st4' || fibOn));
-    steps.forEach(d => d.classList.toggle('done', !!done[d.id]));
-    const n = counted.filter(d => done[d.id]).length;
-    $('flowBar').style.width = (100 * n / counted.length) + '%';
-    $('flowTxt').textContent = `${n}/${counted.length} adım tamam`;
+    // progress counts the numbered steps (case type groups); a group is done when all its parts are. The fibula part
+    // counts only when a fibula is planned.
+    const skip = id => id === 'st4' && !fibOn;
+    const groups = (window.CaseType && CaseType.groups ? CaseType.groups() : steps.filter(d => !d.hidden).map(d => ({ parts: [[d.id]] })))
+      .map(g => g.parts.map(p => p[0]).filter(id => !skip(id))).filter(ids => ids.length);
+    steps.forEach(d => { d.dataset.pdone = done[d.id] ? '1' : '0'; d.classList.toggle('done', !!done[d.id]); });
+    groups.forEach(ids => { if (ids.length > 1) { const all = ids.every(id => done[id]); ids.forEach(id => $(id).classList.toggle('done', all)); } });
+    const n = groups.filter(ids => ids.every(id => done[id])).length;
+    $('flowBar').style.width = (100 * n / Math.max(1, groups.length)) + '%';
+    $('flowTxt').textContent = `${n}/${groups.length} adım tamam`;
     // top bar: overall state and title
     const crit = S.crit + (qcCrit ? 1 : 0);
     $('critCnt').hidden = !crit; $('critCnt').textContent = crit;

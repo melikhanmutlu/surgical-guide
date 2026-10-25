@@ -177,6 +177,7 @@ if (require.main === module) (async () => {
     const tRes = Date.now() - t;
     await page.click('#resRemove').catch(() => {}); await h.idle();
     const t2 = Date.now();
+    await h.openStep(5);   // the guide button sits in the Guides step (simple panel)
     if (await page.isEnabled('#guideMake') && await page.isVisible('#guideMake')) { await page.click('#guideMake'); await h.sleep(500); await h.idle(900000); }
     // the canal gate (plan A): the surgeon checks the screws against the canal on the slices and says so with the row's fix
     { if (await h.ev(() => { const b = document.querySelector('.checks li [data-fix="canalOk"]'); if (b) b.click(); return !!b; })) { await h.sleep(300); await h.idle(); } }

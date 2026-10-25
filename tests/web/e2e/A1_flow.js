@@ -222,7 +222,7 @@ const fs = require('fs'), path = require('path'), { execFileSync } = require('ch
     return { pass: s.screws === n0 - 1 && !s.nullScrews, actual: `vida ${n0} → ${s.screws}, null vida ${s.nullScrews}, kritik ${s.crit}` };
   });
   await h.run('A1.6d', '3 · Guide', 'Taraf başına vida 1 ↔ 2', 'Elle konan vidalar kalır; otomatik vidalar her ucu taraf başına sayıya tamamlar (en çok 2 / 4), null yok', async () => {
-    await h.openStep(3);
+    await h.openStep(5);
     // screws the surgeon placed or moved (hand) stay through a per-side change (Denetim 4 W13); a hand screw on an end
     // counts towards that end's quota (placeScrews `have`), so the automatic ones number at most 2 per end × ends
     const cnt = () => h.ev(() => ({ hand: Studio.S.screws.filter(s => s && s.hand).length, auto: Studio.S.screws.filter(s => s && !s.hand).length }));

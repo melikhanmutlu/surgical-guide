@@ -122,3 +122,28 @@ html[data-style="k1"] .top button[aria-pressed="true"] { background: var(--accen
 @media (max-height: 760px) {
   html[data-style="k1"] .top { height: 48px; }
 }
+
+/* ---------- simple panel (flow.js): numbered steps follow the main flow, extra settings fold into "Gelişmiş" ---------- */
+details.step.grp-hide { display: none; }
+.part-tabs { display: flex; }
+.part-tabs button { flex: 1; padding: 0 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.part-tabs button.done::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); display: inline-block; margin-right: 5px; vertical-align: 1px; }
+details.sec.adv { margin-top: 4px; }
+details.sec.adv > summary { border-style: dashed; color: var(--muted); }
+details.sec.adv[open] > summary { border-style: solid; }
+details.sec.adv > .col > h3.sub:first-child { display: flex; }
+details.sec.adv > .col { gap: 10px; }
+html:not([data-adv="all"]):not([data-rx="paint"]) .rx[data-rx="paint"],
+html:not([data-adv="all"]):not([data-rx="point"]) .rx[data-rx="point"] { display: none; }
+#rxMargin:empty { display: none; }
+.chk-mini { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 10px; font-weight: 500; background: var(--ok-bg); color: var(--ok); }
+.chk-mini.warn { background: var(--warn-bg); color: var(--warn); }
+.chk-mini.crit { background: var(--crit-bg); color: var(--crit); }
+/* saved cases: a menu in the top bar */
+.top .menu { position: relative; }
+.top .menu > summary { list-style: none; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; border-radius: var(--r); color: var(--muted); font-weight: 500; white-space: nowrap; }
+.top .menu > summary::-webkit-details-marker { display: none; }
+.top .menu > summary:hover, .top .menu[open] > summary { background: var(--hover); color: var(--fg); }
+.top .menu > summary .i { width: 16px; height: 16px; }
+.menu-pop { position: absolute; top: calc(100% + 6px); left: 0; z-index: 30; width: min(340px, 90vw); max-height: 60vh; overflow: auto; display: grid; gap: 8px; padding: 12px; background: var(--panel); border: 1px solid var(--line-strong); border-radius: 12px; box-shadow: var(--shadow); }
+#sampFib .lbl2 { align-self: center; margin-right: 4px; }
