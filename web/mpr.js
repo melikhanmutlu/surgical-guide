@@ -13,7 +13,7 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
   ];
   const WINDOWS = { bone: { L: 500, W: 2000 }, soft: { L: 40, W: 400 }, wide: { L: 300, W: 3000 } };
   const CONTOURS = [['bone', '#e9d9a6', []], ['resected', '#ff8a4c', []], ['lesion', '#ff5c5c', [4, 3]], ['guide', '#5aa8ff', []]];
-  const st = { cur: [0, 0, 0], win: WINDOWS.bone, mode: '3d', max: null, cache: new Map(), drag: null };
+  const st = { cur: [0, 0, 0], win: WINDOWS.bone, mode: '3d', max: null, cache: new Map(), drag: null, hover: null };
   const views = {};
 
   // ---------- geometry helpers (index space of the full-resolution volume) ----------
@@ -183,6 +183,21 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
     label(ctx, v.lab[0], 6 * dpr, h / 2, '#8fa39b', dpr); label(ctx, v.lab[1], w - 40 * dpr, h / 2, '#8fa39b', dpr);   // (clear of the slice slider)
     label(ctx, v.lab[2], w / 2, 30 * dpr, '#8fa39b', dpr); label(ctx, v.lab[3], w / 2, h - 8 * dpr, '#8fa39b', dpr);
     wlLabel(ctx, w, h, dpr);
+    brushCursor(v, ctx, T, dpr);
+  }
+  // the brush tools (bone brush / eraser, lesion brush, marking) show their size at the pointer: a thin circle of the
+  // brush radius at this view's zoom, with a small cross in the middle; outline only, so the image under it stays visible
+  function brushCursor(v, ctx, T, dpr) {
+    const h = st.hover, B = h && h.v === v.id && !v.custom ? brushOf() : null;
+    if (!B) { if (v.canvas.style.cursor === 'none') v.canvas.style.cursor = 'crosshair'; return; }   // the tool was ended (Esc) without a move
+    const r = B.r * T.s, a = Math.min(4 * dpr, r * 0.5);   // T.s = canvas px per mm
+    ctx.setLineDash([]);
+    for (const [col, lw] of [['rgba(0,0,0,.55)', 2.5 * dpr], [B.color, 1 * dpr]]) {   // a dark rim under the line keeps it visible on bright bone
+      ctx.strokeStyle = col; ctx.lineWidth = lw; ctx.beginPath();
+      ctx.arc(h.X, h.Y, r, 0, 2 * Math.PI);
+      ctx.moveTo(h.X - a, h.Y); ctx.lineTo(h.X + a, h.Y); ctx.moveTo(h.X, h.Y - a); ctx.lineTo(h.X, h.Y + a);
+      ctx.stroke();
+    }
   }
   // window / level readout (Shift + drag changes it)
   function wlLabel(ctx, w, h, dpr) { label(ctx, `P ${Math.round(st.win.W)} · S ${Math.round(st.win.L)}`, 8 * dpr, h - 8 * dpr, '#8fa39b', dpr); }
@@ -298,7 +313,9 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
     });
     c.addEventListener('pointermove', e => {
       const [X, Y] = at(e), d = st.drag;
-      if (!d) { c.style.cursor = handleAt(v, X, Y) || hitLine(v, X, Y) >= 0 ? 'grab' : 'crosshair'; return; }
+      const brush = !v.custom && brushOf();
+      if (brush || st.hover) { st.hover = brush ? { v: v.id, X, Y } : null; redraw(); }
+      if (!d) { c.style.cursor = brush ? 'none' : handleAt(v, X, Y) || hitLine(v, X, Y) >= 0 ? 'grab' : 'crosshair'; return; }
       if (d.kind === 'handle') { const T = xf(v); d.h.drag(toWorld(imgToIdx(v, T.ix(X), T.iy(Y)))); redraw(); return; }
       if (d.kind === 'pan') { v.pan[0] = d.pan[0] + X - d.X; v.pan[1] = d.pan[1] + Y - d.Y; redraw(); }
       else if (d.kind === 'cursor') moveCursor(v, X, Y);
@@ -307,14 +324,17 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
       else if (d.kind === 'plane') dragPlane(v, d.i, X, Y);
       else if (d.kind === 'paint') { const T = xf(v); d.P.paint(toWorld(imgToIdx(v, T.ix(X), T.iy(Y))), v.axis, false); }
     });
-    const end = () => { if (st.drag && st.drag.kind === 'handle' && st.drag.h.end) st.drag.h.end(); if (st.drag && st.drag.kind === 'plane') { St.unapprove(S.planes[st.drag.i]); St.schedule(true); } if (st.drag && st.drag.kind === 'paint') st.drag.P.strokeEnd(); st.drag = null; c.style.cursor = 'crosshair'; };
+    const end = () => { if (st.drag && st.drag.kind === 'handle' && st.drag.h.end) st.drag.h.end(); if (st.drag && st.drag.kind === 'plane') { St.unapprove(S.planes[st.drag.i]); St.schedule(true); } if (st.drag && st.drag.kind === 'paint') st.drag.P.strokeEnd(); st.drag = null; c.style.cursor = brushOf() ? 'none' : 'crosshair'; };
     c.addEventListener('pointerup', end); c.addEventListener('pointercancel', end);
+    c.addEventListener('pointerleave', () => { if (st.hover && st.hover.v === v.id) { st.hover = null; redraw(); } });
     c.addEventListener('dblclick', () => { st.max = st.max === v.id ? null : v.id; layout(); });
   }
   // draggable handles other modules draw on the slices (guide angle): { hit(v, X, Y, T, api) -> bool, drag(world), end() }
   function handleAt(v, X, Y) { if (v.custom || !S.vol) return null; const T = xf(v); return (window.SliceHandles || []).find(h => { try { return h.hit(v, X, Y, T, overlayAPI()); } catch (e) { return false; } }) || null; }
   // slice painting tools: lesion brush, segmentation brush / eraser
   const painter = () => (window.Masks && Masks.tool() ? Masks : window.Lesion && Lesion.active() ? Lesion : window.SegEdit && SegEdit.active() ? SegEdit : null);
+  // the active brush's radius (mm) and colour, or null (no brush tool, or one that only clicks)
+  const brushOf = () => { const P = painter(); return P && P.brush ? P.brush() : null; };
   function moveCursor(v, X, Y) { const T = xf(v); setCursor(imgToIdx(v, T.ix(X), T.iy(Y))); }
   function dragPlane(v, i, X, Y) {
     const T = xf(v), w = toWorld(imgToIdx(v, T.ix(X), T.iy(Y))), q = V(...w), pw = St.planesWorld()[i], { u } = St.frameAxes();

@@ -183,7 +183,7 @@ window.Masks = (function () {
   document.addEventListener('keyup', e => { if (e.key === 'Alt' && tool) St.controls.enableRotate = rotOk(); });
   St.onEndModes(() => { if (tool) setTool(tool); });
 
-  // ---------- slices: split layers tinted, marks strong, brush outline ----------
+  // ---------- slices: split layers tinted, marks strong (the brush outline follows the pointer, mpr.js) ----------
   const rgba = (c, a) => `rgba(${c >> 16 & 255},${c >> 8 & 255},${c & 255},${a})`;
   (window.SliceOverlays = window.SliceOverlays || []).push((v, ctx, T, dpr, A) => {
     const r = S.red; if (!r) return;
@@ -203,11 +203,6 @@ window.Masks = (function () {
         ctx.fillStyle = f; ctx.fillRect(T.fx(im[0]) - sx / 2, T.fy(im[1]) - sy / 2, sx + 0.5, sy + 0.5);
       }
     }
-    if (lastPaint && lastPaint.axis === v.axis) {
-      const im = A.idxToImg(v, A.toIdx(lastPaint.p));
-      ctx.strokeStyle = tool === 'erase' ? '#e5e8eb' : hex((layers[cur - 1] || layers[0]).color); ctx.lineWidth = 1.5 * dpr;
-      ctx.beginPath(); ctx.arc(T.fx(im[0]), T.fy(im[1]), radius / S.vol.sp[v.ix] * T.sx * T.s, 0, 2 * Math.PI); ctx.stroke();
-    }
   });
 
   // ---------- panels ----------
@@ -221,7 +216,7 @@ window.Masks = (function () {
       if (window.Measure && Measure.active()) $('toolMeasure').click();
       if (tool !== 'pick' && $('vm3d') && $('vm3d').getAttribute('aria-pressed') === 'true') $('vmStrip').click();
     }
-    St.controls.enableRotate = rotOk(); cv.style.cursor = tool ? 'crosshair' : '';
+    St.controls.enableRotate = rotOk(); cv.style.cursor = tool ? 'crosshair' : ''; if (window.MPR) MPR.redraw();
     document.querySelectorAll('#mkTools [data-t]').forEach(b => b.setAttribute('aria-pressed', b.dataset.t === tool));
     const b = $('modeBadge');
     if (tool) {
@@ -362,5 +357,5 @@ window.Masks = (function () {
   };
   status();
 
-  return { relabel, renderList, run, jawRun, occ: () => occ, setOcc: occShow, active: () => active, tool: () => tool, paint, strokeEnd, setTool, pickAt, showCtx, off: () => { if (tool) setTool(tool); }, layers: () => layers };
+  return { relabel, renderList, run, jawRun, occ: () => occ, setOcc: occShow, active: () => active, tool: () => tool, brush: () => (tool === 'paint' || tool === 'erase' ? { r: radius, color: tool === 'erase' ? '#e5e8eb' : hex((layers[cur - 1] || layers[0]).color) } : null), paint, strokeEnd, setTool, pickAt, showCtx, off: () => { if (tool) setTool(tool); }, layers: () => layers };
 })();

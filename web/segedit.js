@@ -150,7 +150,7 @@ window.SegEdit = (function () {
   }
   async function reset() { if (!edited()) return; add = del = null; await commit('Düzeltmeler kaldırıldı'); }
 
-  // ---------- slices: added voxels green, removed red, brush outline while painting ----------
+  // ---------- slices: added voxels green, removed red, the brush outline follows the pointer (mpr.js) ----------
   (window.SliceOverlays = window.SliceOverlays || []).push((v, ctx, T, dpr, A) => {
     if (!add || !S.red || !edited() && !lastPaint) return;
     const r = S.red, k = Math.round(G.indexOf(r, G.worldOf(S.vol, ...A.st.cur))[v.axis]);
@@ -164,11 +164,6 @@ window.SegEdit = (function () {
         ctx.fillStyle = add[vv] ? 'rgba(70,201,139,.45)' : 'rgba(229,72,77,.45)';
         ctx.fillRect(T.fx(im[0]) - sx / 2, T.fy(im[1]) - sy / 2, sx + 0.5, sy + 0.5);
       }
-    }
-    if (lastPaint && lastPaint.axis === v.axis) {
-      const im = A.idxToImg(v, A.toIdx(lastPaint.p));
-      ctx.strokeStyle = tool === 'erase' ? '#e5484d' : '#46c98b'; ctx.lineWidth = 1.5 * dpr;
-      ctx.beginPath(); ctx.arc(T.fx(im[0]), T.fy(im[1]), radius * T.s, 0, 2 * Math.PI); ctx.stroke();
     }
   });
 
@@ -194,7 +189,7 @@ window.SegEdit = (function () {
     if (tool && window.Measure && Measure.active()) $('toolMeasure').click();
     if (tool && window.Lesion) Lesion.off();
     if (tool && window.Masks) Masks.off();
-    St.controls.enableRotate = !tool; cv.style.cursor = tool ? 'crosshair' : '';
+    St.controls.enableRotate = !tool; cv.style.cursor = tool ? 'crosshair' : ''; if (window.MPR) MPR.redraw();
     document.querySelectorAll('#seTools [data-t]').forEach(b => b.setAttribute('aria-pressed', b.dataset.t === tool));
     const b = $('modeBadge');
     if (tool) { b.hidden = false; b.textContent = tool === 'scissors' ? 'Makas: 3B görünümde çıkarılacak bölgeyi çevreleyin (Shift: içini tut). Döndürmek için Alt. Bitirmek için Esc.' : `${NAMES[tool]}: kesitlerde ya da 3B görünümde sürükleyin. Döndürmek için Alt basılı tutun. Bitirmek için Esc.`; }
@@ -233,6 +228,6 @@ window.SegEdit = (function () {
   bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring)) { add = del = null; status(); } });
   status();
 
-  return { active: () => !!tool && tool !== 'scissors', tool: () => tool, paint, strokeEnd, applyTo(m) { if (!add || add.length !== m.length) return; for (let v = 0; v < m.length; v++) { if (del[v]) m[v] = 0; else if (add[v]) m[v] = 1; } },
+  return { active: () => !!tool && tool !== 'scissors', tool: () => tool, brush: () => (tool && tool !== 'scissors' ? { r: radius, color: tool === 'erase' ? '#e5484d' : '#46c98b' } : null), paint, strokeEnd, applyTo(m) { if (!add || add.length !== m.length) return; for (let v = 0; v < m.length; v++) { if (del[v]) m[v] = 0; else if (add[v]) m[v] = 1; } },
     hasAdditions: () => !!(add && add.indexOf(1) >= 0), edited, masks: () => (edited() ? { add, del } : null), edits: () => (edited() ? { add, del } : null), key: () => edited() ? hash(rle(add)) + ':' + hash(rle(del)) : '', setTool, off: () => { if (tool) setTool(tool); }, metal, fragments, reset };
 })();

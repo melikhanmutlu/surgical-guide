@@ -106,7 +106,7 @@ window.Lesion = (function () {
   document.addEventListener('keydown', e => { if (e.key === 'Alt' && tool) St.controls.enableRotate = true; });
   document.addEventListener('keyup', e => { if (e.key === 'Alt' && tool) St.controls.enableRotate = false; });
 
-  // ---------- slices: painted voxels red, brush outline while painting ----------
+  // ---------- slices: painted voxels red (the brush outline follows the pointer, mpr.js) ----------
   (window.SliceOverlays = window.SliceOverlays || []).push((v, ctx, T, dpr, A) => {
     if (!S.red || (!mask && !lastPaint)) return;
     const r = S.red, k = Math.round(G.indexOf(r, G.worldOf(S.vol, ...A.st.cur))[v.axis]);
@@ -119,11 +119,6 @@ window.Lesion = (function () {
         const im = A.idxToImg(v, A.toIdx(G.worldOf(r, ...ix)));
         ctx.fillRect(T.fx(im[0]) - sx / 2, T.fy(im[1]) - sy / 2, sx + 0.5, sy + 0.5);
       }
-    }
-    if (lastPaint && lastPaint.axis === v.axis) {
-      const im = A.idxToImg(v, A.toIdx(lastPaint.p));
-      ctx.strokeStyle = tool === 'erase' ? '#e5e8eb' : '#ff6b6b'; ctx.lineWidth = 1.5 * dpr;
-      ctx.beginPath(); ctx.arc(T.fx(im[0]), T.fy(im[1]), radius / S.vol.sp[v.ix] * T.sx * T.s, 0, 2 * Math.PI); ctx.stroke();
     }
   });
 
@@ -141,7 +136,7 @@ window.Lesion = (function () {
       // on narrower screens give the slices the room: close the review panel while painting
       if (window.innerWidth < 1280 && window.Layout) Layout.setRight(false);
     }
-    St.controls.enableRotate = !tool;
+    St.controls.enableRotate = !tool; if (window.MPR) MPR.redraw();
     if (!tool) setTimeout(autoAfterPaint, 0);
     document.querySelectorAll('#lsTools [data-t]').forEach(b => b.setAttribute('aria-pressed', b.dataset.t === tool));
     const b = $('modeBadge');
@@ -211,5 +206,5 @@ window.Lesion = (function () {
   };
   status();
 
-  return { clear: () => { mask = null; dirty = false; planMsg = ''; changed(); }, autoAfterPaint, active: () => !!tool, tool: () => tool, paint, strokeEnd, points, setTool, plan, off: () => { if (tool) setTool(tool); } };
+  return { clear: () => { mask = null; dirty = false; planMsg = ''; changed(); }, autoAfterPaint, active: () => !!tool, tool: () => tool, brush: () => (tool ? { r: radius, color: tool === 'erase' ? '#e5e8eb' : '#ff6b6b' } : null), paint, strokeEnd, points, setTool, plan, off: () => { if (tool) setTool(tool); } };
 })();
