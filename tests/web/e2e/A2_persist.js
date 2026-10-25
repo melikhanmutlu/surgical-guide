@@ -54,6 +54,8 @@ const diff = (a, b) => Object.keys(Object.assign({}, a, b)).filter(k => JSON.str
     await page.click('#caseNew'); await h.sleep(300);
     await page.click('#sampleM'); await h.idle();
     const cleared = await st();
+    // the saved-cases menu in the top bar closed when the sample button was clicked outside it
+    await page.evaluate(() => { const d = document.getElementById('secCases'); if (!d.open) d.querySelector('summary').click(); });
     await page.click('#caseRefresh'); await h.sleep(800);
     const row = page.locator('#caseList li', { hasText: caseName }).first();
     if (!(await row.count())) return { pass: false, actual: 'vaka listede yok' };

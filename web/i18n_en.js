@@ -2811,4 +2811,9 @@ window.I18N_EN = {
 "Önce Guide'lar adımında \"Guide oluştur\"a basın.": "First press \"Create guide\" in the Guides step.",
 "Sistem önerisi; cerrah onayı Doğrulama ve onay adımında verilir.": "System suggestion; the surgeon's approval is given in the Validation and approval step.",
 "Adımlar soldan sırayla ilerler. Her kesi, vida ve rezeksiyon aralığı Doğrulama ve onay adımında tek tek onaylanır; sonra mühendis teknik, cerrah klinik onayı verir. Onaydan sonra plan değişirse onaylar düşer. Kritik kontrol açıkken onay verilemez ve üretim paketi kilitli kalır; nedeni İndir düğmesinin altında yazar. Kontroller sekmesindeki eşikler örnek değerlerdir.": "The steps on the left run in order. Each cut, screw and the resection extent is approved one by one in the Validation and approval step; then the engineer gives technical and the surgeon clinical approval. If the plan changes after approval, the approvals are revoked. While a critical check is open, approval is blocked and the production package stays locked; the reason is shown under the Download button. The thresholds in the Checks tab are sample values.",
+"Kemik modeli BT'den kendiliğinden çıkar ve mandibula ayrılır.": "The bone model is built from the CT and the mandible is separated automatically.",
+"Fırça lezyonu kırmızıyla boyar: kesitlerde ya da 3B görünümde görünen yüzeyin (cilt, yumuşak doku, kemik) üstünde.": "The brush paints the lesion red: on the slices or on the visible surface in the 3D view (skin, soft tissue, bone).",
+"Lezyonun ilk ve son göründüğü kesitleri de boyayın.": "Also paint the first and last slices where the lesion shows.",
+"\"Bölgeyi modelde seç\"e basıp modelde rezeksiyon bölgesinin ortasına tıklayın; iki kesi konur.": "Press \"Select region on model\" and click the middle of the resection region on the model; two cuts are placed.",
+"Guide vidaları guide oluşurken kendiliğinden konur.": "Guide screws are placed automatically when the guide is built.",
 };

@@ -22,14 +22,14 @@ const H = require('./lib');
   const pieces = () => page.waitForFunction(() => window.Ankle && Ankle.pieces().length > 0 && !(Studio.loadBusy && Studio.loadBusy()), null, { timeout: 180000 });
   await h.goto(); await h.idle();
 
-  await h.run('H1', 'Vaka tipi', 'Çene → malleol → çene → malleol', 'Adımlar: st1, st2, stRed, stAnkS, stAnkG, st7, stAnkOut; çene tipinde st1..st8; örnek vaka tipe göre değişir', async () => {
+  await h.run('H1', 'Vaka tipi', 'Çene → malleol → çene → malleol', 'Adımlar: st1, st2, stRed, stAnkS, stAnkG, st7, stAnkOut; çene tipinde st1, st2, st3, st5, st4, st6, st7, st8; örnek vaka tipe göre değişir', async () => {
     await page.selectOption('#caseType', 'ankle'); await pieces(); await h.idle();
     const a = await order(), srcA = await h.ev(() => Studio.S.source.name);
     await page.selectOption('#caseType', 'mandible'); await page.waitForFunction(() => Studio.S.source && Studio.S.source.name === 'mandible' && !Studio.loadBusy(), null, { timeout: 180000 }); await h.idle();
     const m = await order();
     await page.selectOption('#caseType', 'ankle'); await pieces(); await h.idle();
     const b = await order();
-    const wantA = ['st1', 'st2', 'stRed', 'stAnkS', 'stAnkG', 'st7', 'stAnkOut'], wantM = ['st1', 'st2', 'st3', 'st4', 'st5', 'st6', 'st7', 'st8'];
+    const wantA = ['st1', 'st2', 'stRed', 'stAnkS', 'stAnkG', 'st7', 'stAnkOut'], wantM = ['st1', 'st2', 'st3', 'st5', 'st4', 'st6', 'st7', 'st8'];   // Guide'lar: Mandibula, Fibula, Vidalar
     const ok = JSON.stringify(a) === JSON.stringify(wantA) && JSON.stringify(b) === JSON.stringify(wantA) && JSON.stringify(m) === JSON.stringify(wantM) && srcA === 'ankle';
     return { pass: ok, actual: JSON.stringify({ a, m, b, srcA }), evidence: await h.shot('H1_tip') };
   });
