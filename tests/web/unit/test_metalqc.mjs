@@ -60,4 +60,39 @@ test('no metal, no streak: nothing (the soft tissue band of the phantom is quiet
   assert.ok(m.sd < 50 && m.metalMm3 === 0, JSON.stringify(m));
 });
 
+// Regression (2026-10-25, real default CT): the guide's rim reached the crowns of the teeth; their enamel (a thin
+// shell at 2500-3071 HU, where metal saturates too) was counted as metal and the critical row could not be cleared.
+test('enamel crowns under the guide (thin shell above the threshold): no critical metal row, an enamel info row', async () => {
+  await onBar({ roots: [-12, -3, 3, 12], enamel: true });
+  assert.ok(S.result, 'a guide');
+  const m = P.eval('MetalQC').measureAll();
+  assert.ok(m.enamelMm3 >= 1, 'the guide band reaches the enamel: ' + JSON.stringify(m));
+  assert.equal(rows(/kemiğe oturduğu yüzeyde metal var/).length, 0, JSON.stringify(m));
+  assert.equal(m.metalMm3, 0, JSON.stringify(m));
+  const r = rows(/diş minesine değiyor/);
+  assert.equal(r.length, 1, JSON.stringify(S.checkList.map(c => c[2])));
+  assert.equal(r[0][0], 'info');
+});
+
+test('a solid filling in an enamel crown under the guide: still critical', async () => {
+  await onBar({ roots: [-12, -3, 3, 12], enamel: true, metal: { x: 3 } });
+  const m = P.eval('MetalQC').measureAll();
+  assert.ok(m.metalMm3 >= 1, JSON.stringify(m));
+  assert.equal(rows(/kemiğe oturduğu yüzeyde metal var/).length, 1);
+});
+
+test('solidAt: a 1 mm shell is not solid, a 4 mm post is', () => {
+  const nx = 40, ny = 40, nz = 40, hu = new Int16Array(nx * ny * nz).fill(0);
+  const vol = { hu, nx, ny, nz, sp: [0.5, 0.5, 0.5] };
+  for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+    const d = Math.hypot(i - 10, j - 20) * 0.5;      // shell: 1 mm thick ring at 3 mm radius around (10, 20)
+    if (d > 2 && d <= 3) hu[i + nx * (j + ny * k)] = 3000;
+    if (Math.hypot(i - 30, j - 20) * 0.5 < 2) hu[i + nx * (j + ny * k)] = 3000;   // post: 2 mm radius around (30, 20)
+  }
+  const Q = P.eval('MetalQC');
+  assert.equal(Q.solidAt(vol, 10 + 5, 20, 20), false, 'shell');
+  assert.equal(Q.solidAt(vol, 30, 20, 20), true, 'post centre');
+  assert.equal(Q.solidAt(vol, 30 + 3, 20, 20), true, 'post rim (inside the opening)');
+});
+
 await run('metalqc');

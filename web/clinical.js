@@ -14,6 +14,7 @@ window.Clinical = (function () {
     wall: [2.5, 'Guide duvarı (varsayılan)', 'mm', 1, 5],
     minWall: [2.0, 'Guide duvarı (en az, malzeme profili yoksa)', 'mm', 0.8, 4],
     metalHu: [2500, 'Metal eşiği', 'HU', 1500, 4000],
+    metalCore: [1.25, 'Metal çekirdeği (mineden ayırmak için en az yarıçap)', 'mm', 0, 3],
     metalBand: [1.5, 'Guide altında metal arama bandı', 'mm', 0.5, 5],
     margin: [3, 'Güvenlik payı (başlangıç)', 'mm', 0, 15],
     // guide screws against the saw slots and the osteotomy (sleeve column in the guide and drill path in bone)

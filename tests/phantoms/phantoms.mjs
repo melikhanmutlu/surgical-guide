@@ -65,6 +65,8 @@ export function mandibleBar(o = {}) {
       for (const r of roots) { const t = (cz + az - z) / r.len; if (t >= 0 && t <= 1 && Math.hypot(x - r.x, y) < r.r * (1 - 0.6 * t)) h = 1800; }
       // o.crowns: an enamel crown (7 mm, 3000 HU) on each root, above the crest
       if (o.crowns) for (const r of roots) { const t = z - (cz + az); if (t >= 0 && t < 7 && Math.hypot(x - r.x, y) < r.r * 1.2) h = 3000; }
+      // o.enamel: a real crown instead: dentin (1800 HU) under a 1 mm enamel shell at 3000 HU (enamel saturates like metal)
+      if (o.enamel) for (const r of roots) { const t = z - (cz + az), R = r.r * 1.2, d = Math.hypot(x - r.x, y); if (t >= -2 && t < 7 && d < R) h = (d > R - 1 || t > 6) ? 3000 : 1800; }
     }
     if (metal) {
       if (Math.hypot(x - metal.x, y - metal.y) < metal.r && z < metal.z + metal.len / 2 && z > metal.z - metal.len / 2) h = 3500;
