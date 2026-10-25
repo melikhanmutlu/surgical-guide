@@ -94,4 +94,24 @@ test('plan round trip: system and sizes restored, clamped; the plate is built ag
   x.prm.nP = 9; W.PlanExt.ankPlate.set(x); assert.equal(PL.state().sys, 's27'); assert.equal(PL.state().prm.nP, 5, 'clamped'); assert.equal(PL.ready(), false);
 });
 
+// Denetim 7 (2026-10-25): a plate (or guide) in the plan that is not built for the plan as it is now (a setting changed,
+// the case reopened) used to drop out of the approval items and of the package without a word: the package then went
+// out with neither the plate STL nor its screw list. It is now an item that waits for the rebuild and cannot be approved.
+test('a planned plate not built (reopened case): a pending item that cannot be approved; built again it is an approval item', async () => {
+  assert.ok(PL.state() && !PL.ready());
+  const it = A.items().find(i => i.k === 'plate');
+  assert.ok(it && it.due, JSON.stringify(A.items()));
+  assert.equal(A.itemOk(it), false);
+  assert.ok((W.PendingHooks || []).flatMap(f => f()).includes('Dış plak'));
+  P.eval(`document.getElementById('surgeon') || (() => { const i = document.createElement('input'); i.id = 'surgeon'; document.body.appendChild(i); return i; })()`).value = 'Dr Test';
+  assert.equal(A.approveItem('plate'), false, 'not approvable before the rebuild');
+  assert.equal(PL.files().length, 0);
+  PL.set('sys', 's35'); PL.set('nP', 2); PL.set('nD', 2); await C.toggle(true); await PL.make(); assert.ok(PL.ready());
+  const it2 = A.items().find(i => i.k === 'plate'); assert.ok(it2 && !it2.due);
+  const ok2 = A.approveItem('plate'); assert.ok(ok2, JSON.stringify([it2, PL.checks().filter(c => c[0] === 'crit'), P.eval("(document.getElementById('ankApprMsg') || {}).textContent")])); assert.ok(A.itemOk(A.items().find(i => i.k === 'plate')));
+  // a guide that is placed but not built for the current plan is pending in the same way
+  G.set('off', (G.state().prm.off || 0) + 2);
+  const g = A.items().find(i => i.k === 'guide'); assert.ok(!G.ready() && g && g.due, JSON.stringify(A.items().map(i => [i.k, !!i.due])));
+});
+
 await run('ankle external plate');

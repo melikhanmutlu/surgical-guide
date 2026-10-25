@@ -178,7 +178,11 @@ if (require.main === module) (async () => {
     await page.click('#resRemove').catch(() => {}); await h.idle();
     const t2 = Date.now();
     await h.openStep(5);   // the guide button sits in the Guides step (simple panel)
-    if (await page.isEnabled('#guideMake') && await page.isVisible('#guideMake')) { await page.click('#guideMake'); await h.sleep(500); await h.idle(900000); }
+    // (Denetim 7: "Guide oluştur" queues behind the resection rebuild that "hide the resected piece" scheduled; the busy
+    // bar of the guide shows only once that rebuild ends, so idle() returned at once and the row read "parça null" before
+    // the guide was made. settle() waits for the scheduled and queued jobs.)
+    await h.settle(600000);
+    if (await page.isEnabled('#guideMake') && await page.isVisible('#guideMake')) { await page.click('#guideMake'); await h.sleep(500); await h.settle(900000); }
     // the canal gate (plan A): the surgeon checks the screws against the canal on the slices and says so with the row's fix
     { if (await h.ev(() => { const b = document.querySelector('.checks li [data-fix="canalOk"]'); if (b) b.click(); return !!b; })) { await h.sleep(300); await h.idle(); } }
     const tG = Date.now() - t2, s = await st(), stat = await page.textContent('#guideStat'), fz = await freezes(h), mem = await h.mem();

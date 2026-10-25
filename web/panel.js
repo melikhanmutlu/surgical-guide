@@ -76,7 +76,11 @@
       if (a.after) { if (a.inside) a.after.appendChild(h); else a.after.after(h); }
     } else {
       const row = document.createElement('span');
-      row.className = 'info-row'; const lead = document.createElement('span'); lead.textContent = h.textContent.replace(/\s+/g, ' ').trim().split(/(?<=\.)\s/)[0];
+      // the lead is the text's first sentence, kept in step with it: written again when the text is translated (a
+      // language switch translates the whole paragraph, whose first sentence alone has no dictionary entry; Denetim 7)
+      row.className = 'info-row'; const lead = document.createElement('span'); lead.setAttribute('translate', 'no');
+      const sync = () => { const t = h.textContent.replace(/\s+/g, ' ').trim().split(/(?<=\.)\s/)[0]; if (lead.textContent !== t) lead.textContent = t; };
+      sync(); new MutationObserver(sync).observe(h, { childList: true, subtree: true, characterData: true });
       row.append(b, lead);
       row.addEventListener('click', e => { if (e.target !== b) b.click(); });
       h.before(row); b._row = row;

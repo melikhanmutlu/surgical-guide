@@ -210,5 +210,23 @@ const H = require('./lib');
     return { pass: ok, actual: JSON.stringify({ ...r, after, pack, ms }), evidence: shot };
   });
 
+
+  // Denetim 7 (2026-10-25): in English the malleolar panels kept Turkish lines: the check messages with piece names
+  // ("Lateral malleol ile Fibula arasında ortalama 2,7 mm aralık var.") never matched their dictionary entries, and the
+  // plate panel's "i" lead sentence (the first sentence of its explanation) stayed as first written.
+  await h.run('H13', 'İngilizce', 'H12 sonrası arayüz İngilizce; guide, düzeltme, plak, onay, çıktı panelleri ve kontroller', 'Türkçe harf içeren satır yok', async () => {
+    await page.click('#langSel + .seg button[data-v="en"]').catch(() => page.evaluate(() => I18N.set('en'))); await h.sleep(800); await page.keyboard.press('Escape');
+    await h.ev(() => { ['stAnkG', 'st7', 'stAnkOut', 'stRed'].forEach(id => { const d = document.getElementById(id); if (d) d.open = true; }); Ankle.renderChecks && Ankle.renderChecks(); });
+    await h.sleep(1000);
+    const tr = /[çğıöşüÇĞİÖŞÜ]/, bad = {};
+    for (const id of ['ankGuideBox', 'ankCorrBox', 'ankPlateBox', 'ankAppr', 'ankOut', 'checks']) {
+      const t = await h.ev(id => { const e = document.getElementById(id); return e ? e.innerText : ''; }, id);
+      // piece names typed by the user and file names stay as they are
+      const b = t.split('\n').filter(l => tr.test(l) && !/\.(stl|zip|csv|json|html)\b/.test(l)); if (b.length) bad[id] = b.slice(0, 4);
+    }
+    const shot = await h.shot('H13_en');
+    await page.click('#langSel + .seg button[data-v="tr"]').catch(() => page.evaluate(() => I18N.set('tr'))); await h.sleep(500); await page.keyboard.press('Escape');
+    return { pass: !Object.keys(bad).length, actual: JSON.stringify(bad), evidence: shot };
+  });
   await h.done();
 })().catch(e => { console.error(e); process.exit(1); });

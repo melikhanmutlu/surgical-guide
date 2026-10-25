@@ -26,6 +26,8 @@ window.AnkLM = (function () {
   const St = window.Studio, A = window.Ankle; if (!St || !A || !window.CaseType) return null;
   const { S, V, fmt, bus, esc } = St, $ = id => document.getElementById(id), T = THREE;
   const xl = s => (window.I18N ? I18N.t(s) : s);
+  // piece names as {0}, {1} in a message (ankle.js named): looked up with number stand-ins, the names put back translated
+  const named = (tpl, ...names) => { let s = xl(tpl.replace(/\{(\d)\}/g, (_, i) => String(90001 + +i))); names.forEach((n, i) => { s = s.split(String(90001 + i)).join(xl(n)); }); return s; };
   const on = () => CaseType.get() === 'ankle';
   const LIM = { near: 6, facet: 10, border: 6, minPts: 15, step: 2, gap: 2, mcs: 4, mcsOver: 1, tfcs: 6, post: 25 };
   const SAMPLE = 4000, UP = new T.Vector3(0, 0, 1);
@@ -162,8 +164,8 @@ window.AnkLM = (function () {
     const r = result(); if (!r || !r.red.ok || !A.pieces().some(A.moved)) return [];
     const m = r.red.m, o = [];
     m.steps.forEach(s => {
-      if (s.step != null && Math.abs(s.step) >= LIM.step) o.push(['warn', 'Uyarı', xl(`${s.name} ile ${s.with} arasında eklem basamağı ${fmt(Math.abs(s.step), 1)} mm (örnek eşik ${LIM.step} mm).`), 'ank']);
-      if (s.gap != null && s.gap >= LIM.gap) o.push(['warn', 'Uyarı', xl(`${s.name} ile ${s.with} arasında eklemde ${fmt(s.gap, 1)} mm aralık (örnek eşik ${LIM.gap} mm).`), 'ank']);
+      if (s.step != null && Math.abs(s.step) >= LIM.step) o.push(['warn', 'Uyarı', named(`{0} ile {1} arasında eklem basamağı ${fmt(Math.abs(s.step), 1)} mm (örnek eşik ${LIM.step} mm).`, s.name, s.with), 'ank']);
+      if (s.gap != null && s.gap >= LIM.gap) o.push(['warn', 'Uyarı', named(`{0} ile {1} arasında eklemde ${fmt(s.gap, 1)} mm aralık (örnek eşik ${LIM.gap} mm).`, s.name, s.with), 'ank']);
     });
     if (m.mcs != null && (m.mcs > LIM.mcs || (m.shift != null && m.shift > LIM.mcsOver))) o.push(['warn', 'Uyarı', xl(`Medial açıklık ${fmt(m.mcs, 1)} mm, üst açıklık ${fmt(m.scs, 1)} mm: talus lateral kaymış olabilir (örnek eşik ${LIM.mcs} mm ya da üst açıklık + ${LIM.mcsOver} mm).`), 'ank']);
     if (m.tfcs != null && m.tfcs > LIM.tfcs) o.push(['warn', 'Uyarı', xl(`Tibiofibular açıklık ${fmt(m.tfcs, 1)} mm (örnek eşik ${LIM.tfcs} mm); sindesmoz açık olabilir.`), 'ank']);

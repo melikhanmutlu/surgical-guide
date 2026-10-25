@@ -67,7 +67,7 @@ test('an item changed after its approval loses it; the others stand', () => {
   SC.set(s.id, 'L', s.L); assert.equal(A.itemOk(A.items().find(x => x.k === k)), true, 'back to what was approved');
   // the guide moved: guide and wedge lose theirs
   const st = G.state(); G.set('off', st.prm.off + 2);
-  assert.ok(!A.items().some(x => x.k === 'guide'), 'stale guide: not ready, not listed'); assert.equal(A.packReady(), false);
+  const gi = A.items().find(x => x.k === 'guide'); assert.ok(gi && gi.due && !A.itemOk(gi), 'stale guide: listed as waiting for its rebuild (Denetim 7), not approved'); assert.equal(A.packReady(), false);
   G.set('off', st.prm.off);
 });
 test('approvals saved with the plan; the package lists every STL hash in cerceve.json and the report', async () => {

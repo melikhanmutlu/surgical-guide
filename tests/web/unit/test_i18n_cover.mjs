@@ -77,7 +77,8 @@ const viaKey = s => {
   const re = new RegExp('^' + s.split('\u0001').map(p => esc(asKey(p))).join('[#\\p{L}\\d ()%°.,\\-–/·+\'’]{0,40}?') + '$', 'u');
   return KEYS.some(k => re.test(k));
 };
-const translated = s => viaKey(s) || [s, s.replace(/\u0001/g, '7'), s.replace(/\u0001/g, ''), s.replace(/\u0001/g, 'Vida 7')].some(v => v.trim() && T(v) !== v);
+// {0} {1}: the name slots of a template filled after translation (ankle.js / anklm.js named())
+const translated = s0 => { const s = s0.replace(/\{\d\}/g, '\u0001'); return viaKey(s) || [s, s.replace(/\u0001/g, '7'), s.replace(/\u0001/g, ''), s.replace(/\u0001/g, 'Vida 7')].some(v => v.trim() && T(v) !== v); };
 const KEEP = new Set(['Türkçe']);   // the language's own name in the selector stays Turkish on purpose
 const SKIP_FILES = new Set(['i18n.js', 'i18n_en.js']);
 const files = fs.readdirSync(`${REPO}/web`).filter(f => f.endsWith('.js') && !SKIP_FILES.has(f)).sort();
@@ -110,6 +111,21 @@ test('run-time samples come out in English', () => {
     ['1 gün', '1 day'], ['5 gün', '5 days'],
   ];
   for (const [tr, en] of S) assert.equal(T(tr), en);
+});
+
+// Denetim 7: a name translated first and then put into a translated template (const nm = xl('Üst K-teli'); xl(`${nm} …`))
+// never matches: at run time the key is "Upper K-wire …", half English. The name goes outside the template instead.
+test('no translated name inside a translated template', () => {
+  const bad = [];
+  for (const f of fs.readdirSync(REPO + '/web').filter(f => f.endsWith('.js') && !/^i18n/.test(f))) {
+    const code = fs.readFileSync(REPO + '/web/' + f, 'utf8');
+    for (const m of code.matchAll(/(?:const|let)\s+(\w+)\s*=[^;\n]*\b(?:xl|I18N\.t)\(/g)) {
+      const name = m[1], after = code.slice(m.index, m.index + 2500);
+      const use = after.match(new RegExp('\\b(?:xl|I18N\\.t)\\(`[^`]*\\$\\{' + name + '\\}'));
+      if (use) bad.push(`${f}: ${name} → ${use[0].slice(0, 80)}`);
+    }
+  }
+  assert.equal(bad.length, 0, bad.join('\n'));
 });
 
 await run('i18n leftovers (all web/*.js vs i18n_en.js)');

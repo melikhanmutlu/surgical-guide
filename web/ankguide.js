@@ -427,9 +427,9 @@ window.AnkGuide = (function () {
     if (!(out && out.key === keyOf())) { o.push(['warn', 'Uyarı', xl('Guide ayarları değişti; guide\'ı yeniden oluşturun.'), 'ank']); return o; }
     out.info.pins.forEach(p => {
       const nm = p.side > 0 ? xl('Üst K-teli') : xl('Alt K-teli');
-      if (!p.entry || !p.ok) o.push(['warn', 'Uyarı', xl(`${nm} kemiğe ulaşmıyor ya da guide gövdesinin dışında kaldı.`), 'ank']);
-      else if (p.crosses) o.push(['crit', 'Kritik', xl(`${nm} testere yarığını kesiyor; teli kesiden uzaklaştırın.`), 'ank']);
-      else if (p.inBone < 10) o.push(['warn', 'Uyarı', xl(`${nm} kemikte yalnız ${fmt(p.inBone, 0)} mm ilerliyor.`), 'ank']);
+      if (!p.entry || !p.ok) o.push(['warn', 'Uyarı', `${nm} ${xl('kemiğe ulaşmıyor ya da guide gövdesinin dışında kaldı.')}`, 'ank']);
+      else if (p.crosses) o.push(['crit', 'Kritik', `${nm} ${xl('testere yarığını kesiyor; teli kesiden uzaklaştırın.')}`, 'ank']);
+      else if (p.inBone < 10) o.push(['warn', 'Uyarı', `${nm} ${xl(`kemikte yalnız ${fmt(p.inBone, 0)} mm ilerliyor.`)}`, 'ank']);
     });
     if (out.info.pieces > 1) o.push(['warn', 'Uyarı', xl('Guide birden fazla parçaya bölündü; ölçüleri büyütün.'), 'ank']);
     // seating (the studio's own rules for the mandible guide) and the material
@@ -453,8 +453,8 @@ window.AnkGuide = (function () {
       if (jt.slot < JOINT.min) o.push(['crit', 'Kritik', xl(`Testere kesisi eklem yüzeyine ${fmt(jt.slot, 1)} mm yaklaşıyor (en az ${JOINT.min} mm); kesiyi eklemden uzaklaştırın.`), 'ank']);
       jt.pins.forEach((p, i) => {
         if (!p) return; const nm = out.info.pins[i] && out.info.pins[i].side > 0 ? xl('Üst K-teli') : xl('Alt K-teli');
-        if (p.talus) o.push(['crit', 'Kritik', xl(`${nm} eklemi geçip talusa giriyor; teli kaldırın ya da yönünü değiştirin.`), 'ank']);
-        else if (p.d < JOINT.min) o.push(['crit', 'Kritik', xl(`${nm} eklem yüzeyine ${fmt(p.d, 1)} mm yaklaşıyor (en az ${JOINT.min} mm).`), 'ank']);
+        if (p.talus) o.push(['crit', 'Kritik', `${nm} ${xl('eklemi geçip talusa giriyor; teli kaldırın ya da yönünü değiştirin.')}`, 'ank']);
+        else if (p.d < JOINT.min) o.push(['crit', 'Kritik', `${nm} ${xl(`eklem yüzeyine ${fmt(p.d, 1)} mm yaklaşıyor (en az ${JOINT.min} mm).`)}`, 'ank']);
       });
     }
     if (!(out.prod && out.prod.productionOk)) o.push(['warn', 'Uyarı', xl('Guide\'ın üretim STL\'i alınmadı; pakette yalnız tarayıcı önizlemesi var (dosya adı "BASMAYIN"). Kesi guide\'ı adımında "Üretim STL\'i" düğmesine basın.'), 'ank']);

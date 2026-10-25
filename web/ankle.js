@@ -504,15 +504,19 @@ window.Ankle = (function () {
         overWith: per.reduce((k, x, j) => (j !== i && x.over > (k < 0 ? 0 : per[k].over) ? j : k), -1) };
     });
   }
+  // a message with piece names in it: the names stand in the template as {0}, {1}; the template is looked up with
+  // number stand-ins in their place (the dictionary keys hold them as #) and the translated names go back in.
+  // (Denetim 7: the names went into the lookup as text, so these messages never matched their English entries.)
+  const named = (tpl, ...names) => { let s = xl(tpl.replace(/\{(\d)\}/g, (_, i) => String(90001 + +i))); names.forEach((n, i) => { s = s.split(String(90001 + i)).join(xl(n)); }); return s; };
   function checks() {
     if (!on() || !pieces.length) return [];
     const out = [];
     metrics.forEach(m => {
       if (m.role !== 'frag') return;
       const with_ = m.overWith >= 0 ? pieces[m.overWith].name : '';
-      if (m.over >= LIM.overlapCrit) out.push(['crit', 'Kritik', xl(`${m.name}, ${with_} ile ${fmt(m.over, 1)} mm iç içe geçiyor; iki kemik aynı yeri dolduramaz. Parçayı geri çekin.`), 'ank']);
-      else if (m.over >= LIM.overlapWarn) out.push(['warn', 'Uyarı', xl(`${m.name}, ${with_} ile ${fmt(m.over, 1)} mm iç içe; kırık yüzeyleri ezilmiş olabilir, kontrol edin.`), 'ank']);
-      if (m.gap != null && m.gap > LIM.gapWarn && m.partner >= 0) out.push(['warn', 'Uyarı', xl(`${m.name} ile ${pieces[m.partner].name} arasında ortalama ${fmt(m.gap, 1)} mm aralık var.`), 'ank']);
+      if (m.over >= LIM.overlapCrit) out.push(['crit', 'Kritik', named(`{0}, {1} ile ${fmt(m.over, 1)} mm iç içe geçiyor; iki kemik aynı yeri dolduramaz. Parçayı geri çekin.`, m.name, with_), 'ank']);
+      else if (m.over >= LIM.overlapWarn) out.push(['warn', 'Uyarı', named(`{0}, {1} ile ${fmt(m.over, 1)} mm iç içe; kırık yüzeyleri ezilmiş olabilir, kontrol edin.`, m.name, with_), 'ank']);
+      if (m.gap != null && m.gap > LIM.gapWarn && m.partner >= 0) out.push(['warn', 'Uyarı', named(`{0} ile {1} arasında ortalama ${fmt(m.gap, 1)} mm aralık var.`, m.name, pieces[m.partner].name), 'ank']);
     });
     if (unmatched.length) out.push(['warn', 'Uyarı', xl(`Kayıtlı planda ${unmatched.length} parçanın hareketi bugünkü parçalarla eşleşmedi (${unmatched.join(', ')}); bu parçalar BT konumunda. Segmentasyon değişmiş olabilir; redüksiyonu kontrol edin.`), 'ank']);
     if (!pieces.some(moved)) out.push(['info', 'Bilgi', xl('Henüz hiçbir parça taşınmadı; redükte model BT\'deki konumla aynı.'), 'ank']);
@@ -662,8 +666,8 @@ window.Ankle = (function () {
       <li class="sum"><button class="go" data-ank-go="st1"><span class="nm">${xl('Görüntü kalitesi')}</span></button><span class="tag ${qcCrit ? 'crit' : 'ok'}">${qcCrit ? 'Kritik' : 'Uygun'}</span></li>
       <li><button class="go" data-ank-go="stRed"><span class="nm">${xl('Redüksiyon')}</span><small>${xl(`${nMoved} parça taşındı`)}${meta.cls ? ' · ' + esc(xl(meta.cls)) : ''}</small></button>
         <span class="act">${red.ok ? `<span class="badge" title="${esc(red.by || '')}"><span class="ini">${esc(initials(red.by))}</span></span>` : ''} <button id="ankOk">${red.ok ? 'Kaldır' : 'Onayla'}</button></span></li>
-      ${items().map(it => { const ok = itemOk(it), stale = !ok && appr[it.k]; return `<li><button class="go" data-ank-go="${it.go}"><span class="nm">${esc(xl(it.name))}</span>${stale ? `<small>${xl('Plan değişti; yeniden onaylayın.')}</small>` : ''}</button>
-        <span class="act">${ok ? `<span class="badge" title="${esc(appr[it.k].by)}"><span class="ini">${esc(initials(appr[it.k].by))}</span></span>` : ''} <button data-ank-item="${esc(it.k)}">${ok ? xl('Kaldır') : xl('Onayla')}</button></span></li>`; }).join('')}
+      ${items().map(it => { const ok = itemOk(it), stale = !ok && appr[it.k]; return `<li><button class="go" data-ank-go="${it.go}"><span class="nm">${esc(xl(it.name))}</span>${it.due ? `<small>${xl('Yeniden oluşturulmalı (plan değişti ya da vaka yeniden açıldı).')}</small>` : stale ? `<small>${xl('Plan değişti; yeniden onaylayın.')}</small>` : ''}</button>
+        <span class="act">${ok ? `<span class="badge" title="${esc(appr[it.k].by)}"><span class="ini">${esc(initials(appr[it.k].by))}</span></span>` : ''} <button data-ank-item="${esc(it.k)}" ${it.due ? 'disabled' : ''}>${ok ? xl('Kaldır') : xl('Onayla')}</button></span></li>`; }).join('')}
       <li class="sum"><button class="go" data-ank-go="checks"><span class="nm">${xl('Otomatik kontroller')}</span></button><span class="tag ${crit ? 'crit' : 'ok'}">${crit ? 'Kritik' : 'Geçti'}</span></li></ul>
       <p class="hint" id="ankApprMsg"></p>`;
     box.querySelectorAll('[data-ank-go]').forEach(b => b.addEventListener('click', () => { const id = b.dataset.ankGo; if (id === 'checks') St.goTo('data'); else if ($(id)) $(id).open = true; }));
@@ -702,6 +706,12 @@ window.Ankle = (function () {
       const dg = AnkScrew.drillInfo();
       if (dg) out.push({ k: 'drill', name: 'Matkap guide\'ı', go: 'stAnkS', sig: hsh(JSON.stringify(AnkScrew.screws().filter(z => z.piece === dg.name)) + dg.name + mot(dg.piece)), crit: AnkScrew.drillChecks().some(c => c[0] === 'crit') });
     }
+    // a guide or a plate that is planned (its settings are in the plan) but not built for the plan as it is now (a
+    // setting changed, the case was reopened): an item that cannot be approved until it is built again, so the package
+    // never goes out without it (it used to drop out of the list, and of the package, without a word)
+    const due = (k, name) => out.push({ k, name, go: 'stAnkG', sig: 'due', crit: false, due: true });
+    if (window.AnkGuide && AnkGuide.state() && !AnkGuide.ready()) due('guide', 'Kesi guide\'ı');
+    if (window.AnkPlate && AnkPlate.state() && !AnkPlate.ready()) due('plate', 'Dış plak');
     if (window.AnkGuide && AnkGuide.ready()) {
       const gs = AnkGuide.state(), o = AnkGuide.parts(), gp = pieces.find(q => q.name === gs.piece), ck = AnkGuide.checks();
       const prod = o.prod && o.prod.productionOk ? [o.prod.volume, o.prod.stl.length] : null;
@@ -714,12 +724,13 @@ window.Ankle = (function () {
     }
     return out;
   }
-  const itemOk = it => !!(appr[it.k] && appr[it.k].sig === it.sig);
+  const itemOk = it => !it.due && !!(appr[it.k] && appr[it.k].sig === it.sig);
   function approveItem(k) {
     const it = items().find(x => x.k === k); if (!it) return false;
     const name = $('surgeon') ? $('surgeon').value.trim() : '', msg = t => { if ($('ankApprMsg')) $('ankApprMsg').textContent = xl(t); };
     if (itemOk(it)) { delete appr[k]; renderAppr(); St.emit('changed'); return true; }
     if (!name) { msg('Önce onaylayan cerrahın adını yazın.'); return false; }
+    if (it.due) { msg(`${xl(it.name)}: ${xl('plan değişti ya da vaka yeniden açıldı; önce yeniden oluşturun.')}`); return false; }
     if (it.crit) { msg(`${it.name}: kritik kontrol var; önce düzeltin.`); return false; }
     appr[k] = { by: name, at: new Date().toISOString(), sig: it.sig }; renderAppr(); St.emit('changed'); return true;
   }
@@ -809,7 +820,7 @@ window.Ankle = (function () {
     const box = $('ankOut'); if (!box) return;
     const ready = packReady(), why = [];
     if (!pieces.length) why.push(xl('parça yok'));
-    else { if (!red.ok) why.push(xl('redüksiyon onayı')); items().filter(it => !itemOk(it)).forEach(it => why.push(`${xl(it.name)} ${xl('onayı')}`)); const A = window.Audit, h = A ? A.planHash() : ''; if (A && !A.status('eng', h).ok) why.push(xl('mühendis onayı')); if (A && !A.status('sur', h).ok) why.push(xl('cerrah onayı')); if (S.crit) why.push(xl(`${S.crit} kritik kontrol`)); }
+    else { if (!red.ok) why.push(xl('redüksiyon onayı')); items().filter(it => !itemOk(it)).forEach(it => why.push(it.due ? `${xl(it.name)} ${xl('yeniden oluşturulmalı')}` : `${xl(it.name)} ${xl('onayı')}`)); const A = window.Audit, h = A ? A.planHash() : ''; if (A && !A.status('eng', h).ok) why.push(xl('mühendis onayı')); if (A && !A.status('sur', h).ok) why.push(xl('cerrah onayı')); if (S.crit) why.push(xl(`${S.crit} kritik kontrol`)); }
     box.innerHTML = `<ol class="deliver">
       <li><div><b>${xl('Redükte model STL\'i')}</b><p class="hint">${xl('Bütün parçalar planlanan konumda, tek dosya. Plak ön bükme için basılabilir; onay gerektirmez.')}</p></div><button id="ankStl" ${pieces.length ? '' : 'disabled'}><svg class="i"><use href="#i-download"/></svg>${xl('İndir')}</button></li>
       ${window.AnkGuide && AnkGuide.ready() ? `<li><div><b>${xl('Kesi guide\'ı ve kama')}</b><p class="hint">${xl('Üretim STL\'i alındıysa o, alınmadıysa tarayıcı önizlemesi ("BASMAYIN" adıyla) ve kama; redükte modelle aynı koordinatta. Pakete de girer.')}</p></div><button id="ankGStl">${xl('İndir')}</button></li>` : ''}
