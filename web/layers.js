@@ -31,7 +31,7 @@ window.Layers = (function () {
         m[i + nx * (j + ny * k)] = h >= L.min && h <= L.max ? 1 : 0;
       }
       const { labels, comps } = G.components(m, nx, ny, nz, L.outer ? 50 : 20);
-      L.empty = !comps.length;
+      L.empty = !comps.length; L.defaced = !!(L.outer && S.vol && S.vol.meta && S.vol.meta.defaced);
       if (!comps.length) { render(); return; }
       if (L.outer) {
         // the body: largest piece with the airway and every closed cavity filled in
@@ -50,8 +50,16 @@ window.Layers = (function () {
   }
   function opacity(L) {
     const pt = St.parts[pid(L)]; if (!pt) return;
-    pt.obj.traverse(c => { if (c.material) { c.material.opacity = L.opacity; c.material.transparent = L.opacity < 1; c.material.depthWrite = L.opacity >= 1; c.material.needsUpdate = true; } });
-    pt.opacity = 1; pt.obj.renderOrder = L.opacity < 1 ? 2 : 0;
+    pt.obj.traverse(c => { if (c.material) { c.material.userData.baseOpacity = 1; c.material.opacity = L.opacity; c.material.transparent = L.opacity < 1; c.material.depthWrite = L.opacity >= 1; c.material.needsUpdate = true; } });
+    pt.opacity = L.opacity; pt.obj.renderOrder = L.opacity < 1 ? 2 : 0;
+    const row = document.querySelector(`#parts [data-o="${pid(L)}"]`); if (row) row.value = L.opacity;
+  }
+  // the scene list slider (web/app.js setOpacity) sets the same opacity as this panel's slider
+  function setOpacity(id, a) {
+    const L = layers.find(x => pid(x) === id); if (!L) return false;
+    L.opacity = Math.max(0.05, Math.min(1, +a || 0)); opacity(L);
+    const el = document.querySelector(`#layerList [data-op="${L.id}"]`); if (el) el.value = L.opacity;
+    return true;
   }
   function show(id, on) {
     const pt = St.parts[id]; if (!pt) return false;
@@ -75,7 +83,8 @@ window.Layers = (function () {
         <span class="hu"><input type="number" data-min="${L.id}" value="${L.min}" step="10" aria-label="${St.esc(L.name)}: alt HU sınırı"> – <input type="number" data-max="${L.id}" value="${L.max}" step="10" aria-label="${St.esc(L.name)}: üst HU sınırı"> HU</span>
         <input type="range" min="0.05" max="1" step="0.05" value="${L.opacity}" data-op="${L.id}" title="Saydamlık" aria-label="${St.esc(L.name)}: saydamlık">
         <button class="x" data-del="${L.id}" title="Katmanı kaldır" aria-label="Katmanı kaldır: ${St.esc(L.name)}">×</button>
-        ${L.empty ? '<small class="hint">Bu aralıkta doku bulunamadı.</small>' : ''}</li>`).join('');
+        ${L.empty ? '<small class="hint">Bu aralıkta doku bulunamadı.</small>' : ''}
+        ${L.defaced && L.on && !L.empty ? '<small class="hint">Örnek BT anonimleştirildi: kemikten 5 mm uzaktaki doku silindiği için cilt kemiği saran ince bir kabuk gibi görünür. Tam cilt yüzeyi için kendi BT\'nizi yükleyin.</small>' : ''}</li>`).join('');
     const byId = id => layers.find(L => L.id === +id);
     box.querySelector('[data-bone]').addEventListener('change', e => { show('bone', e.target.checked); if (St.parts.resected && !S.resRemoved) show('resected', e.target.checked); });
     box.querySelector('[data-bthr]').addEventListener('change', e => { const v = Math.max(120, Math.min(800, Math.round(+e.target.value / 10) * 10)); $('thr').value = v; $('thr').dispatchEvent(new Event('input')); $('thr').dispatchEvent(new Event('change')); });
@@ -126,5 +135,5 @@ window.Layers = (function () {
   render();
   // a stable key for the layer list's names (web/app.js partNames): the layer's place in the list, not its run-time id
   const keyOf = id => { const i = layers.findIndex(L => pid(L) === id); return i < 0 ? id : 'layer@' + i; };
-  return { add, keyOf, list: () => layers, targets: () => layers.map(L => St.parts[pid(L)]).filter(pt => pt && pt.visible).map(pt => pt.obj), PRESETS };
+  return { add, keyOf, setOpacity, list: () => layers, targets: () => layers.map(L => St.parts[pid(L)]).filter(pt => pt && pt.visible).map(pt => pt.obj), PRESETS };
 })();

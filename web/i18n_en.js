@@ -1872,6 +1872,7 @@ window.I18N_EN = {
 "# oklüzal yönden #° eğik; açılı abutment gerekebilir.": "# is tilted #° from the occlusal direction; an angled abutment may be needed.",
 "# katmanı oluşturuluyor…": "Creating the # layer…",
 "Bu aralıkta doku bulunamadı.": "No tissue found in this range.",
+"Örnek BT anonimleştirildi: kemikten # mm uzaktaki doku silindiği için cilt kemiği saran ince bir kabuk gibi görünür. Tam cilt yüzeyi için kendi BT'nizi yükleyin.": "The sample CT is anonymized: tissue more than # mm from bone was removed, so the skin looks like a thin shell around the bone. Load your own CT for the full skin surface.",
 "# gösteriliyor…": "Showing #…",
 "Guide hazır": "Guide ready",
 "iki parça (kavisli kemik)": "two pieces (curved bone)",

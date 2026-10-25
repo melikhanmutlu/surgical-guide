@@ -325,6 +325,8 @@
     for (let i = 0; i < q.length; i++) hu[i] = q[i] * d.scale + d.offset;
     const [nx, ny, nz] = d.dims, v = { hu, nx, ny, nz, sp: d.spacing, origin: d.origin, axes: d.axes || [[1, 0, 0], [0, 1, 0], [0, 0, 1]] };
     if (d.meta) v.meta = Object.assign({ series: 1 }, d.meta);
+    // the real CT samples are defaced (tissue > 5 mm from bone is air): the skin layer can only be a shell around the bone
+    if (/face removed/i.test(d.note || '')) (v.meta = v.meta || { series: 1 }).defaced = true;
     return v;
   }
   // built-in samples: the synthetic pair, and one anonymised real CT pair (cropped to bone, face removed; tools/make_ct_sample.py)
@@ -2520,6 +2522,9 @@
   }
   // one scene list: visibility, opacity and isolate per part
   function setOpacity(pt, a) {
+    // tissue layers (web/layers.js) keep their own opacity: the slider value is the opacity itself, not a factor
+    // on the layer's preset (skin 0.22 x 100 % stayed see-through)
+    if (window.Layers && Layers.setOpacity && Layers.setOpacity(pt.id, a)) return;
     pt.opacity = a;
     pt.obj.traverse(c => { if (!c.material) return; const m = c.material; if (m.userData.baseOpacity === undefined) m.userData.baseOpacity = m.opacity; m.opacity = m.userData.baseOpacity * a; m.transparent = m.opacity < 1; m.depthWrite = m.opacity >= 1 && m.userData.baseOpacity >= 1; m.needsUpdate = true; });
   }
@@ -4180,7 +4185,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   function sfetch(u, o) { return window.ServerAuth ? ServerAuth.fetch(u, o) : fetch(u, o); }
   function serverUrl() { return ($('aiUrl').value || '').trim().replace(/\/+$/, ''); }
   function select(sel) { if (sel) S.guideSel = false; S.sel = sel; emit('select', sel); renderElements(); rebuildElementParts(S.result ? S.result.pls : planesWorld(), S.result ? S.result.screwInfo : []); applyExplode(); render(); }
-  window.Studio = { bg: bgCall, loadSample, sampleFor, SAMPLES, chooseAxis, nearestPiece, netsOf, blurNetsOf, renamePart, partName, guideBuilds: () => guideBuilds, mandibleView, endModes, onEndModes, startLoad, loadStopped, loadBusy: () => committing, LOAD_CANCELLED, renderComps, setGuideRot, setGuideRoll, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, resEnds, splitGap, cutMisses, evalScrew, resectedAt, resectedNear, resPiece, boneTrack, cutAlongBone, bestScrew,
+  window.Studio = { bg: bgCall, loadSample, sampleFor, SAMPLES, chooseAxis, nearestPiece, netsOf, blurNetsOf, renamePart, partName, guideBuilds: () => guideBuilds, mandibleView, endModes, onEndModes, startLoad, loadStopped, loadBusy: () => committing, LOAD_CANCELLED, renderComps, setGuideRot, setGuideRoll, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, setOpacity, resEnds, splitGap, cutMisses, evalScrew, resectedAt, resectedNear, resPiece, boneTrack, cutAlongBone, bestScrew,
     boneSections, autoPrep, exportPackage, sha256Bytes, prodRecord, sizeBody, autoBody, buildGuideSet, cutsAngle, cutFrame, pieceFrames, pieceBody, screwBodyOn, pieceWrapTop, frameAt, stumpGap, mergeStl, mergeMeshes, AUTO_DEFAULT, G_DEFAULT, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, busyFrac, busySpan, busyText, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume, boneField, simplifyMesh, BAR, barPlan, barSdf, buildBarMesh, placeLug, longCase, axisOffBone, ramusAxis, stopSides, LONG_MM, CUT_OFF_MAX, prodKey, productionSTL, exportOne, softOcc, boneDoubt, boneKey, runFix, printIssues, printLine, serverBar, guideField, lockState: () => lock, bonelessCut, qualityCheck, syncQC, segEdits, editsAt, slotDefault, slotDepth, slotPlay, SLOT_PLAY_MAX, reframe, exclusive, settled, makeGuide, prodReply, prodWhy, gateChecks, swInfo, swLine, sfetch, reportHTML, lesionMargins, anchorFromSlice, ramusAxis };
   bus.addEventListener('planeDragged', () => { renderElements(); schedule(true, 'drag'); });
   // messages assembled at run time are written in the language that was active: write them again when it changes
