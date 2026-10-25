@@ -2618,7 +2618,7 @@
       : [['u', 'Konum (eksen boyunca)', -80, 80, 0.5, 'mm'], ['v', 'Konum (yanal)', -15, 15, 0.5, 'mm'], ['tiltU', 'Eğim (eksen yönünde)', -89, 89, 1, '°'], ['tiltV', 'Eğim (yanal)', -89, 89, 1, '°'],
          ['d', 'Matkap çapı', 1.2, 4, 0.1, 'mm'], ['D', 'Kovan dış çapı', 3, 8, 0.1, 'mm'], ['sleeveH', 'Kovan yüksekliği', 0, 12, 0.5, 'mm'], ['len', 'Vida boyu', 6, 40, 1, 'mm']];
     box.innerHTML = `<h3 class="sub">${isP ? 'Kesi' : 'Vida'} ${i + 1}</h3>` + fields.map(([k, t, mn, mx, st, unit]) => `<div class="ctl"><div class="ctl-row"><label for="f_${k}">${t}</label><output id="o_${k}">${fmt(o[k], st < 1 ? 1 : 0)} ${unit}</output></div><input type="range" id="f_${k}" min="${mn}" max="${mx}" step="${st}" value="${o[k]}"></div>`).join('') +
-      `<p class="hint">${apprText(o)}</p><p class="hint more">3B görünümde kesiyi ya da vidayı tutup sürükleyebilir, tutamaçla da taşıyabilirsiniz (W taşı, E döndür). Taşıma eksenleri varsayılan olarak kesiyle birlikte döner: biri kesiye dik, ikisi kesi düzleminde.</p>` +
+      `<p class="hint">${apprText(o)}</p><p class="hint more">3B görünümde kesiyi ya da vidayı tutup sürükleyebilir, tutamaçla da taşıyabilirsiniz (W taşı, E döndür). Taşıma eksenleri varsayılan olarak kesiyle birlikte döner: biri kesiye dik, ikisi kesi düzleminde.</p><p class="hint more">Kesitlerde (aksiyel, koronal, sagittal) kesi çizgisini sürükleyerek taşıyabilir, çizgideki yuvarlak tutamaçla kesiyi o kesit düzleminde döndürebilirsiniz.</p>` +
       `<div class="btns end"><button id="delEl" class="sm"><svg class="i"><use href="#i-trash"/></svg>${isP ? 'Kesiyi sil' : 'Vidayı sil'}</button></div>`;
     fields.forEach(([k, , , , st, unit]) => $('f_' + k).addEventListener('input', e => { const c0 = isP && /yaw|pitch/.test(k) ? planesWorld()[i].p : null; o[k] = +e.target.value; if (c0) { pivotCut(o, c0); syncSliders(o); syncGizmo(); } if (!isP && /^(u|v|tilt)/.test(k)) o.hand = 1; unapprove(o); $('o_' + k).textContent = `${fmt(o[k], st < 1 ? 1 : 0)} ${unit}`; schedule(isP, true); }));
     $('delEl').addEventListener('click', () => { (isP ? S.planes : S.screws).splice(i, 1); S.sel = null; unapproveAll(); schedule(isP); });
@@ -3312,6 +3312,28 @@
     if (Math.abs(off) > CUT_OFF_MAX) return false;
     o.off = Math.round(off * 10) / 10;
     o.pv = Math.max(-80, Math.min(80, Math.round(d.dot(v) * 10) / 10)); o.pn = Math.max(-80, Math.min(80, Math.round(d.dot(n) * 10) / 10));
+    return true;
+  }
+  // a cut's normal from its yaw / pitch in the guide frame (as planesWorld)
+  function cutNormal(yaw, pitch) {
+    const { u, n } = frameAxes(), N = u.clone().applyAxisAngle(n, deg(yaw));
+    return N.applyAxisAngle(V().crossVectors(n, N).normalize(), deg(pitch)).normalize();
+  }
+  // turn a cut by `ang` degrees about axis A through c0 (a point on the cut, e.g. where it crosses a CT slice), from its
+  // state at the start of the turn st = { o0, N0, p0 } (fields, normal, cut point). The cut point turns with it. The
+  // angles are kept to 0.1°; a turn that leaves the cut almost parallel to the guide axis (N·u < 0.2, as keepCuts) or
+  // past ±89° is refused and the cut is left as it was at the start (false).
+  function turnCut(o, st, A, c0, ang) {
+    const back = () => { ['off', 'yaw', 'pitch', 'pv', 'pn'].forEach(k => { if (st.o0[k] === undefined) delete o[k]; else o[k] = st.o0[k]; }); return false; };
+    if (!ang) { back(); return true; }
+    const { u, v, n } = frameAxes(), ax = A.clone().normalize();
+    let N = st.N0.clone().applyAxisAngle(ax, deg(ang)).normalize(); if (N.dot(u) < 0) N.negate();
+    if (N.dot(u) < 0.2) return back();
+    const yaw = Math.round(THREE.MathUtils.radToDeg(Math.atan2(N.dot(v), N.dot(u))) * 10) / 10, pitch = Math.round(THREE.MathUtils.radToDeg(-Math.asin(Math.max(-1, Math.min(1, N.dot(n))))) * 10) / 10;
+    if (Math.abs(yaw) > 89 || Math.abs(pitch) > 89) return back();
+    const c = c0.clone().add(st.p0.clone().sub(c0).applyAxisAngle(ax, deg(ang)));
+    o.yaw = yaw; o.pitch = pitch;
+    if (!moveCutTo(o, c, cutNormal(yaw, pitch))) return back();
     return true;
   }
   if (gizmo) {
@@ -4316,7 +4338,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   function serverUrl() { return ($('aiUrl').value || '').trim().replace(/\/+$/, ''); }
   function select(sel) { if (sel) S.guideSel = false; S.sel = sel; emit('select', sel); renderElements(); rebuildElementParts(S.result ? S.result.pls : planesWorld(), S.result ? S.result.screwInfo : []); applyExplode(); render(); }
   window.Studio = { bg: bgCall, loadSample, sampleFor, SAMPLES, chooseAxis, nearestPiece, netsOf, blurNetsOf, renamePart, partName, guideBuilds: () => guideBuilds, mandibleView, endModes, onEndModes, startLoad, loadStopped, loadBusy: () => committing, LOAD_CANCELLED, renderComps, setGuideRot, setGuideRoll, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, setOpacity, resEnds, splitGap, cutMisses, evalScrew, resectedAt, resectedNear, resPiece, boneTrack, cutAlongBone, bestScrew,
-    boneSections, autoPrep, exportPackage, sha256Bytes, prodRecord, sizeBody, autoBody, buildGuideSet, cutsAngle, cutFrame, pieceFrames, pieceBody, screwBodyOn, pieceWrapTop, frameAt, stumpGap, mergeStl, mergeMeshes, AUTO_DEFAULT, G_DEFAULT, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, gz, gizmoStart, gizmoApply, cutMoveBasis, moveCutTo, moveSpace, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, busyFrac, busySpan, busyText, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume, boneField, simplifyMesh, BAR, barPlan, barSdf, buildBarMesh, placeLug, longCase, axisOffBone, ramusAxis, stopSides, LONG_MM, CUT_OFF_MAX, prodKey, productionSTL, exportOne, softOcc, boneDoubt, boneKey, runFix, printIssues, printLine, serverBar, guideField, lockState: () => lock, bonelessCut, qualityCheck, syncQC, segEdits, editsAt, slotDefault, slotDepth, slotPlay, SLOT_PLAY_MAX, reframe, exclusive, settled, makeGuide, screwSlotGap, screwsNearSlots, clearScrew, clearSlotScrews, sleeveSlotGap, SCREW_SLOT_GAP, SCREW_SLOT_MIN, prodReply, prodWhy, gateChecks, swInfo, swLine, sfetch, reportHTML, lesionMargins, anchorFromSlice, ramusAxis };
+    boneSections, autoPrep, exportPackage, sha256Bytes, prodRecord, sizeBody, autoBody, buildGuideSet, cutsAngle, cutFrame, pieceFrames, pieceBody, screwBodyOn, pieceWrapTop, frameAt, stumpGap, mergeStl, mergeMeshes, AUTO_DEFAULT, G_DEFAULT, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, gz, gizmoStart, gizmoApply, cutMoveBasis, moveCutTo, moveSpace, cutNormal, turnCut, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, busyFrac, busySpan, busyText, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume, boneField, simplifyMesh, BAR, barPlan, barSdf, buildBarMesh, placeLug, longCase, axisOffBone, ramusAxis, stopSides, LONG_MM, CUT_OFF_MAX, prodKey, productionSTL, exportOne, softOcc, boneDoubt, boneKey, runFix, printIssues, printLine, serverBar, guideField, lockState: () => lock, bonelessCut, qualityCheck, syncQC, segEdits, editsAt, slotDefault, slotDepth, slotPlay, SLOT_PLAY_MAX, reframe, exclusive, settled, makeGuide, screwSlotGap, screwsNearSlots, clearScrew, clearSlotScrews, sleeveSlotGap, SCREW_SLOT_GAP, SCREW_SLOT_MIN, prodReply, prodWhy, gateChecks, swInfo, swLine, sfetch, reportHTML, lesionMargins, anchorFromSlice, ramusAxis };
   bus.addEventListener('planeDragged', () => { renderElements(); schedule(true, 'drag'); });
   // messages assembled at run time are written in the language that was active: write them again when it changes
   if (window.addEventListener) window.addEventListener('langchange', () => { try { renderChecks(); renderAppr(); syncLesion(); } catch (e) { /* no case open yet */ } });

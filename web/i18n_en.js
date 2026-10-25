@@ -517,6 +517,7 @@ window.I18N_EN = {
 "Kesiye dik": "Perpendicular to cut",
 "Kesiye dik: önce kesi ekleyin": "Perpendicular to cut: add a cut first",
 "Kesiye göre (dik + düzlem içi)": "Cut axes (perpendicular + in-plane)",
+"Kesitlerde (aksiyel, koronal, sagittal) kesi çizgisini sürükleyerek taşıyabilir, çizgideki yuvarlak tutamaçla kesiyi o kesit düzleminde döndürebilirsiniz.": "In the slices (axial, coronal, sagittal) you can drag a cut line to move the cut, and turn the cut in that slice plane with the round handle on the line.",
 "Kesiye yakın": "Near cut",
 "Kesiye yakın (boş bırakılacak)": "Near cut (left empty)",
 "Kesiyi modelde tutup sürüklerken izlediği yol": "Path the cut follows while you hold and drag it on the model",

@@ -90,6 +90,32 @@ test('moveCutTo: a point too far out or a cut parallel to the guide axis is refu
   assert.equal(JSON.stringify(o), keep);
 });
 
+test('turnCut (slice handle): a cut turns about the slice axis through its pivot, keeps the pivot, its point turns with it', () => {
+  setup([{ off: 10, yaw: 0, pitch: 0 }]);
+  const o = S.planes[0], pw = plane(0), st = { o0: Object.assign({}, o), N0: pw.N.clone(), p0: pw.p.clone() };
+  const A = V(0, 0, 1), c0 = V(10, 3, 0);                       // axial slice: turn about world z, pivot on the cut
+  assert.equal(St.turnCut(o, st, A, c0, 20), true);
+  const after = plane(0);
+  near(o.yaw, 20, 1e-9); near(o.pitch, 0, 1e-9);
+  near(dist(after, c0), 0, 0.06, 'the pivot stays on the cut (off kept to 0.1 mm)');
+  near(after.N.dot(A), 0, 1e-9, 'the normal stays square to the slice axis');
+  const p1 = c0.clone().add(st.p0.clone().sub(c0).applyAxisAngle(A, 20 * Math.PI / 180));
+  near(after.p.distanceTo(p1), 0, 0.1, 'the cut point turned with the cut');
+  // a sagittal slice (about world x) tilts the cut: pitch, not yaw
+  setup([{ off: 10, yaw: 0, pitch: 0 }]);
+  const o2 = S.planes[0], pw2 = plane(0), st2 = { o0: Object.assign({}, o2), N0: pw2.N.clone(), p0: pw2.p.clone() };
+  assert.equal(St.turnCut(o2, st2, V(0, 1, 0), V(10, 0, -5), 15), true);
+  near(Math.abs(o2.pitch), 15, 1e-9); near(o2.yaw, 0, 1e-9); near(dist(plane(0), V(10, 0, -5)), 0, 0.06);
+});
+
+test('turnCut: a turn that would lay the cut along the guide axis is refused, the cut stays as it was at the start', () => {
+  setup([{ off: 10, yaw: 30, pitch: 0 }]);
+  const o = S.planes[0], pw = plane(0), st = { o0: Object.assign({}, o), N0: pw.N.clone(), p0: pw.p.clone() };
+  St.turnCut(o, st, V(0, 0, 1), pw.p.clone(), 20);
+  assert.equal(St.turnCut(o, st, V(0, 0, 1), pw.p.clone(), 62), false);
+  assert.equal(o.yaw, 30); assert.equal(o.off, 10); assert.equal(o.pv, undefined);
+});
+
 // a synthetic CT bar (no patient data) so a plan can be reopened and the resection rebuilt
 async function volume() {
   const G = P.eval('G'), sp = [0.8, 0.8, 0.8], box = { x: 50, y: 24, z: 30 }, nx = Math.round(2 * box.x / sp[0]), ny = Math.round(2 * box.y / sp[1]), nz = Math.round((box.z + 6) / sp[2]);

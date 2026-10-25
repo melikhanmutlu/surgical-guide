@@ -55,5 +55,42 @@ const H = require('./lib');
       && after.dotN > 0.9999 && after.yaw === before.yaw && after.pitch === before.pitch && after.ok === false && world.w > 0.9999;
     return { pass, actual: `x·N=${axes.dotN.toFixed(4)} kutu=${axes.box} tutuldu=${!!at} taşındı=${after.moved.toFixed(2)} mm (normal boyunca ${after.along.toFixed(2)}) açı ${after.yaw}/${after.pitch} onay=${after.ok} dünya q.w=${world.w.toFixed(4)}` };
   });
+  await h.run('L.2', 'Kesitte kesiyi döndürme ve taşıma', '2×2 görünüm, Kesi 1 seçili, aksiyel kesitte çizgideki yuvarlak tutamacı fareyle çevir, sonra çizgiyi sürükle',
+    'Tutamaç kesiyi aksiyel düzlemde döndürür (normalin kesit eksenine açısı aynı kalır, açı değişir, pivot kesi üstünde kalır), çizgi sürüklemesi açıyı değiştirmeden kesiyi taşır, onay düşer', async () => {
+    await page.click('#vmQuad'); await h.sleep(600);
+    await h.ev(() => { Studio.S.planes[0].ok = true; Studio.select(null); Studio.select('p0'); MPR.jumpTo(Studio.planesWorld()[0].p); MPR.redraw(); });
+    await h.sleep(600); await h.idle();
+    const k = await h.ev(() => {
+      const v = MPR.views[0], r = v.canvas.getBoundingClientRect(), dpr = Math.min(devicePixelRatio, 2), kn = v.knob;
+      if (!kn) return null;
+      return { X: r.left + kn.X / dpr, Y: r.top + kn.Y / dpr, PX: r.left + kn.PX / dpr, PY: r.top + kn.PY / dpr, pivot: kn.pivot.toArray(), A: MPR.sliceAxis(v).toArray(), N0: Studio.planesWorld()[0].N.toArray() };
+    });
+    if (!k) return { pass: false, actual: 'aksiyel kesitte döndürme tutamacı yok' };
+    // turn the handle 20° around the pivot on screen
+    const R = Math.hypot(k.X - k.PX, k.Y - k.PY), a0 = Math.atan2(k.Y - k.PY, k.X - k.PX);
+    await page.mouse.move(k.X, k.Y); await page.mouse.down();
+    for (let s = 1; s <= 10; s++) { const a = a0 + s * 2 * Math.PI / 180; await page.mouse.move(k.PX + R * Math.cos(a), k.PY + R * Math.sin(a)); await h.sleep(20); }
+    await page.mouse.up(); await h.sleep(400); await h.idle();
+    const t = await h.ev(k => {
+      const pw = Studio.planesWorld()[0], V = pw.p.constructor, N0 = new V(...k.N0), A = new V(...k.A);
+      return { turn: Math.acos(Math.min(1, Math.abs(pw.N.dot(N0)))) * 180 / Math.PI, NA: Math.abs(Math.abs(pw.N.dot(A)) - Math.abs(N0.dot(A))), piv: Math.abs(new V(...k.pivot).sub(pw.p).dot(pw.N)), ok: pw.pl.ok, yaw: pw.pl.yaw, pitch: pw.pl.pitch, N: pw.N.toArray(), p: pw.p.toArray() };
+    }, k);
+    // drag the line on the axial slice 25 px sideways (along the screen normal of the line)
+    const ln = await h.ev(() => {
+      const v = MPR.views[0], r = v.canvas.getBoundingClientRect(), dpr = Math.min(devicePixelRatio, 2), T = MPR.xf(v), L = v.lines.find(x => x.i === 0).L;
+      const ax = T.fx(L.a[0]), ay = T.fy(L.a[1]), bx = T.fx(L.b[0]), by = T.fy(L.b[1]), kn = v.knob;
+      // a point on the line away from the handle
+      const m = [(kn.PX * 0.6 + (Math.hypot(ax - kn.PX, ay - kn.PY) > Math.hypot(bx - kn.PX, by - kn.PY) ? ax : bx) * 0.4), (kn.PY * 0.6 + (Math.hypot(ax - kn.PX, ay - kn.PY) > Math.hypot(bx - kn.PX, by - kn.PY) ? ay : by) * 0.4)];
+      const d = Math.hypot(bx - ax, by - ay);
+      return { X: r.left + m[0] / dpr, Y: r.top + m[1] / dpr, nx: -(by - ay) / d, ny: (bx - ax) / d };
+    });
+    await page.mouse.move(ln.X, ln.Y); await page.mouse.down();
+    for (let s = 1; s <= 5; s++) { await page.mouse.move(ln.X + ln.nx * 5 * s, ln.Y + ln.ny * 5 * s); await h.sleep(20); }
+    await page.mouse.up(); await h.sleep(400); await h.idle();
+    const m = await h.ev(t => { const pw = Studio.planesWorld()[0], V = pw.p.constructor; return { dN: pw.N.dot(new V(...t.N)), shift: Math.abs(pw.p.clone().sub(new V(...t.p)).dot(new V(...t.N))), yaw: pw.pl.yaw, pitch: pw.pl.pitch }; }, t);
+    await page.click('#vm3d');
+    const pass = t.turn > 10 && t.turn < 30 && t.NA < 0.01 && t.piv < 0.1 && t.ok === false && m.dN > 0.9999 && m.shift > 1 && m.yaw === t.yaw && m.pitch === t.pitch;
+    return { pass, actual: `döndü ${t.turn.toFixed(1)}° (açı ${t.yaw}/${t.pitch}), N·eksen farkı=${t.NA.toFixed(4)}, pivot uzaklığı ${t.piv.toFixed(3)} mm, onay=${t.ok}; çizgi sürüklemesi ${m.shift.toFixed(2)} mm, açı ${m.yaw}/${m.pitch}` };
+  });
   await h.done();
 })();

@@ -1,6 +1,7 @@
 /* Axial / coronal / sagittal slice views of the full-resolution CT with the plan drawn on top:
    bone, resected piece, lesion and guide contours (mesh ∩ slice), cut planes with their real slot width,
-   screw paths, and a shared crosshair. Cut lines can be dragged on the slice to move the cut. */
+   screw paths, and a shared crosshair. Cut lines can be dragged on the slice to move the cut (square to itself); the
+   selected cut has a round handle on its line that turns it in the slice plane (about the slice's normal axis). */
 'use strict';
 var xl = s => (window.I18N ? I18N.t(s) : s);
 (function () {
@@ -150,8 +151,19 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
         ctx.strokeStyle = '#ff5a3c'; ctx.lineWidth = (sel ? 1.8 : 1.1) * dpr;
         ctx.beginPath(); ctx.moveTo(T.fx(L.a[0]), T.fy(L.a[1])); ctx.lineTo(T.fx(L.b[0]), T.fy(L.b[1])); ctx.stroke();
         const mx = (L.a[0] + L.b[0]) / 2, my = (L.a[1] + L.b[1]) / 2;
-        label(ctx, `K${i + 1}`, T.fx(mx) + 4 * dpr, T.fy(my) - 4 * dpr, '#ff8a70', dpr);
+        // the cut line's angle in this slice (to the image's horizontal, 0-180°)
+        const ang = ((Math.atan2(-(L.b[1] - L.a[1]) * T.sy, (L.b[0] - L.a[0]) * T.sx) * 180 / Math.PI) % 180 + 180) % 180;
+        label(ctx, `K${i + 1} · ${St.fmt(ang, 1)}°`, T.fx(mx) + 4 * dpr, T.fy(my) - 4 * dpr, '#ff8a70', dpr);
         v.lines = v.lines || []; v.lines.push({ i, L });
+        if (sel) {
+          const k = turnKnob(v, pw, L, T, dpr);
+          if (k) {
+            ctx.fillStyle = '#ff5a3c'; ctx.beginPath(); ctx.arc(k.PX, k.PY, 2.5 * dpr, 0, 2 * Math.PI); ctx.fill();
+            ctx.strokeStyle = '#ff5a3c'; ctx.fillStyle = '#ffffff'; ctx.lineWidth = 2 * dpr;
+            ctx.beginPath(); ctx.arc(k.X, k.Y, 6 * dpr, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+            v.knob = k;
+          }
+        }
       });
       // screws: path projected (dashed), solid where it passes through this slice, ring at the crossing
       (S.liveScrews || (S.result ? S.result.screwInfo : [])).forEach((si, i) => {
@@ -206,7 +218,7 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
   function label(ctx, t, x, y, col, dpr) { t = xl(t); ctx.font = `${12 * dpr}px "IBM Plex Mono", monospace`; ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillText(t, x + dpr, y + dpr); ctx.fillStyle = col; ctx.fillText(t, x, y); }
 
   let raf = 0;
-  function redraw() { if (raf) return; raf = requestAnimationFrame(() => { raf = 0; if (st.mode === '3d') return; VIEWS.forEach(v => { v.lines = []; syncBar(v); if (!v.cell.hidden && v.canvas.clientWidth) draw(v); }); }); }
+  function redraw() { if (raf) return; raf = requestAnimationFrame(() => { raf = 0; if (st.mode === '3d') return; VIEWS.forEach(v => { v.lines = []; v.knob = null; syncBar(v); if (!v.cell.hidden && v.canvas.clientWidth) draw(v); }); }); }
 
   // ---------- slice position: one slider per view, kept in step with the wheel, the keys and the shared cursor ----------
   // the position a view's slider shows: the slice index of a standard view, or the offset of a reformat (null: none)
@@ -269,6 +281,39 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
   }
   function jumpTo(world) { if (S.vol) setCursor(toIdx([world.x, world.y, world.z])); }
 
+  // ---------- turning a cut on a slice ----------
+  // the slice's normal axis in world space (the index axis the view looks along)
+  function sliceAxis(v) { const ix = st.cur.slice(), a = V(...toWorld(ix)); ix[v.axis] += 1; return V(...toWorld(ix)).sub(a).normalize(); }
+  // the pivot (the point of the cut line on this slice nearest to the cut point) and the round handle 70 px along the
+  // line from it, inside the image; null when the line is too short to hold it
+  function turnKnob(v, pw, L, T, dpr) {
+    const P = idxToImg(v, toIdx([pw.p.x, pw.p.y, pw.p.z])), dx = L.b[0] - L.a[0], dy = L.b[1] - L.a[1], ll = dx * dx + dy * dy;
+    if (ll < 1e-9) return null;
+    const t = Math.max(0, Math.min(1, ((P[0] - L.a[0]) * dx + (P[1] - L.a[1]) * dy) / ll)), px = L.a[0] + t * dx, py = L.a[1] + t * dy;
+    const PX = T.fx(px), PY = T.fy(py), ex = [T.fx(L.a[0]), T.fy(L.a[1])], fx = [T.fx(L.b[0]), T.fy(L.b[1])];
+    // towards the longer end of the line
+    const end = Math.hypot(fx[0] - PX, fx[1] - PY) >= Math.hypot(ex[0] - PX, ex[1] - PY) ? fx : ex, len = Math.hypot(end[0] - PX, end[1] - PY);
+    if (len < 24 * dpr) return null;
+    const r = Math.min(70 * dpr, len - 8 * dpr);
+    return { i: +S.sel.slice(1), PX, PY, X: PX + (end[0] - PX) / len * r, Y: PY + (end[1] - PY) / len * r, pivot: V(...toWorld(imgToIdx(v, px, py))) };
+  }
+  function knobAt(v, X, Y) { const k = v.knob, dpr = Math.min(devicePixelRatio, 2); return k && Math.hypot(k.X - X, k.Y - Y) < 9 * dpr ? k : null; }
+  function startTurn(v, k) {
+    const pw = St.planesWorld()[k.i], o = S.planes[k.i]; if (!pw || !o) return null;
+    const A = sliceAxis(v);
+    return { kind: 'turn', v, i: k.i, A, c0: k.pivot, st: { o0: Object.assign({}, o), N0: pw.N.clone(), p0: pw.p.clone() }, a0: null, key: '' };
+  }
+  function dragTurn(d, X, Y) {
+    const T = xf(d.v), q = V(...toWorld(imgToIdx(d.v, T.ix(X), T.iy(Y)))), a = q.sub(d.c0); a.addScaledVector(d.A, -a.dot(d.A));
+    if (a.lengthSq() < 1e-4) return;
+    if (!d.a0) { d.a0 = a.normalize(); return; }
+    a.normalize();
+    const ang = Math.round(Math.atan2(d.A.dot(V().crossVectors(d.a0, a)), d.a0.dot(a)) * 180 / Math.PI * 2) / 2, o = S.planes[d.i];
+    if (!St.turnCut(o, d.st, d.A, d.c0, ang)) return;
+    const key = [o.off, o.yaw, o.pitch, o.pv, o.pn].join(); if (key === d.key) return;
+    d.key = key; d.moved = true; St.unapprove(o); St.emit('planeDragged', d.i); redraw();
+  }
+
   // ---------- interaction ----------
   function hitLine(v, X, Y) {
     const T = xf(v), dpr = Math.min(devicePixelRatio, 2);
@@ -307,6 +352,8 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
       if (window.Measure && Measure.active()) { const T = xf(v); Measure.pick(V(...toWorld(imgToIdx(v, T.ix(X), T.iy(Y)))), null); return; }
       const hd = handleAt(v, X, Y); if (hd) { st.drag = { kind: 'handle', v, h: hd }; c.style.cursor = 'grabbing'; return; }
       const P = painter(); if (P) { const T = xf(v); st.drag = { kind: 'paint', v, P }; P.paint(toWorld(imgToIdx(v, T.ix(X), T.iy(Y))), v.axis, true); return; }
+      const kn = knobAt(v, X, Y);
+      if (kn) { const d = startTurn(v, kn); if (d) { st.drag = d; dragTurn(d, kn.X, kn.Y); c.style.cursor = 'grabbing'; return; } }
       const li = hitLine(v, X, Y);
       if (li >= 0) { st.drag = { kind: 'plane', v, i: li }; St.select('p' + li); c.style.cursor = 'grabbing'; return; }
       st.drag = { kind: 'cursor', v }; moveCursor(v, X, Y);
@@ -315,7 +362,8 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
       const [X, Y] = at(e), d = st.drag;
       const brush = !v.custom && brushOf();
       if (brush || st.hover) { st.hover = brush ? { v: v.id, X, Y } : null; redraw(); }
-      if (!d) { c.style.cursor = brush ? 'none' : handleAt(v, X, Y) || hitLine(v, X, Y) >= 0 ? 'grab' : 'crosshair'; return; }
+      if (!d) { c.style.cursor = brush ? 'none' : handleAt(v, X, Y) || knobAt(v, X, Y) || hitLine(v, X, Y) >= 0 ? 'grab' : 'crosshair'; return; }
+      if (d.kind === 'turn') { dragTurn(d, X, Y); return; }
       if (d.kind === 'handle') { const T = xf(v); d.h.drag(toWorld(imgToIdx(v, T.ix(X), T.iy(Y)))); redraw(); return; }
       if (d.kind === 'pan') { v.pan[0] = d.pan[0] + X - d.X; v.pan[1] = d.pan[1] + Y - d.Y; redraw(); }
       else if (d.kind === 'cursor') moveCursor(v, X, Y);
@@ -324,7 +372,7 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
       else if (d.kind === 'plane') dragPlane(v, d.i, X, Y);
       else if (d.kind === 'paint') { const T = xf(v); d.P.paint(toWorld(imgToIdx(v, T.ix(X), T.iy(Y))), v.axis, false); }
     });
-    const end = () => { if (st.drag && st.drag.kind === 'handle' && st.drag.h.end) st.drag.h.end(); if (st.drag && st.drag.kind === 'plane') { St.unapprove(S.planes[st.drag.i]); St.schedule(true); } if (st.drag && st.drag.kind === 'paint') st.drag.P.strokeEnd(); st.drag = null; c.style.cursor = brushOf() ? 'none' : 'crosshair'; };
+    const end = () => { if (st.drag && st.drag.kind === 'handle' && st.drag.h.end) st.drag.h.end(); if (st.drag && st.drag.kind === 'plane') { St.unapprove(S.planes[st.drag.i]); St.schedule(true); if (St.syncGizmo) St.syncGizmo(); } if (st.drag && st.drag.kind === 'turn' && st.drag.moved) { St.schedule(true); if (St.syncGizmo) St.syncGizmo(); } if (st.drag && st.drag.kind === 'paint') st.drag.P.strokeEnd(); st.drag = null; c.style.cursor = brushOf() ? 'none' : 'crosshair'; };
     c.addEventListener('pointerup', end); c.addEventListener('pointercancel', end);
     c.addEventListener('pointerleave', () => { if (st.hover && st.hover.v === v.id) { st.hover = null; redraw(); } });
     c.addEventListener('dblclick', () => { st.max = st.max === v.id ? null : v.id; layout(); });
@@ -336,12 +384,14 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
   // the active brush's radius (mm) and colour, or null (no brush tool, or one that only clicks)
   const brushOf = () => { const P = painter(); return P && P.brush ? P.brush() : null; };
   function moveCursor(v, X, Y) { const T = xf(v); setCursor(imgToIdx(v, T.ix(X), T.iy(Y))); }
+  // the cut moves square to itself until it passes through the pointer (its point on the bone moves along its normal;
+  // the same range as the slider, the 3D handles and a stored plan: moveCutTo refuses a cut past CUT_OFF_MAX)
   function dragPlane(v, i, X, Y) {
-    const T = xf(v), w = toWorld(imgToIdx(v, T.ix(X), T.iy(Y))), q = V(...w), pw = St.planesWorld()[i], { u } = St.frameAxes();
-    const un = u.dot(pw.N); if (Math.abs(un) < 0.2) return;
-    const off = Math.round(q.clone().sub(S.anchor.p).dot(pw.N) / un * 2) / 2;
-    const M = St.CUT_OFF_MAX || 80;   // the same range as the slider, the 3D handles and a stored plan
-    S.planes[i].off = Math.max(-M, Math.min(M, off)); St.unapprove(S.planes[i]);
+    const T = xf(v), q = V(...toWorld(imgToIdx(v, T.ix(X), T.iy(Y)))), pw = St.planesWorld()[i], { u } = St.frameAxes();
+    if (Math.abs(u.dot(pw.N)) < 0.2) return;
+    const c = pw.p.clone().addScaledVector(pw.N, q.sub(pw.p).dot(pw.N));
+    if (!St.moveCutTo(S.planes[i], c, pw.N)) return;
+    St.unapprove(S.planes[i]);
     St.emit('planeDragged', i); redraw();
   }
 
@@ -403,5 +453,5 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
       draw(v); return c.toDataURL('image/jpeg', 0.9);
     } catch (e) { return null; } finally { Object.assign(v, { canvas: keep.canvas, zoom: keep.zoom, pan: keep.pan, lines: keep.lines, custom: keep.custom }); st.cur = keep.cur; c.remove(); }
   }
-  window.MPR = { layout, setCursor, jumpTo, state: st, redraw, views: VIEWS, xf, label, toIdx, toWorld, capture, setPos, stepSlice };
+  window.MPR = { layout, setCursor, jumpTo, state: st, redraw, views: VIEWS, xf, label, toIdx, toWorld, capture, setPos, stepSlice, sliceAxis, turnKnob, startTurn, dragTurn, dragPlane, imgToIdx, idxToImg };
 })();
