@@ -20,7 +20,8 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
   const dims = () => [S.vol.nx, S.vol.ny, S.vol.nz];
   const toIdx = w => G.indexOf(S.vol, w);
   const toWorld = ix => G.worldOf(S.vol, ix[0], ix[1], ix[2]);
-  // a view can be replaced by a reformat (panoramic, oblique): v.custom = { size(v), draw(v, ctx, T, dpr), wheel(v, n), pick(v, x, y) }
+  // a view can be replaced by a reformat (panoramic, oblique): v.custom = { size(v), draw(v, ctx, T, dpr), wheel(v, n), pick(v, x, y) },
+  // and optionally a position for the slice slider: range { min, max }, pos() -> number, setPos(x)
   function imgSize(v) { if (v.custom) return v.custom.size(v); const d = dims(), sp = S.vol.sp; return { W: d[v.ix], H: d[v.iy], sx: sp[v.ix], sy: sp[v.iy] }; }
   function idxToImg(v, ix) { const d = dims(); return [ix[v.ix], v.flipY ? d[v.iy] - 1 - ix[v.iy] : ix[v.iy]]; }
   function imgToIdx(v, x, y) { const d = dims(), ix = st.cur.slice(); ix[v.ix] = x; ix[v.iy] = v.flipY ? d[v.iy] - 1 - y : y; return ix; }
@@ -179,7 +180,7 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
     // labels
     const k = Math.round(st.cur[v.axis]), wpos = toWorld(st.cur);
     label(ctx, `${v.name} · ${k + 1}/${dims()[v.axis]} · ${St.fmt(wpos[v.axis === 2 ? 2 : v.axis === 1 ? 1 : 0], 1)} mm`, 8 * dpr, 16 * dpr, '#cfd8d4', dpr);
-    label(ctx, v.lab[0], 6 * dpr, h / 2, '#8fa39b', dpr); label(ctx, v.lab[1], w - 14 * dpr, h / 2, '#8fa39b', dpr);
+    label(ctx, v.lab[0], 6 * dpr, h / 2, '#8fa39b', dpr); label(ctx, v.lab[1], w - 40 * dpr, h / 2, '#8fa39b', dpr);   // (clear of the slice slider)
     label(ctx, v.lab[2], w / 2, 30 * dpr, '#8fa39b', dpr); label(ctx, v.lab[3], w / 2, h - 8 * dpr, '#8fa39b', dpr);
     wlLabel(ctx, w, h, dpr);
   }
@@ -190,7 +191,57 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
   function label(ctx, t, x, y, col, dpr) { t = xl(t); ctx.font = `${12 * dpr}px "IBM Plex Mono", monospace`; ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillText(t, x + dpr, y + dpr); ctx.fillStyle = col; ctx.fillText(t, x, y); }
 
   let raf = 0;
-  function redraw() { if (raf) return; raf = requestAnimationFrame(() => { raf = 0; if (st.mode === '3d') return; VIEWS.forEach(v => { v.lines = []; if (!v.cell.hidden && v.canvas.clientWidth) draw(v); }); }); }
+  function redraw() { if (raf) return; raf = requestAnimationFrame(() => { raf = 0; if (st.mode === '3d') return; VIEWS.forEach(v => { v.lines = []; syncBar(v); if (!v.cell.hidden && v.canvas.clientWidth) draw(v); }); }); }
+
+  // ---------- slice position: one slider per view, kept in step with the wheel, the keys and the shared cursor ----------
+  // the position a view's slider shows: the slice index of a standard view, or the offset of a reformat (null: none)
+  function barState(v) {
+    if (!S.vol) return null;
+    if (v.custom) return v.custom.range && v.custom.pos ? { min: v.custom.range.min, max: v.custom.range.max, val: v.custom.pos() } : null;
+    const n = dims()[v.axis]; return { min: 0, max: n - 1, val: Math.round(Math.min(n - 1, Math.max(0, st.cur[v.axis]))) };
+  }
+  function setPos(v, x) {
+    const b = barState(v); if (!b) return;
+    x = Math.round(Math.min(b.max, Math.max(b.min, x)));
+    if (v.custom) { v.custom.setPos(x); redraw(); return; }
+    const ix = st.cur.slice(); ix[v.axis] = x; setCursor(ix);
+  }
+  // one step as the wheel takes it (n slices, or n mm on a reformat)
+  function stepSlice(v, n) {
+    if (!S.vol) return;
+    if (v.custom) { v.custom.wheel(v, n); redraw(); return; }
+    const ix = st.cur.slice(); ix[v.axis] += n; setCursor(ix);
+  }
+  function syncBar(v) {
+    const el = v.bar; if (!el) return;
+    const b = barState(v); el.hidden = !b; if (!b) return;
+    el.min = b.min; el.max = b.max; el.value = b.val;
+    const t = v.custom ? `${b.val > 0 ? '+' : ''}${b.val} mm` : `${b.val + 1}/${b.max + 1}`;
+    el.setAttribute('aria-valuetext', t); el.title = xl('Kesit') + ' ' + t;
+  }
+  // keys on a focused slice view (a click focuses it): arrows one slice (Shift: 5), Page Up / Down 10, Home / End the
+  // first and the last slice
+  function sliceKey(v, e) {
+    if (e.ctrlKey || e.metaKey || e.altKey || !S.vol) return false;
+    const k = e.key, f = e.shiftKey ? 5 : 1, b = barState(v);
+    if (k === 'ArrowUp' || k === 'ArrowRight') stepSlice(v, f);
+    else if (k === 'ArrowDown' || k === 'ArrowLeft') stepSlice(v, -f);
+    else if (k === 'PageUp') stepSlice(v, 10);
+    else if (k === 'PageDown') stepSlice(v, -10);
+    else if (k === 'Home' && b) setPos(v, b.min);
+    else if (k === 'End' && b) setPos(v, b.max);
+    else return false;
+    return true;
+  }
+  function makeBar(v) {
+    const el = document.createElement('input'); el.type = 'range'; el.className = 'slicebar'; el.step = 1; el.hidden = true;
+    el.setAttribute('aria-label', 'Kesit konumu');
+    el.addEventListener('input', () => setPos(v, +el.value));
+    el.addEventListener('wheel', e => { if (!S.vol) return; e.preventDefault(); stepSlice(v, Math.sign(e.deltaY) * (e.shiftKey ? 5 : 1)); }, { passive: false });
+    // the slider's own keys move one step as well; Home / End and Page keys go through the same path as on the view
+    el.addEventListener('keydown', e => { if (/^(PageUp|PageDown|Home|End)$/.test(e.key) && sliceKey(v, e)) e.preventDefault(); });
+    v.cell.appendChild(el); v.bar = el;
+  }
 
   // ---------- 3D cursor ----------
   const cursor3d = new THREE.Mesh(new THREE.SphereGeometry(1.1, 12, 8), new THREE.MeshBasicMaterial({ color: 0x29c5b0 }));
@@ -227,7 +278,10 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
       const ix = st.cur.slice(); ix[v.axis] += Math.sign(e.deltaY) * (e.shiftKey ? 5 : 1); setCursor(ix);
     }, { passive: false });
     c.addEventListener('contextmenu', e => e.preventDefault());
+    c.tabIndex = 0;
+    c.addEventListener('keydown', e => { if (sliceKey(v, e)) { e.preventDefault(); e.stopPropagation(); } });
     c.addEventListener('pointerdown', e => {
+      if (c.focus) try { c.focus({ preventScroll: true }); } catch (x) {}
       if (!S.vol) return; c.setPointerCapture(e.pointerId);
       const [X, Y] = at(e);
       if (e.button === 1 || e.button === 2) { st.drag = { kind: 'pan', v, X, Y, pan: v.pan.slice() }; return; }
@@ -282,7 +336,7 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
     $('cell3d').hidden = st.mode !== '3d' && st.max && st.max !== '3d';
     requestAnimationFrame(() => { VIEWS.forEach(v => { v.imgKey = null; }); redraw(); St.render(); });
   }
-  VIEWS.forEach(v => { v.cell = $('cell_' + v.id); v.canvas = v.cell.querySelector('canvas'); v.zoom = 1; v.pan = [0, 0]; bind(v); new ResizeObserver(redraw).observe(v.canvas); });
+  VIEWS.forEach(v => { v.cell = $('cell_' + v.id); v.canvas = v.cell.querySelector('canvas'); v.zoom = 1; v.pan = [0, 0]; bind(v); makeBar(v); new ResizeObserver(redraw).observe(v.canvas); });
   try { const m = localStorage.getItem('gs.layout'); if (m === 'strip' || m === 'quad') { st.mode = m; requestAnimationFrame(layout); } } catch (e) {}
   $('cell3d').addEventListener('dblclick', e => { if (st.mode !== '3d' && e.target.tagName === 'CANVAS') { st.max = st.max === '3d' ? null : '3d'; layout(); } });
   $('vm3d').addEventListener('click', () => { st.mode = '3d'; st.max = null; layout(); });
@@ -329,5 +383,5 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
       draw(v); return c.toDataURL('image/jpeg', 0.9);
     } catch (e) { return null; } finally { Object.assign(v, { canvas: keep.canvas, zoom: keep.zoom, pan: keep.pan, lines: keep.lines, custom: keep.custom }); st.cur = keep.cur; c.remove(); }
   }
-  window.MPR = { layout, setCursor, jumpTo, state: st, redraw, views: VIEWS, xf, label, toIdx, toWorld, capture };
+  window.MPR = { layout, setCursor, jumpTo, state: st, redraw, views: VIEWS, xf, label, toIdx, toWorld, capture, setPos, stepSlice };
 })();

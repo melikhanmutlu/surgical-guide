@@ -86,9 +86,10 @@ window.Reformat = (function () {
       cursorMark(ctx, T, dpr, (x, y) => pano.world(x, y), W, H);
       MPR.label(ctx, `Panoramik · ${pano.depth > 0 ? '+' : ''}${pano.depth} mm ${pano.depth >= 0 ? 'bukkal' : 'lingual'}`, 8 * dpr, 16 * dpr, '#cfd8d4', dpr);
       MPR.label(ctx, xl(`yay ${Math.round(a.L)} mm · kalınlık ${SLAB} mm`), 8 * dpr, 32 * dpr, '#8fa39b', dpr);
-      MPR.label(ctx, 'Sağ', 6 * dpr, ctx.canvas.height / 2, '#8fa39b', dpr); MPR.label(ctx, 'Sol', ctx.canvas.width - 28 * dpr, ctx.canvas.height / 2, '#8fa39b', dpr);
+      MPR.label(ctx, 'Sağ', 6 * dpr, ctx.canvas.height / 2, '#8fa39b', dpr); MPR.label(ctx, 'Sol', ctx.canvas.width - 48 * dpr, ctx.canvas.height / 2, '#8fa39b', dpr);
     },
     wheel(v, n) { pano.depth = Math.max(-15, Math.min(15, pano.depth + n)); },
+    range: { min: -15, max: 15 }, pos: () => pano.depth, setPos(x) { pano.depth = Math.max(-15, Math.min(15, x)); },
     pick(v, x, y) { const q = pano.world(x, y); if (q) MPR.setCursor(MPR.toIdx([q.x, q.y, q.z])); },
   };
 
@@ -126,6 +127,7 @@ window.Reformat = (function () {
       MPR.label(ctx, 'Üst', ctx.canvas.width / 2, 30 * dpr, '#8fa39b', dpr);
     },
     wheel(v, n) { obl.off = Math.max(-30, Math.min(30, obl.off + n)); },
+    range: { min: -30, max: 30 }, pos: () => obl.off, setPos(x) { obl.off = Math.max(-30, Math.min(30, x)); },
     pick(v, x, y) { const F = obl.frame(); if (!F) return; const q = obl.world(F, x, y); MPR.setCursor(MPR.toIdx([q.x, q.y, q.z])); },
   };
 

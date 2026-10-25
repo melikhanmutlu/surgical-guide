@@ -382,6 +382,10 @@ kbd { font: 500 12px var(--font-mono); border: 1px solid var(--line-strong); bor
 .aulog li { font-size: 12.5px; border-left: 2px solid var(--line-strong); padding-left: 8px; }
 .aulog small { display: block; font: 11px var(--font-mono); color: var(--faint); }
 /* slice cell mode menu (standard, panoramic, perpendicular to cut) */
+.cell.slice .slicebar { position: absolute; right: 4px; top: 40px; bottom: 50px; z-index: 2; width: 18px; height: auto; margin: 0; padding: 0; writing-mode: vertical-lr; direction: rtl; accent-color: #5db3cd; opacity: .65; cursor: ns-resize; background: transparent; }
+.cell.slice .slicebar:hover, .cell.slice .slicebar:focus-visible { opacity: 1; }
+.cell.slice .slicebar[hidden] { display: none; }
+.cell.slice canvas:focus-visible { outline: 2px solid #5db3cd; outline-offset: -2px; }
 .cellmode { position: absolute; bottom: 6px; right: 6px; z-index: 2; font: 11.5px var(--font-body); background: rgba(0, 0, 0, .55); color: #dfe6e3; border: 1px solid #3a424a; border-radius: 5px; padding: 2px 4px; height: auto; width: auto; }
 /* guide fit colour legend over the 3D view */
 .fitlegend { position: absolute; left: 14px; bottom: 64px; background: var(--glass); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: var(--shadow); width: 220px; z-index: 3; }
@@ -953,7 +957,7 @@ button.ghost.danger { color: var(--crit); }
     </table>
     <h3 class="sub">Akış ve onay</h3>
     <p class="hint">Adımlar soldan sırayla ilerler. Her kesi, vida ve rezeksiyon aralığı 7. adımda tek tek onaylanır; sonra mühendis teknik, cerrah klinik onayı verir. Onaydan sonra plan değişirse onaylar düşer. Kritik kontrol açıkken onay verilemez ve üretim paketi kilitli kalır; nedeni İndir düğmesinin altında yazar. Kontroller sekmesindeki eşikler örnek değerlerdir.</p>
-    <p class="hint">Kesitlerde: tekerlek kesit değiştirir, Ctrl+tekerlek yakınlaştırır, sağ tuşla kaydırılır, Shift+sürükleme pencere ve seviyeyi değiştirir, kesi çizgisi sürüklenir, çift tıklama görünümü büyütür. Sağ üstteki menüden kesit panoramik ya da seçili kesiye dik görünüme çevrilir.</p>
+    <p class="hint">Kesitlerde: tekerlek, sağ kenardaki kaydırıcı ya da tıklanan kesitte ok tuşları kesit değiştirir (Shift ile 5, Page Up/Down ile 10 kesit, Home/End ilk ve son kesit), Ctrl+tekerlek yakınlaştırır, sağ tuşla kaydırılır, Shift+sürükleme pencere ve seviyeyi değiştirir, kesi çizgisi sürüklenir, çift tıklama görünümü büyütür. Sağ alttaki menüden kesit panoramik ya da seçili kesiye dik görünüme çevrilir.</p>
   </form>
 </dialog>
 
