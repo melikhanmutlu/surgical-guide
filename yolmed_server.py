@@ -21,7 +21,7 @@ Endpoints (JSON unless noted). With YOLMED_TOKEN set every endpoint but /health 
        the kerf side), wrap_profile the preview's wrap line and seat_dir its insertion direction; all optional fields
        may be left out (older clients), the server then derives them from the bone itself.
        production_ok is false when the STL must not be printed as it is: issues lists why (screw_no_body: a screw got
-       no sleeve and no hole; resolution_coarsened: the grid is coarser than asked; not_manifold: the mesh is not closed).
+       no sleeve and no hole; screw_in_slot: a sleeve stands in a saw slot and fills it; resolution_coarsened: the grid is coarser than asked; not_manifold: the mesh is not closed).
   POST /guide {kind: "bar", bar: {path, r, pads}, crop?, mask_b64?}
        -> {stl_b64, watertight, volume_mm3, faces, bodies, bone_clear_mm, in_bone_verts, ms}
        The connecting bar between the two guides of a long resection (web/app.js barPlan), a separate part.
@@ -1120,7 +1120,7 @@ def build_guide(req, progress=None):
             rad = np.sqrt(np.maximum(qa * qa + qb * qb + qc * qc - t_ * t_, 0.0))
             yield (slice(i0, i1), slice(b0, b1 + 1), slice(c0, c1 + 1)), rad.astype(np.float32), t_.astype(np.float32)
     for el, ol, Rr, rr, top, rng, info in axes_:
-        n_all = shaded = 0
+        n_all = shaded = in_slot = 0
         for sl, rad, t_ in radial(el, ol, rng):
             cyl = np.maximum(np.maximum(rad - Rr, -1 - t_), t_ - top)
             d_s, de_s = dd[sl], dde[sl]
@@ -1128,9 +1128,19 @@ def build_guide(req, progress=None):
             body = (cyl < 0) & (d_s > clear)
             n_all += int(np.count_nonzero(body))
             shaded += int(np.count_nonzero(body & (de_s <= clear)))
-            F[sl] = np.where(in_cyl, np.minimum(F[sl], np.maximum(np.maximum(cyl, clear - d_s), clear - de_s)), F[sl])
+            sleeve = np.maximum(np.maximum(cyl, clear - d_s), clear - de_s)
+            # the sleeve is added after the slots are cut: sleeve material inside a slot fills it (the saw stops there)
+            if slots:
+                put = in_cyl & (sleeve < 0)
+                if put.any():
+                    uu_, vv_, nn_ = UU[sl[0]][:, None, None], VV[sl[1]][None, :, None], NN[sl[2]][None, None, :]
+                    for Nf, e, half in slots:
+                        in_slot += int(np.count_nonzero(put & (np.abs(Nf[0] * uu_ + Nf[1] * vv_ + Nf[2] * nn_ - e) < half)))
+            F[sl] = np.where(in_cyl, np.minimum(F[sl], sleeve), F[sl])
         if n_all and shaded > 0.1 * n_all:
             info["shadowed"] = round(shaded / n_all, 2)
+        if in_slot:
+            info["slot_mm3"] = round(in_slot * r * r * r, 2)
     for el, ol, Rr, rr, top, rng, info in axes_:
         for sl, rad, t_ in radial(el, ol, rng):
             F[sl] = np.where(rad <= rr + r, np.maximum(F[sl], rr - rad), F[sl])
@@ -1215,6 +1225,9 @@ def build_guide(req, progress=None):
         si["index"] = k
         if si.get("no_body"):
             issues.append({"code": "screw_no_body", "screw": k})
+        elif si.get("slot_mm3", 0) > PRINT_TOL_MM3:
+            # a sleeve standing in a saw slot: the printed guide has no slot there (thread "Kesi ile vida deliği çakışması")
+            issues.append({"code": "screw_in_slot", "screw": k, "mm3": si["slot_mm3"]})
     if r > r_req + 1e-9:
         issues.append({"code": "resolution_coarsened", "requested_mm": r_req, "used_mm": r, "coarser_than_preview": bool(r > PREVIEW_RES + 1e-9)})
     if not watertight:

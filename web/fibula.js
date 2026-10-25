@@ -20,8 +20,9 @@ window.Fibula = (function () {
   // Clinical thresholds as one profile: the defaults below (most are our engineering assumptions where the literature has
   // no single number), overridden per plan by plan.rules (only the keys that differ, so a plan without overrides keeps
   // its approval signature). [min, max, step] is the range a stored or edited value is kept in.
+  const CVf = (k, d) => (window.Clinical ? Clinical.v(k) : d);   // clinical.js (C4): the defaults the profile sets
   const RULES = { segErr: SEG_ERR, segMin: MIN_LEN, stumpMin: STUMP_MIN, devWarn: DEV_WARN, angleWarn: ANGLE_WARN, distalMin: DISTAL_MIN, proxKeep: PROX_KEEP,
-    wedgeBridge: 2, screwMinDepth: 4, screwSlotGap: 2, screwCutGap: 5, screwCutWarn: 3, gapWarn: 1.0, gapErr: 2.5, wedgeWarn: 45, axisInfo: 30, overlap: 0.5, area: 40 };
+    wedgeBridge: 2, screwMinDepth: 4, screwSlotGap: CVf('screwSlotGap', 2), screwCutGap: CVf('screwCutGap', 5), screwCutWarn: CVf('screwCutWarn', 3), gapWarn: 1.0, gapErr: 2.5, wedgeWarn: 45, axisInfo: 30, overlap: 0.5, area: 40 };
   const RULE_RANGE = { segErr: [8, 30, 1], segMin: [10, 40, 1], stumpMin: [10, 50, 1], devWarn: [0.5, 10, 0.5], angleWarn: [10, 80, 1], distalMin: [30, 120, 1], proxKeep: [30, 120, 1],
     wedgeBridge: [0, 6, 0.5], screwMinDepth: [2, 10, 0.5], screwSlotGap: [0.5, 5, 0.5], screwCutGap: [2, 12, 0.5], screwCutWarn: [1, 10, 0.5], gapWarn: [0.2, 3, 0.1], gapErr: [0.5, 5, 0.1], wedgeWarn: [15, 90, 1], axisInfo: [5, 90, 1], overlap: [0.1, 1, 0.05], area: [5, 200, 5] };
   const rules = () => Object.assign({}, RULES, (S.fib && S.fib.plan && S.fib.plan.rules) || {});
@@ -742,7 +743,7 @@ window.Fibula = (function () {
   // in it for SCREW_MIN_DEPTH mm, the sleeve keeps SCREW_SLOT_GAP mm from every saw slot along the whole hole, and a
   // hole SCREW_CUT_GAP mm or more from the cut scores better (bone bridge between the hole and the osteotomy).
   // (SCREW_MIN_DEPTH, SCREW_SLOT_GAP, SCREW_CUT_GAP: the clinical profile's screwMinDepth, screwSlotGap, screwCutGap)
-  const SLOT_REACH = 45, SCREW_TIGHT_GAP = 0.5;
+  const SLOT_REACH = 45, SCREW_SLOT_MIN = CVf('screwSlotMin', 0.5), SCREW_TIGHT_GAP = Math.max(0.5, SCREW_SLOT_MIN);
   function screwSite(c, f, pls, body, minGap = rules().screwSlotGap) {
     const { screwMinDepth: SCREW_MIN_DEPTH, screwCutGap: SCREW_CUT_GAP } = rules();
     const st = screwAt(c, f); if (!st.entry) return null;
@@ -766,6 +767,39 @@ window.Fibula = (function () {
     if (inBone < SCREW_MIN_DEPTH || slotGap < minGap) return null;
     return { s: st.s, inBone, slotGap, cutGap, score: Math.min(slotGap, 6) + 0.6 * Math.min(cutGap, SCREW_CUT_GAP + 3) + 0.1 * Math.min(inBone, f.len) - 0.04 * Math.abs(f.ang) };
   }
+  // a fibula guide screw against the saw slots over its whole length (the sleeve column through the guide and the drill
+  // path), as screwSite measures it, without the other rules
+  function fscSlotGap(c, f, pls, body) {
+    const st = screwAt(c, f); if (!st.entry) return Infinity;
+    const cw = body.clear + body.wall, q = V(), d = V(); let g = Infinity;
+    for (let t = -(cw + f.sleeveH); t <= f.len + 1e-9; t += 0.25) {
+      q.copy(st.entry).addScaledVector(st.dir, t);
+      for (const pw of pls) { d.copy(q).sub(pw.pSlot); const a = d.dot(pw.N); if (d.lengthSq() - a * a > SLOT_REACH * SLOT_REACH) continue; g = Math.min(g, Math.abs(a) - pw.w / 2 - f.D / 2); }
+    }
+    return g;
+  }
+  // Hand-set fibula screws (fsc) a slot now reaches (the cuts moved or turned over them): each moved along its segment
+  // away from the slot (towards the segment middle; a screw past the outer cut outwards), 0.5 mm at a time up to 15 mm,
+  // to the first site screwSite accepts (sleeve and drill screwSlotGap mm clear of every slot, bone, on the body). When
+  // one finds no such site the screws go back to the automatic placement, which keeps the rules. Returns
+  // { moved, auto } (screws moved / handed back), or null when no hand-set screw is near a slot.
+  function clearFsc(c) {
+    const P0 = plan(); if (!P0.fsc || !c) return null;
+    const body = guideBody(c), pls = slotPlanes(c), gap = rules().screwSlotGap, list = guideScrews(c);
+    const bad = list.map((f, i) => (fscSlotGap(c, f, pls, body) < gap ? i : -1)).filter(i => i >= 0);
+    if (!bad.length) return null;
+    const next = P0.fsc.map(f => Object.assign({}, f));
+    for (const i of bad) {
+      const f = list[i], dir = isEnd(c, f) ? (Math.sign(f.off) || 1) : -(Math.sign(f.off) || 1); let to = null;
+      for (let k = 1; k <= 30 && to === null; k++) { const off = Math.round((f.off + dir * k * 0.5) * 10) / 10; if (screwSite(c, Object.assign({}, f, { off }), pls, body)) to = off; }
+      if (to === null) { delete P0.fsc; return { moved: 0, auto: bad.length }; }
+      next[i].off = to;
+    }
+    P0.fsc = next;
+    return { moved: bad.length, auto: 0 };
+  }
+  const fscMsg = r => !r ? '' : r.moved ? xl(`Kesi yuvasına yaklaşan ${r.moved} elle yerleştirilmiş fibula vidası yuvadan uzağa kaydırıldı. Konumlarını kontrol edip onaylayın.`)
+    : xl(`Kesi yuvasına yaklaşan ${r.auto} elle yerleştirilmiş fibula vidası için yakında uygun yer yoktu; fibula vidaları otomatik yeniden yerleştirildi. Konumlarını kontrol edip onaylayın.`);
   // Automatic guide screws: two on a segment of STUMP_MIN mm or more, one on a shorter one, at least three on the guide
   // (extra ones on the longest segments); each placed on the best site that keeps the rules above, searched along the
   // segment and around the fibula axis. A segment with no such site keeps a screw at its middle, which the checks report.
@@ -922,7 +956,7 @@ window.Fibula = (function () {
   }
   // the fibula guide on screen is not yet the one the current plan makes (a rebuild is due or running): approval,
   // production and the package wait for it
-  let guideStale = false;
+  let guideStale = false, fscSeen = null;   // fscSeen: the slots and hand-set screws of the last build (clearFsc)
   function scheduleGuide() {
     guideStale = true;
     clearTimeout(guideTimer);
@@ -944,6 +978,13 @@ window.Fibula = (function () {
   async function buildFibGuide() {
     if (building) { scheduleGuide(); return; }
     if (!active() || !last) { guideStale = false; return; }
+    // the cuts moved or turned under hand-set screws (the screws as the last build had them): they are moved clear of
+    // the slots before the build (clearFsc), never built into a slot
+    if (last && plan().fsc) {
+      const pk = JSON.stringify([F.c.uid, slotPlanes(last).map(p => [p.pSlot.toArray(), p.N.toArray(), p.w].flat().map(x => Math.round(x * 100)))]), fk = JSON.stringify(plan().fsc);
+      if (fscSeen && fscSeen.fk === fk && fscSeen.pk !== pk) { const r = clearFsc(last); if (r) { St.unapprove(plan()); msg(fscMsg(r)); St.emit('changed'); } }
+      fscSeen = { pk, fk: JSON.stringify(plan().fsc || null) };
+    } else fscSeen = last ? { pk: JSON.stringify([F.c.uid, slotPlanes(last).map(p => [p.pSlot.toArray(), p.N.toArray(), p.w].flat().map(x => Math.round(x * 100)))]), fk: 'null' } : null;
     const ctx = guideCtx(last); S.fib.guideFail = !ctx; if (!ctx) { dropGuide(); guideStale = false; renderStep(); St.updatePanels(); return; }
     const key = JSON.stringify([ctx.g, ctx.pls.map(p => [p.p.toArray(), (p.pSlot || p.p).toArray(), p.N.toArray(), p.w].flat().map(x => Math.round(x * 100))), ctx.scs.map(s => s.entry && s.entry.toArray().map(x => Math.round(x * 100)))]);
     // (the approve button was greyed while the rebuild was due: render the step again, or it stays greyed)
@@ -1059,10 +1100,14 @@ window.Fibula = (function () {
           : fs.rotU < SEAT_FREE ? xl(`Fibula guide'ı vidalar takılmadan önce kemik ekseni etrafında dönebilir: temasın yalnız %${pc}'i direnç gösteriyor.`) : xl(`Fibula guide'ı vidalar takılmadan önce kemik ekseni boyunca kayabilir: temasın yalnız %${pc}'i direnç gösteriyor.`);
         out.push(['warn', 'Uyarı', msg0 + ' ' + xl('İlk vida takılana kadar guide elle tutulmalı; sarmayı artırmak ya da segment başına iki vida koymak dönmeyi azaltır.'), 'fib', can ? [['fibWrapUp', 'Sarmayı 1 mm artır']] : undefined]);
       }
+      // a hand-set screw is moved clear of the slots by the fix; the automatic ones already keep as far as the bone allows
+      const clr = P0.fsc ? [['fibScrewClear', 'Vidayı yuvadan uzaklaştır']] : undefined;
       R.screwInfo.forEach((si, i) => {
         if (!si.ok) out.push(['crit', 'Kritik', si.noBody ? xl(`Fibula vidası ${i + 1} altında guide gövdesi yok; kovan boşlukta kalırdı.`) + ' ' + xl('Vidayı kaydırın ya da sarmayı artırın.') : xl(`Fibula vidası ${i + 1} kemiğe ulaşmıyor.`) + ' ' + xl('Vidayı kemiğin üstüne kaydırın.')]);
-        else if (si.crossesPlane) out.push(['crit', 'Kritik', xl(`Fibula vidası ${i + 1} matkap yolu kesi yuvasıyla kesişiyor.`) + ' ' + xl('Vidayı yuvadan uzaklaştırın.')]);
-        else if (si.slotGap < 0.5) out.push(['warn', 'Uyarı', xl(`Fibula vidası ${i + 1} kovanı kesi yuvasına ${fmt(Math.max(0, si.slotGap))} mm yaklaşıyor (en az 0,5 mm); testere yoluna değebilir.`) + ' ' + xl('Vidayı yuvadan uzaklaştırın.')]);
+        else if (si.crossesPlane) out.push(['crit', 'Kritik', xl(`Fibula vidası ${i + 1} matkap yolu kesi yuvasıyla kesişiyor.`) + ' ' + xl('Vidayı yuvadan uzaklaştırın.'), 'fib', clr]);
+        else if (si.slotGap < 0) out.push(['crit', 'Kritik', xl(`Fibula vidası ${i + 1} kovanı kesi yuvasına ${fmt(-si.slotGap)} mm giriyor; kovan yuvayı kapatır, testere geçmez.`) + ' ' + xl('Vidayı yuvadan uzaklaştırın.'), 'fib', clr]);
+        else if (si.slotGap < SCREW_SLOT_MIN) out.push(['crit', 'Kritik', xl(`Fibula vidası ${i + 1} kovanı kesi yuvasına ${fmt(si.slotGap)} mm (en az ${fmt(SCREW_SLOT_MIN)} mm, örnek eşik); testere kovana değer.`) + ' ' + xl('Vidayı yuvadan uzaklaştırın.'), 'fib', clr]);
+        else if (P0.fsc && si.slotGap < SCREW_SLOT_GAP) out.push(['warn', 'Uyarı', xl(`Fibula vidası ${i + 1} kovanı kesi yuvasına ${fmt(si.slotGap)} mm; önerilen en az ${fmt(SCREW_SLOT_GAP)} mm (örnek eşik).`) + ' ' + xl('Vidayı yuvadan biraz uzaklaştırın.'), 'fib', clr]);
         // hole checks: bone along the hole, bone bridge to the cut (>= SCREW_CUT_GAP mm, our own inference)
         if (si.ok && si.inBone < SCREW_MIN_DEPTH) out.push(['warn', 'Uyarı', `Fibula vidası ${i + 1} deliği boyunca yalnız ${fmt(si.inBone)} mm kemik var (en az ${SCREW_MIN_DEPTH} mm); vida tutmayabilir. Vidayı daha kalın kemiğe kaydırın.`]);
         if (si.ok && !si.crossesPlane && Number.isFinite(si.cutGap) && si.cutGap < SCREW_CUT_GAP) out.push([si.cutGap < SCREW_CUT_WARN ? 'warn' : 'info', si.cutGap < SCREW_CUT_WARN ? 'Uyarı' : 'Bilgi', si.cutGap < SCREW_CUT_WARN ? `Fibula vidası ${i + 1} deliği kesiye ${fmt(Math.max(0, si.cutGap))} mm; ${SCREW_CUT_GAP} mm kesin kural değil, önerilen eşiktir, ${SCREW_CUT_WARN} mm altında kemik köprüsü kırılabilir. Vidayı kesiden uzaklaştırın.` : `Fibula vidası ${i + 1} deliği kesiye ${fmt(Math.max(0, si.cutGap))} mm; ${SCREW_CUT_GAP} mm önerilen bir eşiktir, kesin kural değildir. İsterseniz vidayı biraz uzaklaştırın.`]);
@@ -1582,6 +1627,11 @@ window.Fibula = (function () {
   }
   // the deepest wrap the fix offers: 90 % of the shaft diameter (deeper wraps past the widest level cannot be put on)
   const wrapMax = () => Math.round(F.c.FR * 2 * 0.9 * 2) / 2;
+  (window.FixHooks = window.FixHooks || {}).fibScrewClear = async () => {
+    if (!active() || !last) return;
+    const r = clearFsc(last); if (!r) return;
+    St.unapprove(plan()); msg(fscMsg(r)); guideEdited();
+  };
   (window.FixHooks = window.FixHooks || {}).fibWrapUp = async () => {
     if (!active() || !S.fib.guide) return;
     const P0 = plan(), w = S.fib.guide.ctx.g.wrap; P0.fg = Object.assign({}, P0.fg || {}, { wrap: Math.min(wrapMax(), w + 1) });
@@ -1613,5 +1663,5 @@ window.Fibula = (function () {
     edited(false);
   };
   return { pending: () => !!(active() && guideStale), setActive, activePane: () => activePane, summary: () => (active() ? summary() : null), view: () => view, active, approved, checks, apply, exportFiles, reportHTML, guideReport, production, setView, state: () => ({ F, last, view }),
-    graftBone, fibBone: q => (F && F.c ? fibBone(q) : false), guideInfo, guideEdited, plan: () => (active() ? plan() : null), rules, RULES, legSide: () => (F && F.c ? legSide() : null), building: () => building, segmentChoice, shortAlternative, MIRROR_GAP, lensOk, choice: () => (S.fib && S.fib.choice) || null, defect, MIN_LEN, MAX_N, DEV_WARN, DEV_ERR, SEG_ERR, STUMP_MIN, DEV_TIE, slotOf: () => (active() ? slotOf(plan()) : null) };
+    graftBone, fibBone: q => (F && F.c ? fibBone(q) : false), guideInfo, guideEdited, clearFsc: () => (active() && last ? clearFsc(last) : null), fscSlotGap: (f, i) => (active() && last ? fscSlotGap(last, f || guideScrews(last)[i], slotPlanes(last), guideBody(last)) : null), plan: () => (active() ? plan() : null), rules, RULES, legSide: () => (F && F.c ? legSide() : null), building: () => building, segmentChoice, shortAlternative, MIRROR_GAP, lensOk, choice: () => (S.fib && S.fib.choice) || null, defect, MIN_LEN, MAX_N, DEV_WARN, DEV_ERR, SEG_ERR, STUMP_MIN, DEV_TIE, slotOf: () => (active() ? slotOf(plan()) : null) };
 })();

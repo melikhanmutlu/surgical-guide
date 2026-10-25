@@ -1195,9 +1195,12 @@
   // SLOT_REACH mm of the slot (in the plane), which covers the bone section the saw goes through (the cut-miss test
   // samples ±W/2 + 6 mm across and 45 mm down)
   const SLOT_REACH = 45, CUT_OFF_MAX = 80, PIECE_GAIN = 20, PIECE_TURN = 70, PIECE_BACK_MAX = 30, CUT_STEEP = 0.83, CUT_ALONG_DEG = 60;
-  const SCREW_CREST_TOL = 6, SCREW_SLOT_GAP = 2, SCREW_MIN_DEPTH = 4, SCREW_GAP_MIN = 5, SCREW_GAP_MAX = 15, SCREW_GAP_FAR = 22, SCREW_GAP_BACK = 12, SCREW_CORE_R = 1.5, L_MAX = 160;
+  // SCREW_SLOT_GAP: the automatic placement and the fix keep the sleeve this far from every slot (under it the checks
+  // warn); SCREW_SLOT_MIN: under it (or a sleeve that reaches into a slot) the check is critical (clinical.js)
+  const SCREW_SLOT_MIN = CV('screwSlotMin', 0.5);
+  const SCREW_CREST_TOL = 6, SCREW_SLOT_GAP = CV('screwSlotGap', 2), SCREW_MIN_DEPTH = 4, SCREW_GAP_MIN = 5, SCREW_GAP_MAX = 15, SCREW_GAP_FAR = 22, SCREW_GAP_BACK = 12, SCREW_CORE_R = 1.5, L_MAX = 160;
   // a screw hole closer than this to the osteotomy plane leaves a thin bone bridge that can break (checks only, a warning)
-  const SCREW_CUT_GAP = 5, SCREW_CUT_WARN = 3;   // 5 mm = recommended bone bridge (info below it); a warning only under 3 mm
+  const SCREW_CUT_GAP = CV('screwCutGap', 5), SCREW_CUT_WARN = CV('screwCutWarn', 3);   // 5 mm = recommended bone bridge (info below it); a warning only under 3 mm
   // wrap depth at uu from a per-position profile ([[uu, depth], ...]) capped by the global value, as buildGuide's wrapOf
   function wrapAtU(wrap, pr, uu) {
     if (!pr || !pr.length) return wrap;
@@ -1224,6 +1227,21 @@
     body.cache.set(key, ok);
     return ok;
   }
+  // The sleeve column against the saw slots: the sleeve stands from the entry up out of the bone through the guide
+  // (cw = clearance + wall, then sleeveH more, as the kernel builds it) and is added after the slots are cut, so a
+  // sleeve that reaches into a slot fills it there and the saw no longer passes. Returns the smallest distance from a
+  // slot edge to the sleeve surface (D/2) over that column, within SLOT_REACH of the slot (Infinity without slots).
+  // A tilted screw leans its sleeve towards the cut it is tilted to, and a cut turned about the lateral axis leans
+  // its slot over the screw: the drill path in bone alone (which the checks measured before) misses both.
+  function sleeveSlotGap(entry, dir, sc, pls, cw) {
+    let gap = Infinity; const q = V(), d = V();
+    for (let t = -(cw + (sc.sleeveH || 0)); t < 0; t += 0.25) {
+      q.copy(entry).addScaledVector(dir, t);
+      for (const pw of pls) { d.copy(q).sub(pw.pSlot || pw.p); const a = d.dot(pw.N); if (d.lengthSq() - a * a > SLOT_REACH * SLOT_REACH) continue; gap = Math.min(gap, Math.abs(a) - pw.w / 2 - sc.D / 2); }
+    }
+    return gap;
+  }
+  const guideCw = (g = S.g) => (g.clear || 0) + (g.peri || 0) + (g.wall || 0);
   // thin: the graded fallback for thin bone (the upper ramus, a narrow chin): the plate is drilled through, so the core
   // ring is only asked to stay in bone while the drill axis does (that run at least SCREW_MIN_DEPTH mm), not over the
   // first 6 mm whatever the bone's thickness. Also returns cutGap: the bone bridge between the hole (radius d/2) and
@@ -1251,7 +1269,8 @@
       q.copy(s.entry).addScaledVector(s.dir, t).addScaledVector(ea, a * SCREW_CORE_R).addScaledVector(eb, b * SCREW_CORE_R); coreN++; if (boneAt(q)) core++;
     }
     if (!coreN || core < 0.85 * coreN) { if (why) why.shallow++; return null; }
-    let inBone = 0, slotGap = Infinity, cutGap = Infinity, res = false;
+    let inBone = 0, slotGap = sleeveSlotGap(s.entry, s.dir, sc, pls, guideCw()), cutGap = Infinity, res = false;
+    if (slotGap < SCREW_SLOT_GAP) { if (why) why.nearSlot++; return null; }
     for (let t = 0; t <= sc.len; t += 0.25) {
       q.copy(s.entry).addScaledVector(s.dir, t);
       const bone = boneAt(q);
@@ -1992,7 +2011,8 @@
     // hole that runs in bone
     const paths = scs.map(s => {
       if (!s.entry) return null;
-      let inBone = 0, crossesPlane = false, exitAt = null, slotGap = Infinity, cutGap = Infinity;
+      // (the sleeve column in the guide counts as well: a sleeve that reaches into a slot fills it, sleeveSlotGap)
+      let inBone = 0, crossesPlane = false, exitAt = null, slotGap = sleeveSlotGap(s.entry, s.dir, s.sc, pls, cw), cutGap = Infinity;
       for (let t = 0; t <= s.sc.len; t += 0.25) {
         const q = s.entry.clone().add(s.dir.clone().multiplyScalar(t)), bone = boneAt(q);
         if (bone) inBone += 0.25; else if (exitAt === null && t > 1) exitAt = t;
@@ -2798,8 +2818,13 @@
       if (!si.ok && si.noBody) out.push(['crit', 'Kritik', `Vida ${i + 1} altında guide gövdesi yok: kemik girişi guide'ın sarma sınırının ${fmt(Math.max(0, -(si.depth || 0)), 1)} mm altında ya da gövdenin dışında; kovan boşlukta kalırdı. Vidayı kaydırın ya da sarmayı artırın.`, 's' + i]);
       else if (!si.ok) out.push(['crit', 'Kritik', `Vida ${i + 1} kemiğe ulaşmıyor; vidayı kemiğin üstüne kaydırın.`, 's' + i]);
       else {
-        if (si.crossesPlane) out.push(['crit', 'Kritik', `Vida ${i + 1} matkap yolu (Ø${fmt(si.s.sc.d)}) kesi yuvasıyla kesişiyor; vidayı yuvadan uzaklaştırın.`, 's' + i]);
-        else if (si.slotGap < 0.5) out.push(['warn', 'Uyarı', `Vida ${i + 1} kovanı (Ø${fmt(si.s.sc.D)}) kesi yuvasına ${fmt(Math.max(0, si.slotGap))} mm yaklaşıyor (en az 0,5 mm); testere yoluna değebilir. Vidayı yuvadan uzaklaştırın.`, 's' + i]);
+        // the sleeve or the drill against the saw slots (sleeve column in the guide and drill path, sleeveSlotGap):
+        // a sleeve in a slot fills it (the saw stops), under SCREW_SLOT_MIN mm critical, under SCREW_SLOT_GAP a warning
+        const clr = [['screwClear', 'Vidayı yuvadan uzaklaştır']];
+        if (si.crossesPlane) out.push(['crit', 'Kritik', `Vida ${i + 1} matkap yolu (Ø${fmt(si.s.sc.d)}) kesi yuvasıyla kesişiyor; vidayı yuvadan uzaklaştırın.`, 's' + i, clr]);
+        else if (si.slotGap < 0) out.push(['crit', 'Kritik', `Vida ${i + 1} kovanı (Ø${fmt(si.s.sc.D)}) kesi yuvasına ${fmt(-si.slotGap)} mm giriyor; kovan yuvayı kapatır, testere geçmez. Vidayı yuvadan uzaklaştırın.`, 's' + i, clr]);
+        else if (si.slotGap < SCREW_SLOT_MIN) out.push(['crit', 'Kritik', `Vida ${i + 1} kovanı (Ø${fmt(si.s.sc.D)}) kesi yuvasına ${fmt(si.slotGap)} mm (en az ${fmt(SCREW_SLOT_MIN)} mm, örnek eşik); testere kovana değer. Vidayı yuvadan uzaklaştırın.`, 's' + i, clr]);
+        else if (si.slotGap < SCREW_SLOT_GAP) out.push(['warn', 'Uyarı', `Vida ${i + 1} kovanı (Ø${fmt(si.s.sc.D)}) kesi yuvasına ${fmt(si.slotGap)} mm; önerilen en az ${fmt(SCREW_SLOT_GAP)} mm (örnek eşik). Vidayı yuvadan biraz uzaklaştırın.`, 's' + i, clr]);
         if (si.exitAt !== null && si.exitAt < si.s.sc.len) out.push(['warn', 'Uyarı', `Vida ${i + 1} ${fmt(si.exitAt)} mm'de kemikten çıkıyor, seçilen boydan kısa; vida boyunu kısaltın ya da vidayı kaydırın.`, 's' + i]);
         // hole checks: bone along the hole, and the bone bridge between the hole and the cut (>= SCREW_CUT_GAP, our own inference)
         if (si.inBone < SCREW_MIN_DEPTH) out.push(['warn', 'Uyarı', `Vida ${i + 1} deliği boyunca yalnız ${fmt(si.inBone)} mm kemik var (en az ${SCREW_MIN_DEPTH} mm); vida tutmayabilir. Vidayı daha kalın kemiğe kaydırın.`, 's' + i]);
@@ -2870,6 +2895,13 @@
       syncGuideInputs(); emit('changed'); schedule(true); return;
     }
     if (id === 'fibOpt') { const b = $('fibOpt'); if (b) b.click(); return; }
+    // every screw too near a slot moved clear of it (hand-set ones moved, the automatic ones placed again)
+    if (id === 'screwClear') {
+      const r = clearSlotScrews(); if (!r) return;
+      S.sel = S.sel && S.sel[0] === 's' ? null : S.sel; renderElements(); emit('changed'); schedule(false);
+      const m = clearedMsg(r); if (m) alertMsg(m);
+      return;
+    }
     // fixes of the modules (canal.js canalLen, ...)
     if (window.FixHooks && FixHooks[id]) { await FixHooks[id](); return; }
   }
@@ -3067,6 +3099,64 @@
     const { u, v } = frameAxes(), pls = planesWorld().sort((x, y) => x.off - y.off), cross = (pw, vv) => pw.off - vv * pw.N.dot(v) / Math.max(0.2, pw.N.dot(u));
     return S.screws.some(sc => !sc.part && sc.u > cross(pls[0], sc.v) - pls[0].w / 2 - 2 && sc.u < cross(pls[pls.length - 1], sc.v) + pls[pls.length - 1].w / 2 + 2);
   }
+  // A screw against the saw slots over its whole length: the sleeve column in the guide (sleeveSlotGap) and the drill
+  // path in bone, from the slot edge to the sleeve surface, as evalScrew and buildGuide measure it
+  function screwSlotGap(sc, pls) {
+    const w = screwWorld(sc); if (!w.entry) return Infinity;
+    let gap = sleeveSlotGap(w.entry, w.dir, sc, pls, guideCw()); const q = V(), d = V();
+    for (let t = 0; t <= sc.len; t += 0.25) {
+      q.copy(w.entry).addScaledVector(w.dir, t);
+      for (const pw of pls) { d.copy(q).sub(pw.pSlot || pw.p); const a = d.dot(pw.N); if (d.lengthSq() - a * a > SLOT_REACH * SLOT_REACH) continue; gap = Math.min(gap, Math.abs(a) - pw.w / 2 - sc.D / 2); }
+    }
+    return gap;
+  }
+  // the screws (indices into S.screws) whose sleeve or drill comes within minGap of a slot: after a cut was moved or
+  // turned over them, or a screw dragged next to a slot
+  function screwsNearSlots(minGap = SCREW_SLOT_GAP) {
+    if (!S.anchor || !S.planes.length || !S.screws.length) return [];
+    const pls = planesWorld(), out = [];
+    S.screws.forEach((sc, i) => { if (sc && screwSlotGap(sc, pls) < minGap) out.push(i); });
+    return out;
+  }
+  // A screw the surgeon placed that a slot now reaches: moved along the guide axis (u of its frame) away from the
+  // nearest slot, on the side it stands, in 0.5 mm steps up to SCREW_GAP_FAR mm, to the first spot evalScrew accepts
+  // (sleeve and drill SCREW_SLOT_GAP mm clear of every slot, bone under it, not in the resected bone), its tilt kept;
+  // failing that, the same with the tilt taken off. Other screws are kept clear by D + 1 mm. True when it moved.
+  function clearScrew(sc, pls) {
+    const w = screwWorld(sc); if (!w.entry) return false;
+    let near = null;
+    for (const pw of pls) { const d = w.entry.clone().sub(pw.pSlot || pw.p), a = d.dot(pw.N); if (d.lengthSq() - a * a > SLOT_REACH * SLOT_REACH) continue; if (!near || Math.abs(a) < Math.abs(near.a)) near = { pw, a }; }
+    if (!near) return false;
+    const { u } = screwFrame(sc), du = Math.sign(near.pw.N.dot(u) * (Math.sign(near.a) || 1)); if (!du) return false;
+    const E = resEnds(), others = S.screws.filter(o => o && o !== sc), keep = { u: sc.u, v: sc.v, tiltU: sc.tiltU, tiltV: sc.tiltV };
+    for (const [tu, tv] of [[keep.tiltU, keep.tiltV], [0, 0]]) for (let k = 1; k <= 2 * SCREW_GAP_FAR; k++) {
+      const uu = Math.round((keep.u + du * k * 0.5) * 10) / 10;
+      if (others.some(o => (o.part || 0) === (sc.part || 0) && Math.hypot(o.u - uu, o.v - keep.v) < Math.max(o.D, sc.D) + 1)) continue;
+      Object.assign(sc, { u: uu, tiltU: tu, tiltV: tv });
+      if (evalScrew(sc, pls, null, E, null)) return true;
+    }
+    Object.assign(sc, keep);
+    return false;
+  }
+  // Every screw too near a slot is cleared: one the surgeon placed is moved away from the slot (clearScrew), or, when
+  // no spot nearby holds, handed back to the automatic placement; the automatic ones are placed again (they keep
+  // SCREW_SLOT_GAP mm by construction). The screws touched lose their approval. Returns { moved, auto } (hand-set
+  // screws moved / handed back) or null when nothing was near a slot.
+  function clearSlotScrews() {
+    const idx = screwsNearSlots(); if (!idx.length || !S.guideOn) return null;
+    const pls = planesWorld(); let moved = 0, auto = 0, again = false;
+    for (const i of idx) {
+      const sc = S.screws[i]; unapprove(sc);
+      if (!sc.hand) { again = true; continue; }
+      if (clearScrew(sc, pls)) moved++; else { delete sc.hand; auto++; again = true; }
+    }
+    if (again) placeScrews(); else setLength(planesWorld().sort((x, y) => x.off - y.off));
+    return { moved, auto };
+  }
+  const clearedMsg = r => !r || !(r.moved || r.auto) ? ''
+    : r.moved && r.auto ? `Kesi yuvasına yaklaşan ${r.moved} elle yerleştirilmiş vida yuvadan uzağa kaydırıldı; ${r.auto} vida için yakında uygun yer yoktu, o taraf otomatik yeniden yerleştirildi. Konumlarını kontrol edip onaylayın.`
+      : r.moved ? `Kesi yuvasına yaklaşan ${r.moved} elle yerleştirilmiş vida yuvadan en az ${fmt(SCREW_SLOT_GAP)} mm uzağa kaydırıldı. Konumlarını kontrol edip onaylayın.`
+        : `Kesi yuvasına yaklaşan ${r.auto} elle yerleştirilmiş vida için yakında uygun yer yoktu; o taraftaki vidalar otomatik yeniden yerleştirildi. Konumlarını kontrol edip onaylayın.`;
   function schedule(planesChanged, liveEdit) {
     live.ver++;
     if (planesChanged) live.planes = live.resDirty = true;
@@ -3088,6 +3178,9 @@
         S.screws.forEach(unapprove);
         // a cut moved over the screws (3D drag, slice drag, sliders alike): the screws (and the guide length) go back outside the cuts
         if (S.guideOn && S.anchor && screwsInCuts()) { placeScrews(); S.sel = S.sel && S.sel[0] === 's' ? null : S.sel; renderElements(); }
+        // a cut moved or turned next to the screws (a slot leaning over a sleeve, a cut moved up to a screw): the
+        // screws it reaches are moved clear of it (hand-set ones too, with a message), never left in the slot
+        if (S.guideOn && S.anchor) { const r = clearSlotScrews(); if (r) { S.sel = S.sel && S.sel[0] === 's' ? null : S.sel; renderElements(); const m = clearedMsg(r); if (m) alertMsg(m); } }
         busy(true, 'Rezeksiyon güncelleniyor…'); await sleep(); await rebuildResection();
       }
       if (S.screwRefit) { S.screwRefit = false; if (S.guideOn && S.anchor) { placeScrews(); S.sel = null; renderElements(); } }
@@ -3861,7 +3954,10 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   function prodReply(js, sent) {
     const issues = Array.isArray(js.issues) ? js.issues.filter(i => i && typeof i.code === 'string') : [];
     const ok = typeof js.production_ok === 'boolean' ? js.production_ok : !!js.watertight;
-    const screwNos = issues.filter(i => i.code === 'screw_no_body').map(i => { const s = sent && sent[i.screw]; return s ? S.screws.indexOf(s.sc) + 1 : 0; });
+    const noOf = i => { const s = sent && sent[i.screw]; return s ? S.screws.indexOf(s.sc) + 1 : 0; };
+    const screwNos = issues.filter(i => i.code === 'screw_no_body').map(noOf);
+    // a sleeve standing in a saw slot: the plan's screw number (0: a screw of the fibula guide or the bar's lug)
+    issues.forEach(i => { if (i.code === 'screw_in_slot') i.no = noOf(i); });
     return { productionOk: ok, issues, screwsMissing: Number.isFinite(js.screws_missing) ? js.screws_missing : screwNos.length, screwNos,
       resolution: Number.isFinite(js.resolution) ? js.resolution : null, requestedResolution: Number.isFinite(js.requested_resolution) ? js.requested_resolution : null, version: typeof js.version === 'string' ? js.version : null,
       printChecks: js.print_checks && typeof js.print_checks === 'object' ? js.print_checks : null };
@@ -3945,6 +4041,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     if (iss.some(i => i.code === 'thin_wall')) out.push({ code: 'thin_wall', msg: xl(`Guide'da ${fmt(iss.find(i => i.code === 'thin_wall').min_wall_mm || 1)} mm'den ince duvar var (${fmt(sum('thin_wall'), 1)} mm³); baskıda ya da elde kırılabilir.`) });
     if (iss.some(i => i.code === 'bone_overlap')) out.push({ code: 'bone_overlap', msg: xl(`Guide gövdesinin ${fmt(sum('bone_overlap'), 1)} mm³'ü kemiğin içinde; planlanan yere oturmaz.`) });
     if (iss.some(i => i.code === 'undercut')) out.push({ code: 'undercut', msg: xl(`Guide gövdesinin ${fmt(sum('undercut'), 1)} mm³'ü takma yönünde kemiğin gölgesinde; bu yönde takılamaz.`) });
+    iss.filter(i => i.code === 'screw_in_slot').forEach(i => out.push({ code: 'screw_in_slot', msg: i.no > 0 ? xl(`Vida ${i.no} kovanı üretim STL'inde kesi yuvasının ${fmt(+i.mm3 || 0, 1)} mm³'ünü dolduruyor; testere o yuvadan geçmez.`) : xl(`Bir vida kovanı üretim STL'inde kesi yuvasının ${fmt(+i.mm3 || 0, 1)} mm³'ünü dolduruyor; testere o yuvadan geçmez.`) }));
     return out;
   }
   // the print checks for the reports: what was measured, or why the STL fails them
@@ -4186,7 +4283,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   function serverUrl() { return ($('aiUrl').value || '').trim().replace(/\/+$/, ''); }
   function select(sel) { if (sel) S.guideSel = false; S.sel = sel; emit('select', sel); renderElements(); rebuildElementParts(S.result ? S.result.pls : planesWorld(), S.result ? S.result.screwInfo : []); applyExplode(); render(); }
   window.Studio = { bg: bgCall, loadSample, sampleFor, SAMPLES, chooseAxis, nearestPiece, netsOf, blurNetsOf, renamePart, partName, guideBuilds: () => guideBuilds, mandibleView, endModes, onEndModes, startLoad, loadStopped, loadBusy: () => committing, LOAD_CANCELLED, renderComps, setGuideRot, setGuideRoll, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, setOpacity, resEnds, splitGap, cutMisses, evalScrew, resectedAt, resectedNear, resPiece, boneTrack, cutAlongBone, bestScrew,
-    boneSections, autoPrep, exportPackage, sha256Bytes, prodRecord, sizeBody, autoBody, buildGuideSet, cutsAngle, cutFrame, pieceFrames, pieceBody, screwBodyOn, pieceWrapTop, frameAt, stumpGap, mergeStl, mergeMeshes, AUTO_DEFAULT, G_DEFAULT, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, busyFrac, busySpan, busyText, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume, boneField, simplifyMesh, BAR, barPlan, barSdf, buildBarMesh, placeLug, longCase, axisOffBone, ramusAxis, stopSides, LONG_MM, CUT_OFF_MAX, prodKey, productionSTL, exportOne, softOcc, boneDoubt, boneKey, runFix, printIssues, printLine, serverBar, guideField, lockState: () => lock, bonelessCut, qualityCheck, syncQC, segEdits, editsAt, slotDefault, slotDepth, slotPlay, SLOT_PLAY_MAX, reframe, exclusive, settled, makeGuide, prodReply, prodWhy, gateChecks, swInfo, swLine, sfetch, reportHTML, lesionMargins, anchorFromSlice, ramusAxis };
+    boneSections, autoPrep, exportPackage, sha256Bytes, prodRecord, sizeBody, autoBody, buildGuideSet, cutsAngle, cutFrame, pieceFrames, pieceBody, screwBodyOn, pieceWrapTop, frameAt, stumpGap, mergeStl, mergeMeshes, AUTO_DEFAULT, G_DEFAULT, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, busyFrac, busySpan, busyText, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume, boneField, simplifyMesh, BAR, barPlan, barSdf, buildBarMesh, placeLug, longCase, axisOffBone, ramusAxis, stopSides, LONG_MM, CUT_OFF_MAX, prodKey, productionSTL, exportOne, softOcc, boneDoubt, boneKey, runFix, printIssues, printLine, serverBar, guideField, lockState: () => lock, bonelessCut, qualityCheck, syncQC, segEdits, editsAt, slotDefault, slotDepth, slotPlay, SLOT_PLAY_MAX, reframe, exclusive, settled, makeGuide, screwSlotGap, screwsNearSlots, clearScrew, clearSlotScrews, sleeveSlotGap, SCREW_SLOT_GAP, SCREW_SLOT_MIN, prodReply, prodWhy, gateChecks, swInfo, swLine, sfetch, reportHTML, lesionMargins, anchorFromSlice, ramusAxis };
   bus.addEventListener('planeDragged', () => { renderElements(); schedule(true, 'drag'); });
   // messages assembled at run time are written in the language that was active: write them again when it changes
   if (window.addEventListener) window.addEventListener('langchange', () => { try { renderChecks(); renderAppr(); syncLesion(); } catch (e) { /* no case open yet */ } });

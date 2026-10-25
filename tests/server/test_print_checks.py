@@ -111,5 +111,38 @@ class PrintChecks(unittest.TestCase):
         self.assertFalse([i for i in out["issues"] if i["code"] in ("thin_wall", "bone_overlap", "undercut")])
 
 
+def bar_request(screw_x):
+    """A flat bone block (top z = 0), one saw slot across x = 0 (0.8 mm), one straight screw at x = screw_x."""
+    nx, ny, nz = 60, 30, 24
+    org = np.array([-30.0, -15.0, -16.0])
+    z = org[2] + np.arange(nz)[:, None, None] + 0 * np.arange(ny)[None, :, None] + 0 * np.arange(nx)[None, None, :]
+    m = (z <= 0).astype(np.uint8)
+    return {"crop": {"nx": nx, "ny": ny, "nz": nz, "sp": [1.0] * 3, "origin": org.tolist(), "axes": [[1, 0, 0], [0, 1, 0], [0, 0, 1]]},
+            "mask_b64": base64.b64encode(np.ascontiguousarray(m).tobytes()).decode(),
+            "frame": {"p": [0, 0, 0], "u": [1, 0, 0], "v": [0, 1, 0], "n": [0, 0, 1]},
+            "g": {"L": 40, "W": 14, "wrap": 2, "wall": 2.5, "clear": 0.3, "bridge": 3, "side": 1},
+            "planes": [{"p": [0, 0, 0], "N": [1, 0, 0], "w": 0.8}],
+            "screws": [{"entry": [screw_x, 0, 0], "dir": [0, 0, -1], "d": 2.0, "D": 5.0, "sleeveH": 5}], "resolution": 0.4}
+
+
+class SleeveInSlot(unittest.TestCase):
+    """Thread "Kesi ile vida deliği çakışması" (2026-10-25): a sleeve that stands in a saw slot fills it (the sleeves are
+    added after the slots are cut), so the printed guide has no slot there. The server reports it and refuses the STL."""
+
+    def test_sleeve_in_the_slot_is_an_issue(self):
+        out = Y.build_guide(bar_request(1.5))          # sleeve radius 2.5: reaches 1 mm past the slot centre
+        hit = [i for i in out["issues"] if i["code"] == "screw_in_slot"]
+        self.assertEqual(len(hit), 1, out["issues"])
+        self.assertEqual(hit[0]["screw"], 0)
+        self.assertGreater(hit[0]["mm3"], Y.PRINT_TOL_MM3)
+        self.assertFalse(out["production_ok"])
+
+    def test_sleeve_clear_of_the_slot_passes(self):
+        out = Y.build_guide(bar_request(6.0))          # 3.1 mm from the slot edge
+        self.assertFalse([i for i in out["issues"] if i["code"] == "screw_in_slot"], out["issues"])
+        self.assertNotIn("slot_mm3", out["screws"][0])
+        self.assertTrue(out["production_ok"], out["issues"])
+
+
 if __name__ == "__main__":
     unittest.main()

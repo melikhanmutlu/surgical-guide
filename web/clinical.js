@@ -1,6 +1,6 @@
 /* Clinical thresholds in one place (plan C4). Every check that compares a plan with a clinical limit reads it from
    here: the saw slot play, the distance to the nerve canal, the guide wall, the metal near the guide, the safety
-   margin to start from. The values are SAMPLE values chosen while building the software; the clinical team sets the
+   margin to start from, the screw sleeve's distance to the saw slots and the bone bridge to the cut. The values are SAMPLE values chosen while building the software; the clinical team sets the
    real ones. A deployment can override them before the scripts load (window.ClinicalProfile = { key: value }); the
    values are read once at start, so all modules use the same numbers, and the report lists them.
    (The fibula segment rules stay in the fibula plan, where the surgeon can change them per case: fibula.js RULES.) */
@@ -16,6 +16,11 @@ window.Clinical = (function () {
     metalHu: [2500, 'Metal eşiği', 'HU', 1500, 4000],
     metalBand: [1.5, 'Guide altında metal arama bandı', 'mm', 0.5, 5],
     margin: [3, 'Güvenlik payı (başlangıç)', 'mm', 0, 15],
+    // guide screws against the saw slots and the osteotomy (sleeve column in the guide and drill path in bone)
+    screwSlotGap: [2, 'Vida kovanı ile kesi yuvası arası (otomatik yerleşim, altı uyarı)', 'mm', 0.5, 6],
+    screwSlotMin: [0.5, 'Vida kovanı ile kesi yuvası arası (en az, altı kritik)', 'mm', 0, 3],
+    screwCutGap: [5, 'Vida deliği ile kesi arası kemik köprüsü (önerilen)', 'mm', 2, 12],
+    screwCutWarn: [3, 'Vida deliği ile kesi arası kemik köprüsü (altı uyarı)', 'mm', 1, 10],
   };
   const over = (window.ClinicalProfile && typeof window.ClinicalProfile === 'object') ? window.ClinicalProfile : {};
   const P = {};
