@@ -131,7 +131,7 @@ function scene(nx, ny, nz, bodies) {
 function withScene(sc, f) { const r0 = S.red, l0 = S.labels; try { S.red = sc.red; S.labels = sc.lab; return f(); } finally { S.red = r0; S.labels = l0; } }
 // a bone touching only the talus: the real CT's navicular came out as "Medial malleol" (it lay medial of the tibia's
 // centre); a fragment is now a piece within 6 mm of the tibia or fibula
-test('names: a navicular (touches only the talus) and a calcaneus are "Diğer kemik"; a fragment beside the tibia is one', () => {
+test('names: a navicular (touches only the talus) is "Diğer kemik", the calcaneus under and behind the talus "Kalkaneus"; a fragment beside the tibia is one', () => {
   const sc = scene(80, 80, 160, [[30, 35, 40]]);
   const list = [
     sc.put(1, (i, j, k) => k >= 50 && k < 160 && Math.hypot(i - 32, j - 35) < 7),          // tibia, leaves the top
@@ -144,7 +144,7 @@ test('names: a navicular (touches only the talus) and a calcaneus are "Diğer ke
   withScene(sc, () => {
     const side = A._names(list), by = l => list.find(p => p.label === l);
     assert.equal(by(1).name, 'Tibia'); assert.equal(by(2).name, 'Fibula'); assert.equal(by(3).name, 'Talus');
-    assert.equal(by(4).name, 'Diğer kemik'); assert.equal(by(5).name, 'Diğer kemik'); assert.equal(by(6).name, 'Medial malleol');
+    assert.equal(by(4).name, 'Diğer kemik'); assert.equal(by(5).name, 'Kalkaneus'); assert.equal(by(5).role, 'other'); assert.equal(by(6).name, 'Medial malleol');
     assert.equal(side, 'R'); assert.equal(A.roiInfo().talus, true);
   });
 });

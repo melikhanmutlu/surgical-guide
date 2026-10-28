@@ -126,11 +126,12 @@ window.Ankle = (function () {
   //   (crop, ROI) runs from `below` mm under to `above` mm over it; a piece with under 30 % of its voxels inside is
   //   left out (knee, femur, patella on a long scan; the toes).
   // - a fracture fragment lies within 6 mm of the tibia or the fibula and is named from where it lies against the
-  //   distal tibia; a bone touching only the talus or the foot (navicular, calcaneus) is "Diğer kemik".
+  //   distal tibia; a bone touching only the talus or the foot is "Diğer kemik", the largest one below and behind the talus
+  //   "Kalkaneus".
   const MAXP = 16, THR_ANKLE = 300, THR_MAND = 250, NEAR_FRAG = 6, NEAR_TAL = 6, IN_ROI = 0.3;
   const ROI_DEF = { above: 100, below: 40, side: '' }, ROI_LIM = { above: [30, 250], below: [10, 100] };
-  const NAMES = ['Tibia', 'Fibula', 'Talus', 'Lateral malleol', 'Medial malleol', 'Posterior malleol', 'Diğer kemik', 'Atel / dış nesne'];
-  const roleOf = n => ({ Tibia: 'tibia', Fibula: 'fibula', Talus: 'talus', 'Diğer kemik': 'other', 'Atel / dış nesne': 'out' })[n] || 'frag';
+  const NAMES = ['Tibia', 'Fibula', 'Talus', 'Lateral malleol', 'Medial malleol', 'Posterior malleol', 'Kalkaneus', 'Diğer kemik', 'Atel / dış nesne'];
+  const roleOf = n => ({ Tibia: 'tibia', Fibula: 'fibula', Talus: 'talus', Kalkaneus: 'other', 'Diğer kemik': 'other', 'Atel / dış nesne': 'out' })[n] || 'frag';
   let roi = Object.assign({}, ROI_DEF), roiInfo = null;
   // one pass over the labels: per piece its slice range, per-slice voxel counts and in-plane sums (the centroid of
   // any slab), bounding box, and how much of its surface lies against air
@@ -252,6 +253,15 @@ window.Ankle = (function () {
       }
       p.name = `Parça ${++n}`;
     });
+    // the calcaneus (Melikhan 2026-10-28): of the other bones, the largest (over 5 cm³) that touches the talus, with its
+    // centre below and behind the talus' centre; the navicular lies in front of the talus
+    if (tal) {
+      const back = post || V(0, 1, 0), tc0 = tal.c;
+      const kOk = p => { const a = kOfC(p), b = kOfC(tal); return up > 0 ? a < b : a > b; };
+      const calc = list.filter(p => p.role === 'other' && p.cm3 > 5 && kOk(p) && V().subVectors(p.c, tc0).setZ(0).dot(back) > 0)
+        .sort((a, b) => b.size - a.size).find(p => gaps(p, [tal.label]).get(tal.label) <= NEAR_TAL);
+      if (calc) calc.name = 'Kalkaneus';
+    }
     roiInfo = info;
     // the side of the ankle: the fibula is lateral, a right ankle has it on the patient's right (-x in LPS)
     return tib && fib ? (fib.c.x < tib.c.x ? 'R' : 'L') : '';
@@ -552,7 +562,11 @@ window.Ankle = (function () {
     if (!on() || !pieces.length) return;
     const frag = !anatOpen(), b = St.parts.bone;
     if (b) { b.visible = !frag; b.obj.visible = !frag; }
-    pieces.forEach((p, i) => { const pt = St.parts['ank' + i]; if (pt) { pt.visible = frag && p.role !== 'out'; pt.obj.visible = pt.visible; } });
+    // in the Anatomy step the planning bone is shown for the brush and the structure list; the named pieces it does not
+    // hold (the fibula, talus, calcaneus beside a tibia-only planning bone) are shown beside it where they lie in the CT
+    // (Melikhan 2026-10-28: the fibula was missing there)
+    const sel = S.selected || new Set();
+    pieces.forEach((p, i) => { const pt = St.parts['ank' + i]; if (pt) { pt.visible = p.role !== 'out' && (frag || (!sel.has(p.label) && !moved(p))); pt.obj.visible = pt.visible; } });
     attach(); St.renderParts(); St.render();
   }
   let tc = null, dragging = false;
@@ -921,8 +935,15 @@ window.Ankle = (function () {
   bus.addEventListener('caseType', () => {
     // a built-in sample of the other case type is swapped for this type's sample (nothing planned on it yet)
     const isAnkle = n => /^ankle/.test(n);
-    if (!S.restoring && S.source && S.source.type === 'sample' && isAnkle(S.source.name) !== on() && !S.anchor && !pieces.some(moved) && St.loadSample) {
-      drop(); St.loadSample(St.sampleFor ? St.sampleFor(on() ? 'ankle' : 'mandible') : on() ? 'ankle' : 'mandible').catch(e => St.alertMsg(String(e.message || e))); return;
+    // a plan on it (cuts, moved pieces) is lost: asked first, and the type goes back when the answer is no (Melikhan
+    // 2026-10-28: with a jaw plan the switch kept the jaw CT and coloured it as ankle pieces)
+    if (!S.restoring && S.source && S.source.type === 'sample' && isAnkle(S.source.name) !== on() && St.loadSample) {
+      if ((S.anchor || S.planes.length || pieces.some(moved)) && !confirm(xl('Vaka tipi değişince bu tipin örnek vakası açılır; mevcut plan silinir. Devam edilsin mi?'))) {
+        if (window.CaseType) CaseType.set(on() ? 'mandible' : 'ankle', true);
+        return;
+      }
+      const n = St.sampleFor ? St.sampleFor(on() ? 'ankle' : 'mandible') : on() ? 'ankle' : 'mandible';
+      drop(); St.loadSample(n).then(() => St.samplePair && St.samplePair(n)).catch(e => St.alertMsg(String(e.message || e))); return;
     }
   });
   // bone threshold: ankle joint spaces are narrow, at 250 HU the tibia, talus and fibula of a real CT fuse into one

@@ -1330,7 +1330,7 @@ window.Fibula = (function () {
   function unload() {
     S.fib = null; F = null; last = null; guideKey = ''; S.legQc = null; if (St.syncQC) St.syncQC();
     clearLeg(); St.setPart('grafts', null, null); grafts = null;
-    if (view === 'f') setView('m');
+    if (view !== 'm') setView('m');   // the side-by-side view too: it would keep half the stage for a leg that is gone
     $('sceneSeg').hidden = true; $('fibBody').hidden = true; $('tag6').hidden = true; msg('');
     St.updatePanels(); St.render();
   }
@@ -1604,7 +1604,7 @@ window.Fibula = (function () {
   $('fibMirror').addEventListener('change', e => { if (!active()) return; plan().mirror = e.target.checked ? 1 : 0; guideKey = ''; edited(false, true); });
   bus.addEventListener('volume', e => {
     if ((e.detail && e.detail.restoring) || !S.fib) return;
-    if (overSample && F && F.c && S.source && S.source.type !== 'sample') {
+    if (overSample && F && F.c && S.source && S.source.type !== 'sample' && !(window.CaseType && CaseType.get() === 'ankle')) {
       overSample = false; clearTimeout(guideTimer); guideTimer = null; guideStale = false; dropGuide();
       const P0 = defaultPlan(); P0.source = Object.assign({}, F.source); P0.cand = F.c.centroid.map(x => Math.round(x * 10) / 10);
       S.fib = { plan: P0, guide: null }; last = null; draw(null); syncUI(); renderStep();
@@ -1662,6 +1662,6 @@ window.Fibula = (function () {
     if (!((P0.boss || 0) > wl) || P0.boss < b0) P0.boss = b0;
     edited(false);
   };
-  return { pending: () => !!(active() && guideStale), setActive, activePane: () => activePane, summary: () => (active() ? summary() : null), view: () => view, active, approved, checks, apply, exportFiles, reportHTML, guideReport, production, setView, state: () => ({ F, last, view }),
+  return { start, pending: () => !!(active() && guideStale), setActive, activePane: () => activePane, summary: () => (active() ? summary() : null), view: () => view, active, approved, checks, apply, exportFiles, reportHTML, guideReport, production, setView, state: () => ({ F, last, view }),
     graftBone, fibBone: q => (F && F.c ? fibBone(q) : false), guideInfo, guideEdited, clearFsc: () => (active() && last ? clearFsc(last) : null), fscSlotGap: (f, i) => (active() && last ? fscSlotGap(last, f || guideScrews(last)[i], slotPlanes(last), guideBody(last)) : null), plan: () => (active() ? plan() : null), rules, RULES, legSide: () => (F && F.c ? legSide() : null), building: () => building, segmentChoice, shortAlternative, MIRROR_GAP, lensOk, choice: () => (S.fib && S.fib.choice) || null, defect, MIN_LEN, MAX_N, DEV_WARN, DEV_ERR, SEG_ERR, STUMP_MIN, DEV_TIE, slotOf: () => (active() ? slotOf(plan()) : null) };
 })();

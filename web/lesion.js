@@ -186,7 +186,9 @@ window.Lesion = (function () {
     <p class="hint more">Lezyonun ilk ve son göründüğü kesitleri de boyayın. Kesiler boyanan bölgeyi güvenlik payı kadar dışarıda bırakır; açı, en az kemik alınacak şekilde 30°'ye kadar seçilir.</p>`;
   document.querySelectorAll('#lsTools [data-t]').forEach(b => b.addEventListener('click', () => setTool(b.dataset.t)));
   $('lsRad').addEventListener('input', e => { radius = +e.target.value; $('lsRadO').textContent = `${fmt(radius, 1)} mm`; });
-  $('lsPlan').addEventListener('click', plan);
+  // with a guide on, a new proposal builds the guide again from scratch as the first automatic plan does ("Hazırla"),
+  // not out of the last guide's fit (Melikhan 2026-10-28)
+  $('lsPlan').addEventListener('click', () => (S.guideOn && St.autoPrep ? St.autoPrep() : plan()));
   $('lsClear').addEventListener('click', () => { mask = null; dirty = false; changed(); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && tool) setTool(tool); });
   St.onEndModes(() => { if (tool) setTool(tool); });

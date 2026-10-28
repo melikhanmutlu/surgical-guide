@@ -1,6 +1,6 @@
 // Senaryo S · sade panel (2026-10-25, flow.js + casetype.js grupları)
 // S1: çene akışında 5 numaralı adım; Guide'lar adımı Mandibula / Fibula / Vidalar sekmeli, sekme geçişi tek satır gösterir.
-// S2: Gelişmiş bölümleri varsayılan kapalı; adımın ana alanında az kontrol var; Gelişmiş'te ayar sayısı yazar.
+// S2: Gelişmiş bölümleri varsayılan kapalı; adımın ana alanında az kontrol var; Gelişmiş başlığında ayar sayısı yazmaz (Melikhan 2026-10-28: açıp görsün).
 // S3: Ayarlar'daki "Tüm ayarları açık göster" bütün Gelişmiş bölümlerini açar, kapatınca kapanır.
 // S4: Gelişmiş içindeki adlı bir bölüm açılınca (düzeltme düğmesi, bağlantı) Gelişmiş de açılır.
 // S5: Rezeksiyonda "Kesitte boya" / "Merkez nokta" seçimi; boyama seçilince kesit şeridi gelir.
@@ -32,14 +32,14 @@ const H = require('./lib');
     return { pass: ok, actual: JSON.stringify({ tabs, st4, pressed, rows: r }), evidence: await h.shot('S1_fibula_sekmesi') };
   });
 
-  await h.run('S2', 'Gelişmiş', 'Her adımın Gelişmiş bölümü', 'Kapalı gelir; ayar sayısı yazar; Guide\'lar ana alanında 10\'dan az kontrol', async () => {
+  await h.run('S2', 'Gelişmiş', 'Her adımın Gelişmiş bölümü', 'Kapalı gelir; başlıkta ayar sayısı yok; Guide\'lar ana alanında 10\'dan az kontrol', async () => {
     await h.ev(() => UI.openStep('st5')); await h.sleep(300);
     const r = await h.ev(() => {
-      const adv = [...document.querySelectorAll('details.adv')].map(d => ({ id: d.id, open: d.open, aux: (d.querySelector('summary .aux') || {}).textContent }));
+      const adv = [...document.querySelectorAll('details.adv')].map(d => ({ id: d.id, open: d.open, sum: (d.querySelector(':scope > summary') || {}).textContent }));
       const main = [...document.querySelectorAll('#st5 .body input, #st5 .body select, #st5 .body button')].filter(e => !e.closest('[hidden]') && !e.closest('details[data-adv]') && !e.closest('.part-tabs') && e.offsetParent).length;
       return { adv, main };
     });
-    const ok = r.adv.length >= 5 && r.adv.every(a => !a.open) && r.adv.filter(a => /\d+ ayar/.test(a.aux || '')).length >= 4 && r.main < 10;
+    const ok = r.adv.length >= 5 && r.adv.every(a => !a.open) && r.adv.every(a => !/\d/.test(a.sum || '')) && r.main < 10;
     return { pass: ok, actual: JSON.stringify(r), evidence: await h.shot('S2_gelismis_kapali') };
   });
 

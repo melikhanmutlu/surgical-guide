@@ -152,11 +152,19 @@
   const parts = {};
   const partNames = {};   // user names of the layer list rows (renamePart below)
   const partKey = id => (window.Layers && Layers.keyOf ? Layers.keyOf(id) : id);
+  // layers the user hid (Katmanlar): they stay hidden when the layer is built again, also after an undo or a version
+  // restore removed and re-made it (Melikhan 2026-10-28: hidden layers came back on Ctrl+Z). A new case starts clear.
+  const userHidden = new Set();
+  function setVisible(id, on) {
+    const pt = parts[id]; if (!pt) return;
+    pt.visible = !!on; pt.obj.visible = pt.visible;
+    if (on) userHidden.delete(id); else userHidden.add(id);
+  }
   function setPart(id, label, obj, color) {
     if (parts[id]) { scene.remove(parts[id].obj); disposeObj(parts[id].obj); }
     if (!obj) { delete parts[id]; return; }
     const prev = parts[id];
-    parts[id] = { id, label, obj, color, visible: prev ? prev.visible : true, base: obj.position.clone() };
+    parts[id] = { id, label, obj, color, visible: prev ? prev.visible : !userHidden.has(id), base: obj.position.clone() };
     obj.visible = parts[id].visible; scene.add(obj);
     if (prev && prev.opacity !== undefined && prev.opacity < 1) setOpacity(parts[id], prev.opacity);
   }
@@ -878,7 +886,7 @@
   // 'Rezeksiyon bölgesini sil': the piece between the cuts is hidden (it stays in the plan and the exports)
   function showResected() {
     const pt = parts.resected; if (!pt) return;
-    pt.visible = !S.resRemoved; pt.obj.visible = pt.visible;
+    pt.visible = !S.resRemoved && !userHidden.has('resected'); pt.obj.visible = pt.visible;
   }
   function syncSeq() {
     if ($('gRotBox')) $('gRotBox').hidden = !S.guideOn;
@@ -905,12 +913,21 @@
     syncSeq();
   }
   // one button: region (sample spot, painted lesion, or one click on the model), cuts, resected piece removed, guide
+  // the guide values the automatic plan sets (length, width, wrap, one or two pieces, bar, lip) go back to their defaults,
+  // so a new plan is built from scratch and not out of the last plan's fit (Melikhan 2026-10-28: a second "Lezyondan
+  // kesi öner" or a moved cut kept the old guide's two-piece layout and wrap, and the cuts, screws and wires got mixed up)
+  function freshAuto(all) {
+    if (all) Object.assign(S.gAuto, AUTO_DEFAULT);
+    Object.keys(AUTO_DEFAULT).forEach(k => { if (S.gAuto[k]) S.g[k] = G_DEFAULT[k]; });
+    if (S.gAuto.wrap) S.g.wrapU = null;
+    S.fitLog = []; S.autoSize = null; S.screwDrops = []; S.screwBlocked = []; syncGuideInputs();
+  }
   async function autoPrep() {
     if (!S.red || !parts.bone || planBlocked()) return;
-    // a fresh automatic plan sizes the body from the bone again
-    Object.assign(S.gAuto, AUTO_DEFAULT); S.fitLog = [];
+    // a fresh automatic plan sizes the body from the bone again, the same whether a guide is on already or not
+    freshAuto(true);
     const pts = window.Lesion && Lesion.points ? Lesion.points() : [];
-    if (pts.length) { await Lesion.plan(); }
+    if (pts.length) { S.guideOn = false; await Lesion.plan(); }
     else if (!S.anchor) {
       const pr = S.presetRay, hit = pr && new THREE.Raycaster(pr.from, pr.dirv).intersectObject(parts.bone.obj, false)[0];
       if (!hit) { S.autoAfter = true; setMode('anchor'); alertMsg('Modelde ya da kesitlerde rezeksiyon bölgesine bir kez tıklayın; gerisi otomatik yapılacak.'); return; }
@@ -1640,7 +1657,7 @@
     if (!S.anchor || !pts.length) return null;
     // the safety margin is measured to the stump face: with the kerf on the resected side that face is the plane itself,
     // with a centred slot it lies w/2 behind the plane
-    const { u, v, n } = frameAxes(), A0 = S.anchor.p, L = S.lesion, w = 1.2, clear = L.margin + (S.g.kerfSide ? 0 : w / 2);
+    const { u, v, n } = frameAxes(), A0 = S.anchor.p, L = S.lesion, w = slotDefault(), clear = L.margin + (S.g.kerfSide ? 0 : w / 2);
     const rel = pts.map(q => q.clone().sub(A0)), offs = rel.map(q => q.dot(u));
     let lo = Infinity, hi = -Infinity; for (const o of offs) { if (o < lo) lo = o; if (o > hi) hi = o; }
     const mid = (lo + hi) / 2;
@@ -1742,8 +1759,11 @@
   // opt.onProgress: the bar of the first rung (coarse 0.8 mm build ~30 %, then the 0.4 mm build); most cases fit on it.
   // How many more rungs a case needs is not known beforehand, so from the second one on the bar runs with the attempt
   // number, the elapsed time and the fit's time limit instead of a percentage.
+  // the cuts a guide was last fitted to (or restored with): a cut moved since then by hand is a new layout
+  const cutSig = () => JSON.stringify([S.anchor && S.anchor.p.toArray(), S.planes.map(p => [p.off, p.yaw, p.pitch, p.w, p.pv || 0, p.pn || 0])]);
   async function fitWrap(opt = {}) {
     if (!S.anchor) return null;
+    S.fitSig = cutSig();
     const auto = S.gAuto, w0 = S.g.wrap, f0 = S.g.flange, s0 = S.g.split, log = [], t0 = performance.now();
     // the rung that came closest when none fits (kept at the end): the right piece count first, then a free seating
     // direction, then the fewest failed screws; `onlyScrews` marks a rung whose body sits but whose screws fail,
@@ -2556,10 +2576,10 @@
     $('parts').innerHTML = GROUPS.map(([name, test]) => { const mine = all.filter(pt => !seen.has(pt.id) && test(pt.id)); mine.forEach(pt => seen.add(pt.id)); return mine.length ? `<li class="grp">${name}</li>` + mine.map(row).join('') : ''; }).join('');
     const vis = all.filter(pt => pt.visible).map(pt => pt.id), gOnly = all.every(pt => pt.visible === (/guide/.test(pt.id) || pt.id.startsWith('screw')));
     $('showAll').setAttribute('aria-pressed', String(vis.length === all.length)); $('guideOnly').setAttribute('aria-pressed', String(!!all.length && gOnly && vis.length < all.length));
-    $('parts').querySelectorAll('input[type=checkbox]').forEach(el => el.addEventListener('change', () => { const pt = parts[el.dataset.p]; pt.visible = el.checked; pt.obj.visible = el.checked; render(); }));
+    $('parts').querySelectorAll('input[type=checkbox]').forEach(el => el.addEventListener('change', () => { setVisible(el.dataset.p, el.checked); render(); }));
     $('parts').querySelectorAll('input[type=range]').forEach(el => el.addEventListener('input', () => { setOpacity(parts[el.dataset.o], +el.value); render(); }));
     $('parts').querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
-      Object.values(parts).forEach(pt => { pt.visible = pt.id === b.dataset.iso; pt.obj.visible = pt.visible; });
+      Object.values(parts).forEach(pt => setVisible(pt.id, pt.id === b.dataset.iso));
       renderParts(); fitTo(parts[b.dataset.iso].obj); render();
     }));
     $('parts').querySelectorAll('[data-rn]').forEach(el => {
@@ -2600,6 +2620,7 @@
   };
   // a new scan starts with the default names (a reopened plan brings its own through PlanExt.names)
   bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring) && Object.keys(partNames).length) PlanExt.names.set(null); });
+  bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring)) userHidden.clear(); });
   // cuts are edited in the resection step, screws in their own step; approval happens only in the review step
   const DF = k => t => (window.DateFmt ? DateFmt[k](t) : k === 'time' ? new Date(t).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }) : new Date(t).toLocaleString('tr-TR'));   // dates.js: the interface language
   const apprText = o => o.ok ? `${xl('Onaylı')}${o.by ? ' · ' + esc(o.by) : ''}${o.at ? ' · ' + DF('time')(o.at) : ''}. ${xl('Değişiklik onayı kaldırır.')}` : 'Sistem önerisi; cerrah onayı Doğrulama ve onay adımında verilir.';
@@ -3176,12 +3197,22 @@
         live.planes = live.resDirty = false;
         // a cut moved: the screws' bone purchase and their distance to the slots changed with it, so they are reviewed again
         S.screws.forEach(unapprove);
-        // a cut moved over the screws (3D drag, slice drag, sliders alike): the screws (and the guide length) go back outside the cuts
-        if (S.guideOn && S.anchor && screwsInCuts()) { placeScrews(); S.sel = S.sel && S.sel[0] === 's' ? null : S.sel; renderElements(); }
+        // a cut moved by hand since the guide was fitted (3D drag, slice drag, sliders alike): the guide is built again
+        // from scratch as the automatic plan builds it, its sizes, layout and screws too (Melikhan 2026-10-28: the old
+        // fit followed the moved cut and the screws, wires and slots got mixed up)
+        let fresh = S.guideOn && S.anchor && S.fitSig != null && S.fitSig !== cutSig();
+        if (fresh) { freshAuto(false); placeScrews(); S.sel = S.sel && S.sel[0] === 's' ? null : S.sel; renderElements(); }
+        // a cut moved over the screws: the screws (and the guide length) go back outside the cuts
+        else if (S.guideOn && S.anchor && screwsInCuts()) { placeScrews(); S.sel = S.sel && S.sel[0] === 's' ? null : S.sel; renderElements(); }
         // a cut moved or turned next to the screws (a slot leaning over a sleeve, a cut moved up to a screw): the
         // screws it reaches are moved clear of it (hand-set ones too, with a message), never left in the slot
         if (S.guideOn && S.anchor) { const r = clearSlotScrews(); if (r) { S.sel = S.sel && S.sel[0] === 's' ? null : S.sel; renderElements(); const m = clearedMsg(r); if (m) alertMsg(m); } }
         busy(true, 'Rezeksiyon güncelleniyor…'); await sleep(); await rebuildResection();
+        if (fresh) {
+          busy(true, 'Guide yeni kesilere göre baştan kuruluyor…', { f: 0, restart: true }); await sleep();
+          const f = await fitWrap({ onProgress: busySpan(0, 1) }); if (f) S.fitReport = f;
+          if (dropFloating()) await regenerate();
+        }
       }
       if (S.screwRefit) { S.screwRefit = false; if (S.guideOn && S.anchor) { placeScrews(); S.sel = null; renderElements(); } }
       await regenerate();
@@ -3813,15 +3844,22 @@
   $('addPlane').addEventListener('click', () => { if (!S.anchor) return; S.planes.push({ off: 0, yaw: 0, pitch: 0, w: slotDefault() }); S.sel = 'p' + (S.planes.length - 1); schedule(true); });
   $('addScrew').addEventListener('click', () => { if (!S.anchor) return; if (!S.guideOn) { alertMsg('Önce Guide\'lar adımında "Guide oluştur"a basın.'); return; } setMode('screw'); });
   $('explode').addEventListener('input', e => { S.explode = +e.target.value; $('explodeO').textContent = fmt(S.explode, 0) + ' mm'; applyExplode(); render(); });
-  $('showAll').addEventListener('click', () => { Object.values(parts).forEach(pt => { pt.visible = true; pt.obj.visible = true; }); renderParts(); render(); });
-  $('guideOnly').addEventListener('click', () => { Object.values(parts).forEach(pt => { pt.visible = /guide/.test(pt.id) || pt.id.startsWith('screw'); pt.obj.visible = pt.visible; }); renderParts(); if (parts.guide) fitTo(parts.guide.obj); });
+  $('showAll').addEventListener('click', () => { userHidden.clear(); Object.values(parts).forEach(pt => setVisible(pt.id, true)); renderParts(); render(); });
+  $('guideOnly').addEventListener('click', () => { Object.values(parts).forEach(pt => setVisible(pt.id, /guide/.test(pt.id) || pt.id.startsWith('screw'))); renderParts(); if (parts.guide) fitTo(parts.guide.obj); });
   $('fit').addEventListener('click', () => { if (parts.bone) fitTo(parts.bone.obj); });
   // the sample replaces the whole case: a plan (cuts, screws, guide, fibula plan) is lost and "undo" does not bring it back, so ask first
   const planned = () => !!(S.anchor || S.planes.length || S.screws.length || (window.Fibula && Fibula.active && Fibula.active()));
+  // the real mandible sample opens with its real lower-leg sample, shown side by side (Melikhan 2026-10-28: the jaw case
+  // opened without a fibula, so the two models could not be seen together)
+  async function samplePair(name) {
+    if (name !== 'mandible_ct' || !(S.source && S.source.name === 'mandible_ct') || !window.Fibula || !Fibula.start || Fibula.active()) return;
+    await Fibula.start('sample_ct');
+    if (Fibula.active() && Fibula.setView) Fibula.setView('s');
+  }
   const sampleClick = name => { if (loadBlocked()) return; if (planned() && !confirm('Örnek vaka yüklensin mi? Mevcut plan (kesiler, vidalar, guide) silinir.')) return; loadSample(name); };
   $('sampleM').addEventListener('click', () => sampleClick('mandible'));
   $('sampleL').addEventListener('click', () => sampleClick('leg'));
-  $('sampleMct').addEventListener('click', () => sampleClick('mandible_ct'));
+  $('sampleMct').addEventListener('click', async () => { if (loadBlocked()) return; if (planned() && !confirm('Örnek vaka yüklensin mi? Mevcut plan (kesiler, vidalar, guide) silinir.')) return; await loadSample('mandible_ct'); await samplePair('mandible_ct'); });
   if ($('sampleA')) $('sampleA').addEventListener('click', () => sampleClick('ankle'));
   if ($('sampleAct')) $('sampleAct').addEventListener('click', () => sampleClick('ankle_ct'));
   $('dicomDir').addEventListener('change', e => { if (e.target.files.length) loadDicom([...e.target.files]); });
@@ -4317,7 +4355,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
       const worst = S.planes.reduce((m, p) => Math.max(m, slotPlay(p.w, S.g.blade, slotDepth(S.g))), 0);
       if (S.planes.length && worst > SLOT_PLAY_MAX + 1e-6) alertMsg(xl(`Bu plan eski yuva tasarımıyla kaydedilmiş: testere yuvada ${fmt(worst, 1)}°'ye kadar eğilebilir (en çok ${SLOT_PLAY_MAX}°). Kontroller'de "Yuvayı bıçağa uydur" tüm kesileri tek tıkla düzeltir; düzeltilen kesiler yeniden onaylanır.`));
       emit('planApplied', plan);
-    } finally { S.restoring = false; S.autoAnchor = true; }
+    } finally { S.restoring = false; S.autoAnchor = true; S.fitSig = cutSig(); }
   }
   // open a stored plan: load its volume first when it is a built-in sample; DICOM needs the user to pick the series
   async function openPlan(plan) {
@@ -4337,7 +4375,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   function sfetch(u, o) { return window.ServerAuth ? ServerAuth.fetch(u, o) : fetch(u, o); }
   function serverUrl() { return ($('aiUrl').value || '').trim().replace(/\/+$/, ''); }
   function select(sel) { if (sel) S.guideSel = false; S.sel = sel; emit('select', sel); renderElements(); rebuildElementParts(S.result ? S.result.pls : planesWorld(), S.result ? S.result.screwInfo : []); applyExplode(); render(); }
-  window.Studio = { bg: bgCall, loadSample, sampleFor, SAMPLES, chooseAxis, nearestPiece, netsOf, blurNetsOf, renamePart, partName, guideBuilds: () => guideBuilds, mandibleView, endModes, onEndModes, startLoad, loadStopped, loadBusy: () => committing, LOAD_CANCELLED, renderComps, setGuideRot, setGuideRoll, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, setOpacity, resEnds, splitGap, cutMisses, evalScrew, resectedAt, resectedNear, resPiece, boneTrack, cutAlongBone, bestScrew,
+  window.Studio = { setVisible, userHidden: () => [...userHidden], bg: bgCall, loadSample, samplePair, sampleFor, SAMPLES, chooseAxis, nearestPiece, netsOf, blurNetsOf, renamePart, partName, guideBuilds: () => guideBuilds, mandibleView, endModes, onEndModes, startLoad, loadStopped, loadBusy: () => committing, LOAD_CANCELLED, renderComps, setGuideRot, setGuideRoll, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, setOpacity, resEnds, splitGap, cutMisses, evalScrew, resectedAt, resectedNear, resPiece, boneTrack, cutAlongBone, bestScrew,
     boneSections, autoPrep, exportPackage, sha256Bytes, prodRecord, sizeBody, autoBody, buildGuideSet, cutsAngle, cutFrame, pieceFrames, pieceBody, screwBodyOn, pieceWrapTop, frameAt, stumpGap, mergeStl, mergeMeshes, AUTO_DEFAULT, G_DEFAULT, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, gz, gizmoStart, gizmoApply, cutMoveBasis, moveCutTo, moveSpace, cutNormal, turnCut, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, busyFrac, busySpan, busyText, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume, boneField, simplifyMesh, BAR, barPlan, barSdf, buildBarMesh, placeLug, longCase, axisOffBone, ramusAxis, stopSides, LONG_MM, CUT_OFF_MAX, prodKey, productionSTL, exportOne, softOcc, boneDoubt, boneKey, runFix, printIssues, printLine, serverBar, guideField, lockState: () => lock, bonelessCut, qualityCheck, syncQC, segEdits, editsAt, slotDefault, slotDepth, slotPlay, SLOT_PLAY_MAX, reframe, exclusive, settled, makeGuide, screwSlotGap, screwsNearSlots, clearScrew, clearSlotScrews, sleeveSlotGap, SCREW_SLOT_GAP, SCREW_SLOT_MIN, prodReply, prodWhy, gateChecks, swInfo, swLine, sfetch, reportHTML, lesionMargins, anchorFromSlice, ramusAxis };
   bus.addEventListener('planeDragged', () => { renderElements(); schedule(true, 'drag'); });
   // messages assembled at run time are written in the language that was active: write them again when it changes
@@ -4347,5 +4385,5 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   // the studio opens on the real CT sample of the case type in use (casetype.js keeps it in gs.caseType);
   // ?ornek=sentetik opens the synthetic one (the browser tests use it)
   let bootType = 'mandible'; try { if (localStorage.getItem('gs.caseType') === 'ankle') bootType = 'ankle'; } catch (e) { /* storage blocked */ }
-  try { await loadSample(sampleFor(bootType)); } catch (e) { busy(false); alertMsg('Örnek vaka açılamadı: ' + e.message); }
+  try { await loadSample(sampleFor(bootType)); await samplePair(sampleFor(bootType)); } catch (e) { busy(false); alertMsg('Örnek vaka açılamadı: ' + e.message); }
 })();

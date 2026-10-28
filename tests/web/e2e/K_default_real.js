@@ -9,10 +9,12 @@ const H = require('./lib');
   const { page } = h;
   await h.goto(H.BASE + '/'); await h.idle();
   const st = () => h.ev(() => { const S = Studio.S; return { src: S.source && S.source.name, planes: S.planes.length, screws: S.screws.length, crit: S.crit, critList: (S.checkList || []).filter(c => c[0] === 'crit').map(c => c[2]), pieces: Studio.parts.guide ? (S.result && S.result.pieces) : 0, pill: document.getElementById('readyPill').textContent, zip: !document.getElementById('expZip').disabled }; });
-  await h.run('K1', 'Açılış', 'Adres parametresiz açılır', 'Kaynak mandible_ct; DICOM etiketi/hasta adı yok; kritik kontrol yok', async () => {
+  await h.run('K1', 'Açılış', 'Adres parametresiz açılır', 'Kaynak mandible_ct ve gerçek BT bacak örneği birlikte, yan yana görünüm (Melikhan 2026-10-28); DICOM etiketi/hasta adı yok', async () => {
+    await h.fibLoaded(300000);
     const s = await st(); const info = await page.textContent('#caseInfo');
     const qc = await h.ev(() => (Studio.S.qc || []).map(q => q[0] + ':' + q[2]));
-    return { pass: s.src === 'mandible_ct' && !/hasta|patient/i.test(info), actual: JSON.stringify({ src: s.src, info: info.replace(/\s+/g, ' ').slice(0, 160), qc, crit: s.critList }), evidence: await h.shot('K1_acilis') };
+    const fib = await h.ev(() => ({ active: Fibula.active(), src: Studio.S.fib && Studio.S.fib.plan.source && Studio.S.fib.plan.source.name, view: Fibula.view(), split: !!Studio.S.split, seg: !document.getElementById('sceneSeg').hidden }));
+    return { pass: s.src === 'mandible_ct' && !/hasta|patient/i.test(info) && fib.active && fib.src === 'leg_ct' && fib.view === 's' && fib.split && fib.seg, actual: JSON.stringify({ src: s.src, fib, info: info.replace(/\s+/g, ' ').slice(0, 160), qc, crit: s.critList }), evidence: await h.shot('K1_acilis') };
   });
   await h.run('K2', 'Otomatik planla', '#autoPrep', '2 kesi, tek parça guide, vidalar, kritik yok', async () => {
     await h.openStep(3); const t = Date.now(); await page.click('#autoPrep'); await h.idle(300000);

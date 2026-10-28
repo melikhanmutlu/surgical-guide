@@ -72,20 +72,8 @@
     const step = d.closest('details.step[name="flow"]'); if (step && !step.open) return;
     for (let p = d.parentElement && d.parentElement.closest('details'); p && p !== step; p = p.parentElement && p.parentElement.closest('details')) if (!p.open) p.open = true;
   }, true);
-  // how many settings a folded section holds
-  const COUNTED = 'input:not([type=file]):not([type=hidden]), select:not([hidden]), button:not(.info):not(.link), .seg button';
-  function counts() {
-    document.querySelectorAll('details.adv').forEach(d => {
-      const sm = d.querySelector(':scope > summary'); if (!sm) return;
-      let aux = sm.querySelector('.aux');
-      if (!aux) { aux = document.createElement('span'); aux.className = 'aux'; sm.appendChild(aux); }
-      const n = [...d.querySelectorAll(COUNTED)].filter(el => !el.closest('[hidden]')).length;
-      const t = n ? xl(`${n} ayar`) : '';
-      if (aux.textContent !== t) aux.textContent = t;
-    });
-  }
   let cq = false;
-  const later = () => { if (!cq) { cq = true; requestAnimationFrame(() => { cq = false; counts(); mini(); }); } };
+  const later = () => { if (!cq) { cq = true; requestAnimationFrame(() => { cq = false; mini(); }); } };
   new MutationObserver(later).observe($('leftPanel'), { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden'] });
 
   // ---------- resection: paint on the slices or pick a centre point ----------
@@ -125,6 +113,6 @@
   }
 
   setAll(store.get('gs.advAll') === '1', true);
-  buildTabs(); counts(); mini();
+  buildTabs(); mini();
   window.Flow = { rows, buildTabs, rxMode, setAll };
 })();

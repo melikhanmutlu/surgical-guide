@@ -7,7 +7,7 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
 window.SegEdit = (function () {
   const St = window.Studio; if (!St) return null;
   const { S, V, fmt, bus } = St, $ = id => document.getElementById(id);
-  const NAMES = { brush: 'Fırça', erase: 'Silgi', scissors: 'Makas' };
+  const NAMES = { brush: 'Fırça', erase: 'Silgi', scissors: 'Makas', pick: 'Parça sil' };
   let tool = null, add = null, del = null, radius = 3, boneOnly = true, stroke = null, lastPaint = null;
 
   const n = () => S.red ? S.red.nx * S.red.ny * S.red.nz : 0;
@@ -54,34 +54,56 @@ window.SegEdit = (function () {
 
   // ---------- 3D brush / eraser (orbit is off while the tool is on; hold Alt to orbit) ----------
   const cv = St.renderer.domElement, mouse = new THREE.Vector2();
-  function hit3D(e) {
+  // the bone surface under the pointer: { point, nrm } with the normal facing the viewer, or null
+  function surf(e) {
     const rect = cv.getBoundingClientRect(), rw = S.split ? rect.width / 2 : rect.width;
     if (e.clientX - rect.left > rw) return null;
     mouse.set(((e.clientX - rect.left) / rw) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
     St.ray.setFromCamera(mouse, St.camera);
     const t = ['bone', 'resected'].filter(k => St.parts[k] && St.parts[k].visible).map(k => St.parts[k].obj);
-    const h = St.ray.intersectObjects(t, false)[0]; if (!h) return null;
-    // the eraser bites below the surface, the brush builds on top of it
+    const h = St.ray.intersectObjects(t, false)[0]; if (!h || !h.face) return null;
     const nrm = h.face.normal.clone().transformDirection(h.object.matrixWorld); if (nrm.dot(St.ray.ray.direction) > 0) nrm.negate();
-    return h.point.clone().addScaledVector(nrm, tool === 'erase' ? -radius * 0.5 : radius * 0.3);
+    return { point: h.point.clone(), nrm };
+  }
+  function hit3D(e) {
+    const h = surf(e); if (!h) return null;
+    ring(h);
+    // the eraser bites below the surface, the brush builds on top of it
+    return h.point.clone().addScaledVector(h.nrm, tool === 'erase' ? -radius * 0.5 : radius * 0.3);
   }
   let down3 = false;
   cv.addEventListener('pointerdown', e => {
     if (!tool || e.altKey || e.button !== 0) return;
     if (tool === 'scissors') { e.preventDefault(); lassoStart(e); return; }
+    if (tool === 'pick') { const h = surf(e); if (h) pickPiece(h.point.clone().addScaledVector(h.nrm, -0.6), e.shiftKey); return; }
     const p = hit3D(e); if (!p) return;
     down3 = true; cv.setPointerCapture(e.pointerId); paint(p.toArray(), null, true); marker(p);
   });
   cv.addEventListener('pointermove', e => {
     if (lasso) { lassoMove(e); return; }
-    if (!down3) return;
+    if (!down3) { if (tool === 'brush' || tool === 'erase') { const h = surf(e); if (h) ring(h); else ringOff(); } return; }
     const p = hit3D(e); if (p) { paint(p.toArray(), null, false); marker(p); }
   });
   cv.addEventListener('pointerup', e => {
     if (lasso) { lassoEnd(e); return; }
     if (!down3) return; down3 = false; clearMarkers(); strokeEnd();
   });
+  cv.addEventListener('pointerleave', () => { if (!down3) ringOff(); });
   const mk = new THREE.Group(); St.scene.add(mk);
+  // the brush outline at the pointer in 3D (Melikhan 2026-10-28): a circle of the brush radius lying on the surface
+  let ringObj = null;
+  function ring(h) {
+    if (!ringObj) {
+      const pts = []; for (let i = 0; i <= 64; i++) { const a = i / 64 * Math.PI * 2; pts.push(new THREE.Vector3(Math.cos(a), Math.sin(a), 0)); }
+      ringObj = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0xffffff, depthTest: false, transparent: true }));
+      ringObj.renderOrder = 999; ringObj.userData.brushRing = true; St.scene.add(ringObj);
+    }
+    ringObj.material.color.set(tool === 'erase' ? 0xe5484d : 0x46c98b);
+    ringObj.position.copy(h.point).addScaledVector(h.nrm, 0.2);
+    ringObj.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), h.nrm);
+    ringObj.scale.setScalar(radius); ringObj.visible = true; St.render();
+  }
+  function ringOff() { if (ringObj && ringObj.visible) { ringObj.visible = false; St.render(); } }
   function marker(p) {
     const m = new THREE.Mesh(new THREE.SphereGeometry(radius, 12, 8), new THREE.MeshBasicMaterial({ color: tool === 'erase' ? 0xe5484d : 0x46c98b, transparent: true, opacity: 0.35, depthTest: false }));
     m.position.copy(p); mk.add(m); St.render();
@@ -120,6 +142,41 @@ window.SegEdit = (function () {
       if (inn !== L.keep) { del[v] = 1; add[v] = 0; cut++; }
     }
     if (cut) await commit(`Makas: ${cut} voksel çıkarıldı`); else status('Seçilen alanda kemik yok.');
+  }
+
+  // ---------- piece remover: a click on the 3D model removes the whole connected piece under it (Shift: keeps only it) ----------
+  // (Melikhan 2026-10-28: after the eraser has cut the bone apart, the pieces not wanted are taken off one click each)
+  function pieceAt(world) {
+    const r = S.red, c = G.indexOf(r, world).map(Math.round), rad = r.sp.map(x => Math.ceil(2 / x));
+    let best = -1, bd = Infinity;
+    for (let dk = -rad[2]; dk <= rad[2]; dk++) for (let dj = -rad[1]; dj <= rad[1]; dj++) for (let di = -rad[0]; di <= rad[0]; di++) {
+      const i = c[0] + di, j = c[1] + dj, k = c[2] + dk; if (i < 0 || j < 0 || k < 0 || i >= r.nx || j >= r.ny || k >= r.nz) continue;
+      const v = i + r.nx * (j + r.ny * k); if (!S.mask[v]) continue;
+      const d = (di * r.sp[0]) ** 2 + (dj * r.sp[1]) ** 2 + (dk * r.sp[2]) ** 2; if (d < bd) { bd = d; best = v; }
+    }
+    return best;
+  }
+  // the voxels of S.mask connected (faces, as G.components) to voxel s
+  function grow(s) {
+    const r = S.red, nx = r.nx, ny = r.ny, nxy = nx * ny, N = S.mask.length, seen = new Uint8Array(N), q = new Int32Array(N);
+    let h = 0, t = 0; q[t++] = s; seen[s] = 1;
+    while (h < t) {
+      const v = q[h++], i = v % nx, j = ((v / nx) | 0) % ny, k = (v / nxy) | 0;
+      const nb = [i > 0 ? v - 1 : -1, i < nx - 1 ? v + 1 : -1, j > 0 ? v - nx : -1, j < ny - 1 ? v + nx : -1, k > 0 ? v - nxy : -1, v + nxy < N ? v + nxy : -1];
+      for (const u of nb) if (u >= 0 && S.mask[u] && !seen[u]) { seen[u] = 1; q[t++] = u; }
+    }
+    return { seen, n: t };
+  }
+  async function pickPiece(world, keepOnly) {
+    if (!S.red || !S.mask) return 0;
+    ensure();
+    const s = pieceAt(world.toArray ? world.toArray() : world); if (s < 0) { status('Tıklanan yerde kemik yok.'); return 0; }
+    const { seen } = grow(s);
+    let cut = 0;
+    for (let v = 0; v < seen.length; v++) if (S.mask[v] && (keepOnly ? !seen[v] : seen[v])) { del[v] = 1; add[v] = 0; S.mask[v] = 0; cut++; }
+    if (cut) await commit(keepOnly ? `Yalnız tıklanan parça bırakıldı: ${cut} voksel çıkarıldı` : `Parça silindi: ${cut} voksel`);
+    else status('Başka parça yok.');
+    return cut;
   }
 
   // ---------- cleanups ----------
@@ -189,10 +246,11 @@ window.SegEdit = (function () {
     if (tool && window.Measure && Measure.active()) $('toolMeasure').click();
     if (tool && window.Lesion) Lesion.off();
     if (tool && window.Masks) Masks.off();
-    St.controls.enableRotate = !tool; cv.style.cursor = tool ? 'crosshair' : ''; if (window.MPR) MPR.redraw();
+    if (tool !== 'brush' && tool !== 'erase') ringOff();
+    St.controls.enableRotate = !tool; cv.style.cursor = tool === 'pick' ? 'pointer' : tool ? 'crosshair' : ''; if (window.MPR) MPR.redraw();
     document.querySelectorAll('#seTools [data-t]').forEach(b => b.setAttribute('aria-pressed', b.dataset.t === tool));
     const b = $('modeBadge');
-    if (tool) { b.hidden = false; b.textContent = tool === 'scissors' ? 'Makas: 3B görünümde çıkarılacak bölgeyi çevreleyin (Shift: içini tut). Döndürmek için Alt. Bitirmek için Esc.' : `${NAMES[tool]}: kesitlerde ya da 3B görünümde sürükleyin. Döndürmek için Alt basılı tutun. Bitirmek için Esc.`; }
+    if (tool) { b.hidden = false; b.textContent = tool === 'pick' ? 'Parça sil: 3B görünümde silinecek parçaya tıklayın (Shift: yalnız onu bırak). Döndürmek için Alt basılı tutun. Bitirmek için Esc.' : tool === 'scissors' ? 'Makas: 3B görünümde çıkarılacak bölgeyi çevreleyin (Shift: içini tut). Döndürmek için Alt. Bitirmek için Esc.' : `${NAMES[tool]}: kesitlerde ya da 3B görünümde sürükleyin. Döndürmek için Alt basılı tutun. Bitirmek için Esc.`; }
     else if (!(window.Measure && Measure.active())) b.hidden = true;
   }
   function status(msg) {
@@ -201,11 +259,12 @@ window.SegEdit = (function () {
     $('seReset').disabled = !(a || d);
   }
   $('segEdit').innerHTML = `<details class="sub-d"><summary>Elle düzeltme</summary>
-    <p class="hint more">Otomatik kemik modeli hatalıysa kullanın. Fırça eksik kemiği ekler, Silgi fazlasını siler (kesitlerde ya da 3B'de sürükleyin), Makas 3B'de çevrelediğiniz bölgeyi keser.</p>
+    <p class="hint more">Otomatik kemik modeli hatalıysa kullanın. Fırça eksik kemiği ekler, Silgi fazlasını siler (kesitlerde ya da 3B'de sürükleyin), Makas 3B'de çevrelediğiniz bölgeyi keser, Parça sil 3B'de tıkladığınız birleşik parçayı bütünüyle siler (Shift ile tıklayınca yalnız o kalır).</p>
     <span class="seg tools" id="seTools" role="group" aria-label="Düzeltme aracı">
       <button data-t="brush" aria-pressed="false"><svg class="i"><use href="#i-brush"/></svg>Fırça</button>
       <button data-t="erase" aria-pressed="false"><svg class="i"><use href="#i-eraser"/></svg>Silgi</button>
       <button data-t="scissors" aria-pressed="false"><svg class="i"><use href="#i-scissors"/></svg>Makas</button>
+      <button data-t="pick" aria-pressed="false" title="Tıklanan birleşik parçayı sil (Shift: yalnız onu bırak)"><svg class="i"><use href="#i-trash"/></svg>Parça sil</button>
     </span>
     <div class="ctl"><div class="ctl-row"><label for="seRad">Fırça yarıçapı</label><output id="seRadO">3 mm</output></div><input type="range" id="seRad" min="1" max="12" step="0.5" value="3"></div>
     <label class="chk"><input type="checkbox" id="seBone" checked> Yalnız kemiği boya</label>
@@ -228,6 +287,6 @@ window.SegEdit = (function () {
   bus.addEventListener('volume', e => { if (!(e.detail && e.detail.restoring)) { add = del = null; status(); } });
   status();
 
-  return { active: () => !!tool && tool !== 'scissors', tool: () => tool, brush: () => (tool && tool !== 'scissors' ? { r: radius, color: tool === 'erase' ? '#e5484d' : '#46c98b' } : null), paint, strokeEnd, applyTo(m) { if (!add || add.length !== m.length) return; for (let v = 0; v < m.length; v++) { if (del[v]) m[v] = 0; else if (add[v]) m[v] = 1; } },
+  return { pickPiece, active: () => !!tool && tool !== 'scissors' && tool !== 'pick', tool: () => tool, brush: () => (tool === 'brush' || tool === 'erase' ? { r: radius, color: tool === 'erase' ? '#e5484d' : '#46c98b' } : null), paint, strokeEnd, applyTo(m) { if (!add || add.length !== m.length) return; for (let v = 0; v < m.length; v++) { if (del[v]) m[v] = 0; else if (add[v]) m[v] = 1; } },
     hasAdditions: () => !!(add && add.indexOf(1) >= 0), edited, masks: () => (edited() ? { add, del } : null), edits: () => (edited() ? { add, del } : null), key: () => edited() ? hash(rle(add)) + ':' + hash(rle(del)) : '', setTool, off: () => { if (tool) setTool(tool); }, metal, fragments, reset };
 })();

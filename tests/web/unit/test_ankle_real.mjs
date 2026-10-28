@@ -42,11 +42,25 @@ test('joint cut: the threshold piece of tibia + talus is cut in two at the joint
 test('names: one tibia, fibula and talus; no malleolar fragment named on this CT (navicular, calcaneus are not)', () => {
   ['Tibia', 'Fibula', 'Talus'].forEach(n => assert.equal(named(n).length, 1, n));
   ['Medial malleol', 'Lateral malleol', 'Posterior malleol'].forEach(n => assert.equal(named(n).length, 0, `${n}: ${JSON.stringify(named(n).map(p => [p.cm3, p.c.toArray()]))}`));
-  // the calcaneus (34 cm³, behind and below the talus) is "Diğer kemik"
+  // the calcaneus (34 cm³, behind and below the talus) is named "Kalkaneus" (Melikhan 2026-10-28), and is the only one
   const calc = A.pieces().find(p => p.cm3 > 30 && p.cm3 < 40 && p.role === 'other');
   assert.ok(calc, A.pieces().map(p => `${p.name} ${p.cm3.toFixed(1)}`).join(', '));
+  assert.equal(calc.name, 'Kalkaneus'); assert.equal(named('Kalkaneus').length, 1);
   assert.ok(A.pieces().filter(p => p.role === 'out').length >= 3, 'splint pieces left out');
   assert.equal(A.meta().side, 'R');
+});
+// Melikhan 2026-10-28: in the Anatomy step only the planning bone (the tibia, Yapı 1) was shown; the fibula, talus and
+// calcaneus were hidden, so the two leg bones could not be seen side by side
+test('Anatomy step: the fibula, talus and calcaneus are shown beside the planning bone (tibia)', () => {
+  const st2 = P.doc.getElementById('st2'); st2.open = true; (st2.listeners.toggle || []).forEach(f => f({ target: st2 }));
+  const vis = n => { const i = A.pieces().findIndex(p => p.name === n); const pt = St.parts['ank' + i]; return !!(pt && pt.visible && pt.obj.visible); };
+  assert.ok(St.parts.bone.visible, 'planning bone shown');
+  assert.ok(S.selected.has(named('Tibia')[0].label) && !S.selected.has(named('Fibula')[0].label), 'planning bone is the tibia only');
+  assert.equal(vis('Tibia'), false, 'the tibia is the planning bone itself');
+  ['Fibula', 'Talus', 'Kalkaneus'].forEach(n => assert.ok(vis(n), `${n} shown`));
+  assert.ok(A.pieces().every((p, i) => p.role !== 'out' || !St.parts['ank' + i].visible), 'splint stays hidden');
+  st2.open = false; (st2.listeners.toggle || []).forEach(f => f({ target: st2 }));
+  assert.equal(St.parts.bone.visible, false); assert.ok(vis('Tibia') && vis('Fibula'));
 });
 test('region: talar dome found; the foot below the region (navicular, cuneiforms) is not listed; nothing dropped silently', () => {
   const ri = A.roiInfo(); assert.equal(ri.talus, true); assert.equal(ri.bilateral, false);
