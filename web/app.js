@@ -631,7 +631,7 @@
     });
     // B3: bone on the midline above a symphysis with its incisors: the maxilla joined through closed teeth
     const mx = window.Bones && Bones.maxillaSuspect && !(window.CaseType && CaseType.get() === 'ankle') ? Bones.maxillaSuspect(S.red, S.mask) : null;
-    if (mx) w(h => `Planlama kemiğinde orta hatta, kemiğin altından ${h} mm yukarıda kemik var; dişler kapalıyken üst çene (maksilla) mandibulaya bağlı kalmış olabilir. Anatomi adımında "Bitişik kemikleri ayır" altında "Üst çeneyi ayır" ile ayırın.`, fmt(mx.top, 0));
+    if (mx) w(h => `Planlama kemiğinde orta hatta, kemiğin altından ${h} mm yukarıda kemik var; dişler kapalıyken üst çene (maksilla) mandibulaya bağlı kalmış olabilir. Kemik modeli adımındaki "Üst çeneyi ayır" kutusunda kapanış düzlemini dişlerin buluştuğu yere getirip ayırın.`, fmt(mx.top, 0));
     return out;
   }
   function renderQC() { $('qc').innerHTML = S.qc.map(([c, t, m]) => `<li class="${esc(c)}"><b>${esc(t)}</b><span>${esc(m)}</span></li>`).join(''); }
@@ -2907,7 +2907,7 @@
   }
   // one-click actions of the checks (the row's own fix: the automatic tool that mends it, or the place to mend it)
   async function runFix(id) {
-    if (id === 'bone') { goTo('anat'); const d = $('secMask'); if (d && !d.open) d.open = true; return; }
+    if (id === 'bone') { goTo('anat'); const j = $('jawBox'); if (j && !j.hidden) { j.scrollIntoView({ block: 'nearest' }); return; } const d = $('secMask'); if (d && !d.open) d.open = true; return; }
     if (id === 'boneOk') {
       if (!confirm(xl('Kemik modelini 3B görünümde ve kesitlerde kontrol ettiniz mi? Onay plana kaydedilir ve bu kemik modeli için geçerlidir.'))) return;
       S.boneOk = boneKey(); emit('changed'); renderChecks(); renderAppr(); return;
@@ -3709,8 +3709,9 @@
     new MutationObserver(sync).observe(badge, { attributes: true, attributeFilter: ['hidden'] }); sync();
     $('modeExit').addEventListener('click', () => endModes());
   }
-  function fitTo(obj) {
-    const box = new THREE.Box3().setFromObject(obj), c = box.getCenter(V()), r = box.getSize(V()).length() / 2;
+  // minR: at least this radius (mm) around the object, so a small part (a guide) is shown with its surroundings
+  function fitTo(obj, minR = 0) {
+    const box = new THREE.Box3().setFromObject(obj), c = box.getCenter(V()), r = Math.max(minR, box.getSize(V()).length() / 2);
     controls.target.copy(c);
     const dir = S.anchor ? S.anchor.n.clone().add(V(0, 0, 0.6)).normalize() : V(0.3, -1, 0.6).normalize();
     const vf = deg(camera.fov), hf = 2 * Math.atan(Math.tan(vf / 2) * camera.aspect);
@@ -3841,7 +3842,6 @@
   $('resRemove').addEventListener('click', () => { S.resRemoved = !S.resRemoved; showResected(); syncSeq(); renderParts(); render(); emit('changed'); });
   $('guideMake').addEventListener('click', makeGuide);
   $('autoPrep').addEventListener('click', autoPrep);
-  $('gMake2').addEventListener('click', makeGuide);
   $('guideDel').addEventListener('click', deleteGuide); $('guideDel2').addEventListener('click', deleteGuide);
   $('planReset').addEventListener('click', resetPlan);
   ['parts', 'changed', 'volume', 'planApplied'].forEach(t => bus.addEventListener(t, syncSeq));

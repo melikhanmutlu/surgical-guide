@@ -43,7 +43,8 @@ async function start(opt = {}) {
       '--enable-precise-memory-info', '--js-flags=--max-old-space-size=6144', '--no-sandbox'],
   });
   const viewport = opt.viewport || { width: 1440, height: 900 };
-  const context = await browser.newContext({ viewport, acceptDownloads: true, locale: 'tr-TR', deviceScaleFactor: 1 });
+  // opt.video: a screen recording of the whole run (webm) in the evidence folder, for reviewing the flow by eye
+  const context = await browser.newContext({ viewport, acceptDownloads: true, locale: 'tr-TR', deviceScaleFactor: 1, ...(opt.video ? { recordVideo: { dir: outDir, size: viewport } } : {}) });
   if (opt.storageState) await context.addCookies([]);
   await context.route(/^https?:\/\/(?!127\.0\.0\.1|localhost)/, async route => {
     const req = route.request();

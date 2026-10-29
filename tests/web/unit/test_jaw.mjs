@@ -5,6 +5,9 @@
 //  - Masks "Üst çeneyi ayır": the bone below the occlusal plane marks the mandible, the midline bone above it the
 //    maxilla, and the usual seeded split cuts the teeth contact; the rami (lateral, above the plane) stay mandible
 //  - the marks are the Masks marks, so the split is saved with the plan and reopens the same
+//  - 2026-10-29 (Melikhan: "o düzlem belli olmuyor"): the "Üst çeneyi ayır" box is in the main area of the bone model
+//    step whenever the maxilla looks joined, proposes the plane at once and shows it as an orange sheet in 3D at the
+//    plane's height; the sheet goes away after the split, the box stays with the result; no box without a maxilla
 // Phantom: a body (|x| < 52) with teeth pillars up to z 40, a maxilla block (|x| < 34, z 40..75) on the teeth, and two
 // rami (46 < |x| < 52) up to z 92.
 // Run: node test_jaw.mjs
@@ -93,6 +96,26 @@ test('a scan cut through the skull base: the skull base goes with the upper jaw,
   assert.equal(top, 0, 'no skull base left in the planning bone');
   assert.ok(count((x, y, z) => Math.abs(x) > 46 && z > 70 && z < 81) > 50, 'the rami up to the joint stay mandible');
   assert.ok(!(S.segWarn || []).some(w => /kenarına dayanıyor/.test(w[2])), 'the edge warning is gone: ' + JSON.stringify(S.segWarn));
+});
+
+test('the upper jaw box: shown with a joined maxilla, the plane proposed and drawn in 3D; gone without one', async () => {
+  const sheet = () => St.scene.children.find(o => o.name === 'occlusalPlane');
+  await load(false); $('st2').open = true; $('st2').dispatchEvent({ type: 'toggle' }); await new Promise(r => setTimeout(r, 0));
+  assert.ok($('jawBox').hidden, 'no maxilla: no box');
+  await load(true); await new Promise(r => setTimeout(r, 0));
+  assert.ok(!$('jawBox').hidden, 'maxilla on the teeth: the box shows');
+  assert.match($('jawWhy').textContent, /üst çene mandibulaya bağlı/);
+  const g = B.jawGuess(S.red, S.mask); assert.equal(W.Masks.occ(), g, 'the plane is proposed at once');
+  const sh = sheet(); assert.ok(sh && sh.visible, 'the orange sheet is in the 3D scene');
+  near(sh.position.z, 2 + g, 1, 'sheet at the plane height (lowest bone point z 2)');
+  W.Masks.setOcc(38); near(sheet().position.z, 40, 1, 'the sheet follows the slider');
+  // leaving the step hides the sheet; coming back shows it again
+  $('st2').open = false; $('st2').dispatchEvent({ type: 'toggle' }); assert.ok(!sheet().visible);
+  $('st2').open = true; $('st2').dispatchEvent({ type: 'toggle' }); assert.ok(sheet().visible);
+  await W.Masks.jawRun(); await St.settled(); await new Promise(r => setTimeout(r, 0));
+  assert.ok(!$('jawBox').hidden, 'after the split the box stays with the result');
+  assert.match($('jawStat').textContent, /Üst çene ayrıldı/);
+  assert.ok(!sheet().visible, 'the sheet is gone after the split');
 });
 
 await run('jaw (upper jaw split)');

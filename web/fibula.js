@@ -28,6 +28,7 @@ window.Fibula = (function () {
   const rules = () => Object.assign({}, RULES, (S.fib && S.fib.plan && S.fib.plan.rules) || {});
   const FIB_R = [2.5, 12];                 // mm: slenderest / thickest radius a fibula can have (warning above)
   const FIB_LEN = [120, 500];              // mm: shortest / longest fibula (CT table rails are 800 mm and more)
+  const PAIR_R = 55;                       // mm: side by side, the mandible view shows at least this radius around its guide
   const FIB_RATIOS = [0.45, 0.5, 0.4, 0.55, 0.35, 0.6];   // neck / core thickness ratios tried by G.separator
   const GRAFT = [0xe2a33c, 0xc9822a], FGUIDE = St.COLORS.fguide, BONE = St.COLORS.bone;
   const r2d = THREE.MathUtils.radToDeg, deg = THREE.MathUtils.degToRad;
@@ -674,7 +675,15 @@ window.Fibula = (function () {
     if (box.isEmpty()) box.setFromPoints([toFib(F.c.smin), toFib(F.c.smax)]).expandByScalar(F.c.FR);
     const ctr = box.getCenter(V()), r = Math.max(60, box.getSize(V()).length() / 2);   // at least 120 mm across: the leg stays recognisable around a short guide
     const dir = F.c.FA[1].clone().add(F.c.FA[2].clone().multiplyScalar(0.4)).normalize();
-    ctl.target.copy(ctr); cam.position.copy(ctr).add(dir.multiplyScalar(r / Math.sin(deg(cam.fov) / 2) * 1.1)); ctl.update();
+    // the narrower of the two view angles: a tall narrow pane (side by side) otherwise cuts the leg off at the sides
+    const vf = deg(cam.fov), hf = 2 * Math.atan(Math.tan(vf / 2) * (cam.aspect || 1));
+    ctl.target.copy(ctr); cam.position.copy(ctr).add(dir.multiplyScalar(r / Math.sin(Math.min(vf, hf) / 2) * 1.1)); ctl.update();
+  }
+  // side by side: the leg around its guide, and the mandible around its guide with the bone nearby (the whole bone on a
+  // CT with skull parts left in it is small in a half-width pane)
+  function fitPair() {
+    fitLeg(St.camF, St.ctlF);
+    if (St.parts.guide && St.parts.guide.obj) St.fitTo(St.parts.guide.obj, PAIR_R); else if (St.parts.bone) St.fitTo(St.parts.bone.obj);
   }
   function setView(v) {
     view = v;
@@ -684,7 +693,7 @@ window.Fibula = (function () {
     $('scM').setAttribute('aria-pressed', v === 'm'); $('scF').setAttribute('aria-pressed', v === 'f'); $('scS').setAttribute('aria-pressed', v === 's');
     $('fibView').textContent = v === 'f' ? 'Mandibulayı göster' : 'Fibulayı göster';
     if (v === 'f' && F && F.c) fitLeg(St.camera, St.controls);
-    else if (v === 's' && F && F.c) { fitLeg(St.camF, St.ctlF); if (St.parts.bone) St.fitTo(St.parts.bone.obj); }
+    else if (v === 's' && F && F.c) fitPair();
     else if (v === 'm' && St.parts.bone) St.fitTo(St.parts.bone.obj);
     St.updateMarkers(); St.render();
   }
@@ -973,7 +982,7 @@ window.Fibula = (function () {
   function pairView() {
     if (!S.fib || !S.fib.guide || S.fib.paired || S.restoring || !S.guideOn || !St.parts.guide) return;
     S.fib.paired = true;
-    if (view !== 's') setView('s');
+    if (view !== 's') setView('s'); else { fitPair(); St.updateMarkers(); St.render(); }
   }
   async function buildFibGuide() {
     if (building) { scheduleGuide(); return; }

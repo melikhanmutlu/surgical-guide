@@ -258,6 +258,10 @@ button.link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2p
 .sub-d[open] > summary { margin-bottom: 8px; }
 .stepwarn:empty { display: none; }
 .stepwarn { display: grid; gap: 0; }
+/* the upper jaw box in the bone model step: an orange card, the colour of the occlusal plane it moves */
+.jawcard { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid #f0a040; border-left-width: 4px; border-radius: var(--r); background: var(--warn-bg); }
+.jawcard .sub { margin: 0; }
+.steps-list { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 13px; color: var(--text, inherit); }
 /* review */
 .review { list-style: none; margin: 0; padding: 0; display: grid; border: 1px solid var(--line); border-radius: var(--r); }
 .review li { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; padding: 6px 8px; }
@@ -627,6 +631,7 @@ button.ghost.danger { color: var(--crit); }
         <div class="body">
           <p class="hint more">Kemik modeli BT'den kendiliğinden çıkar ve mandibula ayrılır. Listede planlamaya giren yapılar işaretlidir. Bir sorun varsa Kontroller'deki satırın düğmesi ilgili aracı açar; elle ayarlar Gelişmiş'tedir.</p>
           <div id="ankRoi" class="col"></div>
+          <div id="jawBox" class="col" hidden></div>
           <div id="comps" class="col" style="gap:3px"></div>
           <details class="sec adv" id="adv_st2" data-adv><summary>Gelişmiş</summary><div class="col">
             <h3 class="sub">Kemik modeli</h3>
@@ -735,7 +740,7 @@ button.ghost.danger { color: var(--crit); }
             <div class="btns"><button class="primary" id="guideMake" disabled><svg class="i"><use href="#i-spark"/></svg>Guide oluştur</button><button id="guideDel" class="sm" title="Guide ve vidaları kaldırır; kesiler yerinde kalır" hidden><svg class="i"><use href="#i-trash"/></svg>Guide'ı sil</button></div>
             <p class="hint" id="guideStat"></p>
           </div>
-          <p class="hint" id="gNone">Guide henüz oluşturulmadı. Kesileri belirledikten sonra oluşturun. <button id="gMake2">Guide oluştur</button></p>
+          <p class="hint" id="gNone">Guide henüz oluşturulmadı. Kesileri belirledikten sonra oluşturun.</p>
           <div id="guideList" class="col"></div>
           <div class="ctl"><label for="g_split" class="lbl2">Düzen</label><select id="g_split" data-seg><option value="0" data-short="Tek parça">Tek parça (köprülü)</option><option value="1">İki parça</option><option value="2" data-short="İki eksen">İki parça, her kesi kendi ekseninde</option></select></div>
           <div class="stepwarn" data-for="guide"></div>

@@ -1,11 +1,11 @@
 // Senaryo S · sade panel (2026-10-25, flow.js + casetype.js grupları)
-// S1: çene akışında 5 numaralı adım; Guide'lar adımı Mandibula / Fibula / Vidalar sekmeli, sekme geçişi tek satır gösterir.
+// S1: çene akışında 6 numaralı adım (2026-10-29: Vaka ve BT ile Kemik modeli ayrı adımlar); Guide'lar adımı Mandibula / Fibula / Vidalar sekmeli, sekme geçişi tek satır gösterir.
 // S2: Gelişmiş bölümleri varsayılan kapalı; adımın ana alanında az kontrol var; Gelişmiş başlığında ayar sayısı yazmaz (Melikhan 2026-10-28: açıp görsün).
 // S3: Ayarlar'daki "Tüm ayarları açık göster" bütün Gelişmiş bölümlerini açar, kapatınca kapanır.
 // S4: Gelişmiş içindeki adlı bir bölüm açılınca (düzeltme düğmesi, bağlantı) Gelişmiş de açılır.
 // S5: Rezeksiyonda "Kesitte boya" / "Merkez nokta" seçimi; boyama seçilince kesit şeridi gelir.
 // S6: bu panel işlemlerinin hiçbiri planı değiştirmez: plan özeti (SHA-256) aynı kalır.
-// S7: malleol vaka tipinde de 5 numaralı adım.
+// S7: malleol vaka tipinde de 6 numaralı adım.
 'use strict';
 const H = require('./lib');
 
@@ -18,17 +18,17 @@ const H = require('./lib');
   const rows = () => h.ev(() => [...document.querySelectorAll('details.step[name="flow"]')].filter(d => !d.hidden && getComputedStyle(d).display !== 'none')
     .map(d => d.querySelector('summary .n').textContent + ' ' + [...d.querySelector('summary').childNodes].filter(n => n.nodeType === 3).map(n => n.data).join('').trim()));
 
-  await h.run('S1.1', 'Adımlar', 'Çene vakası, sol panel', '5 numaralı adım: Görüntüler, Rezeksiyon, Guide\'lar, Doğrulama ve onay, Çıktılar', async () => {
+  await h.run('S1.1', 'Adımlar', 'Çene vakası, sol panel', '6 numaralı adım: Vaka ve BT, Kemik modeli, Rezeksiyon, Guide\'lar, Doğrulama ve onay, Çıktılar (Melikhan 2026-10-29: Kemik modeli ayrı adım)', async () => {
     const r = await rows();
-    const want = ['1 Görüntüler', '2 Rezeksiyon', "3 Guide'lar", '4 Doğrulama ve onay', '5 Çıktılar'];
+    const want = ['1 Vaka ve BT', '2 Kemik modeli', '3 Rezeksiyon', "4 Guide'lar", '5 Doğrulama ve onay', '6 Çıktılar'];
     return { pass: JSON.stringify(r) === JSON.stringify(want), actual: JSON.stringify(r), evidence: await h.shot('S1_adimlar') };
   });
-  await h.run('S1.2', 'Sekmeler', "Guide'lar adımında Fibula sekmesi", 'Fibula bölümü açılır; listede yine tek "3 Guide\'lar" satırı; sekme basılı', async () => {
+  await h.run('S1.2', 'Sekmeler', "Guide'lar adımında Fibula sekmesi", 'Fibula bölümü açılır; listede yine tek "4 Guide\'lar" satırı; sekme basılı', async () => {
     await h.ev(() => UI.openStep('st5')); await h.sleep(300);
     const tabs = await h.ev(() => [...document.querySelectorAll('#st5 .part-tabs button')].map(b => b.textContent));
     await page.click('#st5 .part-tabs button[data-part="st4"]'); await h.sleep(400);
     const r = await rows(), st4 = await h.ev(() => document.getElementById('st4').open), pressed = await h.ev(() => document.querySelector('#st4 .part-tabs button[data-part="st4"]').getAttribute('aria-pressed'));
-    const ok = JSON.stringify(tabs) === JSON.stringify(['Mandibula', 'Fibula', 'Vidalar']) && st4 && pressed === 'true' && r.filter(x => x.startsWith('3 ')).length === 1;
+    const ok = JSON.stringify(tabs) === JSON.stringify(['Mandibula', 'Fibula', 'Vidalar']) && st4 && pressed === 'true' && r.filter(x => x.startsWith('4 ')).length === 1;
     return { pass: ok, actual: JSON.stringify({ tabs, st4, pressed, rows: r }), evidence: await h.shot('S1_fibula_sekmesi') };
   });
 
@@ -91,10 +91,10 @@ const H = require('./lib');
     return { pass: hash1 === hash0, actual: `${hash0} → ${hash1}` };
   });
 
-  await h.run('S7', 'Malleol', 'Vaka tipi Malleol kırığı', '5 numaralı adım: Görüntüler, Redüksiyon, Vidalar ve guide, Doğrulama ve onay, Çıktılar', async () => {
+  await h.run('S7', 'Malleol', 'Vaka tipi Malleol kırığı', '6 numaralı adım: Vaka ve BT, Anatomi ve parçalar, Redüksiyon, Vidalar ve guide, Doğrulama ve onay, Çıktılar', async () => {
     await h.ev(() => CaseType.set('ankle')); await h.sleep(500);
     const r = await rows();
-    const want = ['1 Görüntüler', '2 Redüksiyon', '3 Vidalar ve guide', '4 Doğrulama ve onay', '5 Çıktılar'];
+    const want = ['1 Vaka ve BT', '2 Anatomi ve parçalar', '3 Redüksiyon', '4 Vidalar ve guide', '5 Doğrulama ve onay', '6 Çıktılar'];
     const ev = await h.shot('S7_malleol');
     await h.ev(() => CaseType.set('mandible')); await h.sleep(300);
     return { pass: JSON.stringify(r) === JSON.stringify(want), actual: JSON.stringify(r), evidence: ev };

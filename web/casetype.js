@@ -3,7 +3,7 @@
    more entry in TYPES:
 
      maxilla: { label: 'Maksilla rekonstrüksiyonu', hint: '…',
-                groups: [{ title: 'Görüntüler', parts: [['st1', 'Vaka ve BT'], ['st2', 'Kemik modeli']] },
+                groups: [{ title: 'Vaka ve BT', parts: [['st1', 'Vaka ve BT']] }, { title: 'Kemik modeli', parts: [['st2', '']] },
                          { title: 'Rezeksiyon', parts: [['st3', 'Rezeksiyon']] }, …],   // numbered steps and their parts
                 hide: ['#fibUpload'] }                                                  // selectors hidden for this type
 
@@ -23,7 +23,8 @@ window.CaseType = (function () {
       label: 'Çene rekonstrüksiyonu',
       hint: 'Mandibula rezeksiyonu, fibula grefti ile rekonstrüksiyon, kesi ve fibula guide\'ları.',
       groups: [
-        { title: 'Görüntüler', parts: [['st1', 'Vaka ve BT'], ['st2', 'Kemik modeli']] },
+        { title: 'Vaka ve BT', parts: [['st1', 'Vaka ve BT']] },
+        { title: 'Kemik modeli', parts: [['st2', 'Kemik modeli']] },
         { title: 'Rezeksiyon', parts: [['st3', 'Rezeksiyon']] },
         { title: 'Guide\'lar', parts: [['st5', 'Mandibula'], ['st4', 'Fibula'], ['st6', 'Vidalar']] },
         { title: 'Doğrulama ve onay', parts: [['st7', 'Onay']] },
@@ -36,7 +37,8 @@ window.CaseType = (function () {
       label: 'Malleol kırığı',
       hint: 'Ayak bileği kırığı: parçaları ayırma, sanal redüksiyon, ölçümler, redükte model STL\'i, kesi guide\'ı ve kama.',
       groups: [
-        { title: 'Görüntüler', parts: [['st1', 'Vaka ve BT'], ['st2', 'Anatomi ve parçalar']] },
+        { title: 'Vaka ve BT', parts: [['st1', 'Vaka ve BT']] },
+        { title: 'Anatomi ve parçalar', parts: [['st2', 'Anatomi ve parçalar']] },
         { title: 'Redüksiyon', parts: [['stRed', 'Redüksiyon']] },
         { title: 'Vidalar ve guide', parts: [['stAnkS', 'Vidalar'], ['stAnkG', 'Kesi guide\'ı']] },
         { title: 'Doğrulama ve onay', parts: [['st7', 'Onay']] },
