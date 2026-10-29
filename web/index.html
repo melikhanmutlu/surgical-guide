@@ -300,6 +300,8 @@ button.link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2p
 .layers .lay i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: none; }
 .layers .lay .hu { font-size: 12px; white-space: nowrap; display: flex; align-items: center; gap: 3px; }
 .layers .lay .hu input { width: 58px; padding: 2px 4px; font-size: 12px; }
+/* image layers: the HU range on its own line under the name, so a long name ("Cilt (dış yüzey)") never runs under the inputs in the narrow panel */
+.layers:not(.mkl) .lay .hu { grid-column: 1 / -1; justify-self: start; }
 .layers .lay input[type=range] { grid-column: 1; width: 100%; }
 .layers .lay .x { grid-column: 2; justify-self: end; width: auto; min-width: 0; padding: 0 10px; }
 .layers .lay small { grid-column: 1 / -1; }
@@ -449,6 +451,8 @@ button.accent:hover:not(:disabled) { background: var(--accent-soft); border-colo
 .seg.full { display: flex; } .seg.full button { flex: 1; padding: 0 4px; }
 .seg button { white-space: nowrap; }
 .ctl > .seg { width: fit-content; }
+/* bone editing tools: four tools in two rows, so the left panel never grows wider than itself (2026-10-28 Parça sil) */
+#seTools { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; width: 100%; box-sizing: border-box; } #seTools button { padding: 0 6px; justify-content: center; }
 .seg button[aria-pressed="true"], .seg button[aria-selected="true"], .seg button.on { background: var(--panel); color: var(--accent); box-shadow: 0 0 0 1px var(--accent-line); }
 .el-list { gap: 6px; align-items: center; }
 .el { height: 26px; padding: 0 11px; border-radius: 999px; border: 1px solid var(--line-strong); background: var(--sunken); color: var(--fg); font-size: 12.5px; }

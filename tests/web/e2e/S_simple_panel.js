@@ -72,6 +72,20 @@ const H = require('./lib');
     return { pass: ok, actual: JSON.stringify({ boya: r, nokta: r2 }), evidence: await h.shot('S5_rezeksiyon') };
   });
 
+  // Melikhan 2026-10-29: with "Elle düzeltme" open the fourth tool ("Parça sil") made the left panel wider than itself
+  // (the section ran off to the right), and in "Görüntü katmanları" the layer names ran under the HU inputs
+  await h.run('S5b', 'Panel genişliği', 'Kemik modeli: bütün bölümler açık (Elle düzeltme, Görüntü katmanları)', 'Sol panel yatay taşmaz; katman adı ile HU kutuları üst üste binmez', async () => {
+    await h.ev(() => UI.openStep('st2')); await h.sleep(300);
+    await page.evaluate(() => document.querySelectorAll('#st2 details').forEach(d => { d.open = true; })); await h.sleep(600);
+    const r = await h.ev(() => { const p = document.getElementById('leftPanel'), pb = p.getBoundingClientRect(), out = [], bad = [];
+      document.querySelectorAll('#st2 *').forEach(e => { const b = e.getBoundingClientRect(); if (b.width && b.right > pb.right + 1) out.push(e.id || e.className || e.tagName); });
+      document.querySelectorAll('#layerBox .lay').forEach(li => { const l = li.querySelector('label'), hu = li.querySelector('.hu'); if (!l || !hu) return; const a = l.getBoundingClientRect(), b = hu.getBoundingClientRect();
+        if (!(a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top) || l.scrollWidth > l.clientWidth + 1) bad.push(l.textContent.trim()); });
+      return { sw: p.scrollWidth, cw: p.clientWidth, out: out.slice(0, 8), bad }; });
+    await page.evaluate(() => document.querySelectorAll('#st2 details').forEach(d => { d.open = false; }));
+    return { pass: r.sw <= r.cw && !r.out.length && !r.bad.length, actual: JSON.stringify(r), evidence: await h.shot('S5b_panel') };
+  });
+
   await h.run('S6', 'Plan özeti', 'Yukarıdaki panel işlemlerinden sonra', 'Plan özeti (SHA-256) değişmedi', async () => {
     const hash1 = await h.ev(() => Audit.planHash());
     return { pass: hash1 === hash0, actual: `${hash0} → ${hash1}` };
