@@ -207,7 +207,7 @@ window.Bones = (function () {
   // the bone on the midline above it the maxilla, and Masks splits the rest along the contact (G.splitSeeds).
   // Heights are up-down along the grid (an axial scan), the midline is the left-right middle of the lowest JAW.slab mm
   // (the chin and both lower borders). Example values, not validated thresholds.
-  const JAW = { band: 3, mid: 20, slab: 15, suspectMid: 6, suspectH: 58, suspectVol: 0.5, guess: 0.48, min: 25, max: 70 };
+  const JAW = { band: 3, mid: 20, slab: 15, skull: 6, suspectMid: 6, suspectH: 58, suspectVol: 0.5, guess: 0.48, min: 25, max: 70 };
   function jawFrame(red, mask) {
     const { nx, ny, nz, sp } = red, nxy = nx * ny, up = red.axes && red.axes[2] && red.axes[2][2] < 0 ? -1 : 1;
     let k0 = nz, k1 = -1;
@@ -223,7 +223,7 @@ window.Bones = (function () {
   // seeds for Masks: 1 = mandible (below occ - band), 2 = maxilla (above occ + band, within JAW.mid mm of the midline)
   function jawSeeds(red, mask, occ, opt = {}) {
     const f = jawFrame(red, mask); if (!f) return null;
-    const { nx, ny, sp } = red, nxy = nx * ny, band = opt.band ?? JAW.band, mid = opt.mid ?? JAW.mid, seeds = new Uint8Array(mask.length);
+    const { nx, ny, nz, sp } = red, nxy = nx * ny, band = opt.band ?? JAW.band, mid = opt.mid ?? JAW.mid, seeds = new Uint8Array(mask.length);
     let n1 = 0, n2 = 0;
     for (let k = f.k0; k <= f.k1; k++) {
       const hk = f.h(k), o = k * nxy, lo = hk < occ - band, hi = hk > occ + band; if (!lo && !hi) continue;
@@ -232,7 +232,19 @@ window.Bones = (function () {
         if (lo) { seeds[o + v] = 1; n1++; } else if (Math.abs(v % nx - f.cx) * sp[0] < mid) { seeds[o + v] = 2; n2++; }
       }
     }
-    return n1 && n2 ? { seeds, n1, n2, H: f.H } : null;
+    // a scan cropped through the skull base: the condyles sit in their fossae and the skull base joins them to the
+    // maxilla round the side, so the split above handed the skull base and zygomatic arch to the mandible (the real
+    // sample: one side). When the bone runs into the top of the scan and its top JAW.skull mm reach the midline (a
+    // skull base; a mandible alone has no midline bone at its top), that whole top slab marks the upper jaw too.
+    const top = f.up > 0 ? f.k1 >= nz - 1 : f.k0 <= 0;
+    let n3 = 0;
+    if (top) {
+      const skull = opt.skull ?? JAW.skull, inTop = k => f.h(k) >= f.H - skull;
+      let midTop = false;
+      for (let k = f.k0; k <= f.k1 && !midTop; k++) { if (!inTop(k)) continue; const o = k * nxy; for (let v = 0; v < nxy; v++) if (mask[o + v] && Math.abs(v % nx - f.cx) * sp[0] < JAW.suspectMid) { midTop = true; break; } }
+      if (midTop) for (let k = f.k0; k <= f.k1; k++) { if (!inTop(k)) continue; const o = k * nxy; for (let v = 0; v < nxy; v++) if (mask[o + v] && seeds[o + v] !== 2) { if (seeds[o + v] === 1) n1--; seeds[o + v] = 2; n2++; n3++; } }
+    }
+    return n1 && n2 ? { seeds, n1, n2, H: f.H, skull: n3 } : null;
   }
   // bone on the midline higher than a mandible's symphysis with its incisors: the maxilla is probably still attached
   function maxillaSuspect(red, mask) {

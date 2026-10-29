@@ -154,17 +154,19 @@
   const partKey = id => (window.Layers && Layers.keyOf ? Layers.keyOf(id) : id);
   // layers the user hid (Katmanlar): they stay hidden when the layer is built again, also after an undo or a version
   // restore removed and re-made it (Melikhan 2026-10-28: hidden layers came back on Ctrl+Z). A new case starts clear.
+  // Kept by the stable layer key (partKey): an image layer (skin) gets a new run-time id when an undo restores the
+  // layer list, so its id alone brought the skin back (Melikhan 2026-10-29).
   const userHidden = new Set();
   function setVisible(id, on) {
     const pt = parts[id]; if (!pt) return;
     pt.visible = !!on; pt.obj.visible = pt.visible;
-    if (on) userHidden.delete(id); else userHidden.add(id);
+    const key = partKey(id); if (on) userHidden.delete(key); else userHidden.add(key);
   }
   function setPart(id, label, obj, color) {
     if (parts[id]) { scene.remove(parts[id].obj); disposeObj(parts[id].obj); }
     if (!obj) { delete parts[id]; return; }
     const prev = parts[id];
-    parts[id] = { id, label, obj, color, visible: prev ? prev.visible : !userHidden.has(id), base: obj.position.clone() };
+    parts[id] = { id, label, obj, color, visible: prev ? prev.visible : !userHidden.has(partKey(id)), base: obj.position.clone() };
     obj.visible = parts[id].visible; scene.add(obj);
     if (prev && prev.opacity !== undefined && prev.opacity < 1) setOpacity(parts[id], prev.opacity);
   }
@@ -545,7 +547,7 @@
   // "Vaka: … · Boyut: …" from the case box; textContent works while step 1 is collapsed
   const caseLine = () => [...$('caseInfo').querySelectorAll('dt')].map(dt => `${dt.textContent}: ${dt.nextElementSibling ? dt.nextElementSibling.textContent : ''}`).join(' · ');
   function alertMsg(t) {
-    $('caseMsg').textContent = t; $('caseMsg').hidden = false;
+    $('caseMsg').textContent = t; $('caseMsg').hidden = false; S.segAlert = null;
     let el = $('toast'); if (!el) { el = document.createElement('div'); el.id = 'toast'; el.setAttribute('role', 'alert'); el.addEventListener('click', () => { el.hidden = true; }); document.body.appendChild(el); }
     el.textContent = t; el.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => { el.hidden = true; }, 8000);
   }
@@ -664,7 +666,7 @@
     renderComps();
     await rebuildBone(true);
     // a failed or doubtful cut is announced, not left for the Kontroller tab alone
-    if (S.segInfo && S.segInfo.status !== 'whole' && S.segWarn.length && !S.restoring) alertMsg(S.segWarn[0][2]);
+    if (S.segInfo && S.segInfo.status !== 'whole' && S.segWarn.length && !S.restoring) { alertMsg(S.segWarn[0][2]); S.segAlert = S.segWarn[0][2]; }
   }
   function renderComps() {
     if (window.Masks) { Masks.renderList(); return; }
@@ -702,6 +704,8 @@
     if (window.SegEdit) SegEdit.applyTo(m);
     S.mask = m; S.maskF = G.blur(m, r.nx, r.ny, r.nz);
     S.segWarn = segChecks(); syncQC();
+    // a bone warning announced in step 1 goes once the bone no longer has it (the upper jaw split off, another selection)
+    if (S.segAlert && !$('caseMsg').hidden && !S.segWarn.some(w => w[2] === S.segAlert)) { $('caseMsg').hidden = true; S.segAlert = null; }
     await rebuildResection();
     if (frame && parts.bone) fitTo(parts.bone.obj);
     pipeGuide = true;

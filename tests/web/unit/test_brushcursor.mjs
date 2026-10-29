@@ -59,4 +59,17 @@ test('ending the tool without a move gives the cursor back; leaving the view dro
   (c.listeners.pointerleave || []).forEach(f => f({})); calls.length = 0; MPR.redraw(); await sleep(30);
   assert.equal(rings().length, 0); SE.off();
 });
+test('lesion brush: the stroke shows in 3D while it is drawn and gives way to the lesion body on release (Melikhan 2026-10-29)', async () => {
+  // before: nothing in 3D until the brush was let go
+  const live = () => St.scene.children.filter(o => o.isGroup && o.children.some(m => m.isMesh && m.material && m.material.depthTest === false && m.renderOrder === 6)).reduce((a, g) => a + g.children.length, 0);
+  if (!LS.active()) LS.setTool('paint');
+  const c0 = G.worldOf(S.red, S.red.nx >> 1, S.red.ny >> 1, S.red.nz >> 1);
+  LS.paint(c0, null, true); LS.paint([c0[0] + 6, c0[1], c0[2]], null, false); LS.paint([c0[0] + 12, c0[1], c0[2]], 2, false);
+  assert.ok(live() >= 3, 'a mark per brush step while painting: ' + live());
+  LS.strokeEnd();
+  assert.equal(live(), 0, 'marks cleared on release');
+  assert.ok(St.parts.lesionPaint, 'the lesion body is built');
+  LS.setTool(LS.tool());
+});
+
 await run();

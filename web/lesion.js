@@ -49,12 +49,47 @@ window.Lesion = (function () {
     if (first) stroke = { n: 0 };
     if (!stroke) return;
     stroke.n += stamp(world, axis, tool === 'erase'); lastPaint = { p: world, axis };
+    marker(world, axis);
     if (window.MPR) MPR.redraw();
   }
   function strokeEnd() {
     const s = stroke; stroke = null; lastPaint = null;
     if (s && s.n) { dirty = true; changed(); } else if (window.MPR) MPR.redraw();
+    clearMarkers();
   }
+  // the stroke while it is drawn (Melikhan 2026-10-29: the paint showed in 3D only once the brush was let go): a light
+  // disc or ball per brush step, red for the brush and grey for the eraser; the lesion body replaces them on release
+  const mk = new THREE.Group(); mk.renderOrder = 6; St.scene.add(mk);
+  let mkLast = null, mkGeo = null, mkDisc = null;
+  function marker(world, axis) {
+    const p = V(...world); if (mkLast && mkLast.distanceTo(p) < radius * 0.5) return;
+    mkLast = p;
+    const mat = new THREE.MeshBasicMaterial({ color: tool === 'erase' ? 0x8c959c : COLOR, transparent: true, opacity: 0.4, depthTest: false, depthWrite: false });
+    let m;
+    if (axis == null) { mkGeo = mkGeo || new THREE.SphereGeometry(1, 14, 10); m = new THREE.Mesh(mkGeo, mat); }
+    else {
+      // a slice stroke paints a disc in the slice plane (the working grid axis is the voxel axis of S.red)
+      mkDisc = mkDisc || new THREE.CircleGeometry(1, 32); m = new THREE.Mesh(mkDisc, mat); mat.side = THREE.DoubleSide;
+      const ax = S.red.axes && S.red.axes[axis] ? V(...S.red.axes[axis]).normalize() : V(axis === 0 ? 1 : 0, axis === 1 ? 1 : 0, axis === 2 ? 1 : 0);
+      m.quaternion.setFromUnitVectors(V(0, 0, 1), ax);
+    }
+    m.position.copy(p); m.scale.setScalar(radius); m.renderOrder = 6; mk.add(m); St.render();
+  }
+  function clearMarkers() { mkLast = null; if (!mk.children.length) return; mk.children.slice().forEach(c => { mk.remove(c); c.material.dispose(); }); St.render(); }
+  // the brush outline at the pointer in 3D: a circle of the brush radius lying on the surface under it
+  let ringObj = null;
+  function ring(h) {
+    if (!ringObj) {
+      const pts = []; for (let i = 0; i <= 64; i++) { const a = i / 64 * Math.PI * 2; pts.push(new THREE.Vector3(Math.cos(a), Math.sin(a), 0)); }
+      ringObj = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: COLOR, depthTest: false, transparent: true }));
+      ringObj.renderOrder = 999; ringObj.userData.brushRing = true; St.scene.add(ringObj);
+    }
+    ringObj.material.color.set(tool === 'erase' ? 0x5b6670 : COLOR);
+    ringObj.position.copy(h.point).addScaledVector(h.nrm, 0.2);
+    ringObj.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), h.nrm);
+    ringObj.scale.setScalar(radius); ringObj.visible = true; St.render();
+  }
+  function ringOff() { if (ringObj && ringObj.visible) { ringObj.visible = false; St.render(); } }
   // C2: painting is one step. When the brush is put down (Esc, the tool button, another mode) after new paint, the
   // cuts are planned from the lesion, the resected piece is taken off and the guide is built, as "Hazırla" does.
   // Not when something is approved (the surgeon re-plans that by hand) or while a plan is being built.
@@ -92,17 +127,24 @@ window.Lesion = (function () {
     mouse.set(((e.clientX - rect.left) / rw) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
     St.ray.setFromCamera(mouse, St.camera);
     const t = ['bone', 'resected'].filter(k => St.parts[k] && St.parts[k].visible).map(k => St.parts[k].obj).concat(window.Layers ? Layers.targets() : []);
-    const h = St.ray.intersectObjects(t, false)[0];
-    return h ? h.point.clone() : null;
+    const h = St.ray.intersectObjects(t, false)[0]; if (!h) return null;
+    const nrm = h.face ? h.face.normal.clone().transformDirection(h.object.matrixWorld) : St.ray.ray.direction.clone().negate();
+    if (nrm.dot(St.ray.ray.direction) > 0) nrm.negate();
+    return { point: h.point.clone(), nrm };
   }
   let down3 = false;
   cv.addEventListener('pointerdown', e => {
     if (!tool || e.altKey || e.button !== 0) return;
-    const p = hit3D(e); if (!p) return;
-    down3 = true; cv.setPointerCapture(e.pointerId); paint(p.toArray(), null, true);
+    const h = hit3D(e); if (!h) return;
+    down3 = true; cv.setPointerCapture(e.pointerId); ring(h); paint(h.point.toArray(), null, true);
   });
-  cv.addEventListener('pointermove', e => { if (!down3) return; const p = hit3D(e); if (p) paint(p.toArray(), null, false); });
+  cv.addEventListener('pointermove', e => {
+    if (!tool) return;
+    const h = hit3D(e); if (h) ring(h); else ringOff();
+    if (down3 && h) paint(h.point.toArray(), null, false);
+  });
   cv.addEventListener('pointerup', () => { if (!down3) return; down3 = false; strokeEnd(); });
+  cv.addEventListener('pointerleave', () => { if (!down3) ringOff(); });
   document.addEventListener('keydown', e => { if (e.key === 'Alt' && tool) St.controls.enableRotate = true; });
   document.addEventListener('keyup', e => { if (e.key === 'Alt' && tool) St.controls.enableRotate = false; });
 
@@ -137,7 +179,7 @@ window.Lesion = (function () {
       if (window.innerWidth < 1280 && window.Layout) Layout.setRight(false);
     }
     St.controls.enableRotate = !tool; if (window.MPR) MPR.redraw();
-    if (!tool) setTimeout(autoAfterPaint, 0);
+    if (!tool) { ringOff(); clearMarkers(); setTimeout(autoAfterPaint, 0); }
     document.querySelectorAll('#lsTools [data-t]').forEach(b => b.setAttribute('aria-pressed', b.dataset.t === tool));
     const b = $('modeBadge');
     if (tool) { b.hidden = false; b.textContent = shown = `Lezyon ${tool === 'erase' ? 'silgisi' : 'fırçası'}: kesitlerde ya da 3B görünümde sürükleyin · döndürmek için Alt · Esc ile bitir`; }

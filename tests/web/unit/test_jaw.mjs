@@ -16,21 +16,25 @@ const St = await ready(P); const S = St.S, G = P.eval('G'), W = P.g, B = P.eval(
 const BASE = 100000;
 
 const MAXILLA = (x, y, z) => Math.abs(x) < 34 && Math.abs(y) < 10 && z >= 40 && z < 75;
-function phantom(withMaxilla) {
+function phantom(withMaxilla, withSkull) {
   const sp = [0.8, 0.8, 0.8], o = [-60, -16, -2], nx = 150, ny = 40, nz = 125, hu = new Int16Array(nx * ny * nz).fill(-1000);
   for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
     const x = o[0] + i * sp[0], y = o[1] + j * sp[1], z = o[2] + k * sp[2], ax = Math.abs(x);
     const body = ax < 52 && Math.abs(y) < 6 && z >= 2 && z < 26;
     const tooth = ax < 42 && Math.abs(((x + 44) % 8) - 4) < 2 && Math.abs(y) < 2.5 && z >= 26 && z < 40;
-    const ramus = ax > 46 && ax < 52 && Math.abs(y) < 6 && z >= 2 && z < 92;
+    const ramus = ax > 46 && ax < 52 && Math.abs(y) < 6 && z >= 2 && z < (withSkull ? 84 : 92);
     // the tooth tips meet the maxilla through a partial-volume layer (lower density), as closed teeth do on a CT
-    if (body || tooth || ramus || (withMaxilla && MAXILLA(x, y, z))) hu[i + nx * (j + ny * k)] = tooth && z >= 38.4 ? 450 : 1200;
+    // a scan cropped through the skull base: lateral blocks over the rami up to the scan top, reached from the rami
+    // through a thin joint layer (partial volume, as a condyle in its fossa) and from the midline only through a thin
+    // low-density bridge (the real sample: one side's skull base and zygomatic arch)
+    const skull = withSkull && z >= 84 && (ax < 20 || ax > 40), joint = withSkull && ramus && z >= 82, bridge = withSkull && ax >= 20 && ax <= 40 && z >= 86 && z < 88;
+    if (body || tooth || ramus || skull || bridge || (withMaxilla && MAXILLA(x, y, z))) hu[i + nx * (j + ny * k)] = (tooth && z >= 38.4) || joint || bridge ? 450 : 1200;
   }
   return { hu, nx, ny, nz, sp, origin: o, axes: [[1, 0, 0], [0, 1, 0], [0, 0, 1]], meta: {} };
 }
-async function load(withMaxilla) {
+async function load(withMaxilla, withSkull = false) {
   await W.PlanExt.masks.set(null);
-  S.vol = phantom(withMaxilla); S.source = { type: 'dicom', name: 'synthetic', fp: 'synthetic-jaw-' + withMaxilla };
+  S.vol = phantom(withMaxilla, withSkull); S.source = { type: 'dicom', name: 'synthetic', fp: 'synthetic-jaw-' + withMaxilla + withSkull };
   S.red = G.reduce(S.vol, 0.8); S.kind = 'dicom'; S.autoAnchor = false; S.anchor = null; S.planes = []; S.screws = [];
   await St.segment(true); await St.settled();
 }
@@ -78,6 +82,17 @@ test('no maxilla above the plane: nothing is split and the panel says why', asyn
   W.Masks.setOcc(38); await W.Masks.jawRun();
   assert.ok(!S.comps.some(c => c.label >= BASE), 'no layers');
   assert.match($('mkStat').textContent, /orta hatta kemik yok/);
+});
+
+test('a scan cut through the skull base: the skull base goes with the upper jaw, the rami stay mandible', async () => {
+  // before: the maxilla seeds were only on the midline below the skull, so the skull plate (and on the real sample CT
+  // one zygomatic arch) reached the mandible through the rami first and stayed in the planning bone
+  await load(true, true);
+  W.Masks.setOcc(38); await W.Masks.jawRun(); await St.settled();
+  const top = count((x, y, z) => z > 84.5);
+  assert.equal(top, 0, 'no skull base left in the planning bone');
+  assert.ok(count((x, y, z) => Math.abs(x) > 46 && z > 70 && z < 81) > 50, 'the rami up to the joint stay mandible');
+  assert.ok(!(S.segWarn || []).some(w => /kenarına dayanıyor/.test(w[2])), 'the edge warning is gone: ' + JSON.stringify(S.segWarn));
 });
 
 await run('jaw (upper jaw split)');

@@ -310,6 +310,8 @@ window.Masks = (function () {
     if ($('segMode').value !== 'thr') { $('segMode').value = 'thr'; $('aiBox').hidden = true; $('thrBox').hidden = false; }
     await St.segment(false);
     const mx = S.comps.find(c => c.label === BASE + 2), vox = S.red.sp[0] * S.red.sp[1] * S.red.sp[2] / 1000;
+    // the condyles and the midline were found on the bone with the skull base: find them again on the mandible
+    if (mx && window.Ref && Ref.compute) await Ref.compute(true);
     occ = null; msg = mx ? `${xl('Üst çene ayrıldı:')} ${fmt(mx.size * vox, 1)} cm³. ${xl('Kesitlerde kontrol edin; gerekirse fırçayla düzeltip "Ayır"a basın.')}` : msg;
     status(); renderList(); St.emit('changed'); if (window.MPR) MPR.redraw();
   }

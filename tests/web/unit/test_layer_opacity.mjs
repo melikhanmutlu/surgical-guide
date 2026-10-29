@@ -90,5 +90,22 @@ test('defaced real CT sample: marked, and the skin layer says why it only shells
   S.vol.meta = {};
 });
 
+test('a skin layer hidden in Katmanlar stays hidden after an undo rebuilds the layer list (Melikhan 2026-10-29)', async () => {
+  // the undo restores PlanExt.layers: the skin is built again under a new run-time id (layer_<n>), and the hidden list
+  // was kept by that id, so the skin came back
+  head();
+  const L = W.Layers.list().find(x => x.kind === 'skin'); const id = 'layer_' + L.id;
+  if (!St.parts[id]) await W.Layers.add('skin');
+  const sid = 'layer_' + W.Layers.list().find(x => x.kind === 'skin').id;
+  St.setVisible(sid, false);
+  await W.PlanExt.layers.set(JSON.parse(JSON.stringify(W.PlanExt.layers.get())));
+  const now = 'layer_' + W.Layers.list().find(x => x.kind === 'skin').id;
+  assert.notEqual(now, sid, 'rebuilt under a new id');
+  assert.ok(St.parts[now], 'rebuilt');
+  assert.equal(St.parts[now].visible, false, 'still hidden');
+  assert.equal(St.parts[now].obj.visible, false);
+  St.setVisible(now, true);
+});
+
 await run('layer opacity');
 await new Promise(r => process.stdout.write('', r)); process.exit(process.exitCode || 0);
