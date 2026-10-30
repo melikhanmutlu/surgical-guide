@@ -103,7 +103,7 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
   // undo / redo (Ctrl+Z, Ctrl+Y, the arrows, a history row) is not such a gesture: the rebuilds that follow a restore
   // are derived updates of the restored entry, and counting the key press would let them truncate the redo list.
   const isHistGesture = e => (e.type === 'keydown' && (e.ctrlKey || e.metaKey) && /^[zy]$/i.test(e.key))
-    || (e.type === 'pointerdown' && e.target && e.target.closest && e.target.closest('#undo, #redo, #histList'));
+    || (e.type === 'pointerdown' && e.target && e.target.closest && e.target.closest('#undoAll, #undo, #redo, #histList'));
   // gest counts presses (pointer or key): the snapshots of one press (a drag, a slider pulled) make one undo step
   let gest = 0;
   ['pointerdown', 'keydown', 'input', 'change'].forEach(t => document.addEventListener(t, e => { if (e.isTrusted && !isHistGesture(e)) { userAt = performance.now(); if (t === 'pointerdown' || t === 'keydown') gest++; } }, true));
@@ -113,7 +113,7 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
     if (caseId) $('caseName').value = caseName;
     $('stBackend').textContent = backend ? backend.label : '–';
   }
-  function updUndo() { $('undo').disabled = H.idx <= 0; $('redo').disabled = H.idx >= H.list.length - 1; renderHist(); }
+  function updUndo() { $('undoAll').disabled = $('undo').disabled = H.idx <= 0; $('redo').disabled = H.idx >= H.list.length - 1; renderHist(); }
   const remember = () => { try { localStorage.setItem('yolmed.lastCase', JSON.stringify({ backend: backend.label, id: caseId })); } catch (e) {} };
 
   // ---------- history (undo / redo, one labelled entry per edit) ----------
@@ -229,6 +229,12 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
     markCurrent();
   });
   St.bus.addEventListener('exported', () => { if (backend) saveVersion('Üretim paketi alındı'); });
+  // "Başa dön": every change since the case was opened is undone at once, after a warning; Yinele brings them back
+  $('undoAll').addEventListener('click', () => {
+    if (H.idx <= 0) return;
+    if (!confirm(xl(`Tüm değişiklikler (${H.idx} adım) geri alınacak ve vaka açılış anına dönecek. Yinele (Ctrl+Shift+Z) ile geri getirebilirsiniz. Devam edilsin mi?`))) return;
+    return goTo(0);
+  });
   $('undo').addEventListener('click', () => step(-1));
   $('redo').addEventListener('click', () => step(1));
   document.addEventListener('keydown', e => {

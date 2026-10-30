@@ -77,6 +77,23 @@ const diff = (a, b) => Object.keys(Object.assign({}, a, b)).filter(k => JSON.str
     const du = diff(s0, u), dr = diff(s3, r);
     return { pass: !du.filter(x => !/^crit|^pieces/.test(x)).length && !dr.filter(x => !/^crit|^pieces/.test(x)).length, actual: `geçmiş: ${labels.join(' / ')}; 3×geri fark: ${du.join('; ') || 'yok'}; 3×ileri fark: ${dr.join('; ') || 'yok'}` };
   });
+  await h.run('A2.4b', 'Başa dön', 'Üst çubukta "Başa dön" (geri alın solunda): önce uyarıda Vazgeç, sonra Tamam; ardından Yinele ile sona', 'Vazgeç planı değiştirmez; Tamam açılış anına döner (geçmişin ilk girdisi); Yinele değişiklikleri geri getirir (Melikhan 2026-10-30)', async () => {
+    const end = await h.ev(core), n0 = await h.ev(() => CaseStore.history.idx);
+    const order = await h.ev(() => { const a = document.getElementById('undoAll'), b = document.getElementById('undo'); return !!(a && b && a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING); });
+    let msg = '';
+    page.removeAllListeners('dialog');
+    page.once('dialog', async d => { msg = d.message(); await d.dismiss(); });
+    await page.click('#undoAll'); await h.sleep(800); await h.idle();
+    const kept = diff(end, await h.ev(core)).filter(x => !/^crit|^pieces/.test(x)), idx1 = await h.ev(() => CaseStore.history.idx);
+    page.once('dialog', d => d.accept());
+    await page.click('#undoAll'); await h.sleep(1500); await h.idle(); await h.sleep(800); await h.idle();
+    const idx2 = await h.ev(() => CaseStore.history.idx), first = await h.ev(() => JSON.stringify(Studio.planOf().planes) === JSON.stringify(CaseStore.history.list[0].plan.planes));
+    const ev = await h.shot('A2.4b_basa_don');
+    for (let i = 0; i < n0; i++) { await page.click('#redo'); await h.sleep(700); await h.idle(); }
+    const back = diff(end, await h.ev(core)).filter(x => !/^crit|^pieces/.test(x));
+    page.on('dialog', async d => { try { await d.accept(); } catch (_) {} });
+    return { pass: order && /açılış anına/.test(msg) && !kept.length && idx1 === n0 && idx2 === 0 && first && !back.length, actual: JSON.stringify({ order, msg: msg.slice(0, 60), kept, idx1, n0, idx2, first, back }), evidence: ev };
+  });
   await h.run('A2.5', 'Geçmiş paneli', 'Geçmiş sekmesinde ilk girdiye tıkla, sonra son girdiye', 'Plan ilgili duruma döner', async () => {
     await page.click('#tab-pVer'); await h.sleep(300);
     const items = page.locator('#histList li button, #histList li');

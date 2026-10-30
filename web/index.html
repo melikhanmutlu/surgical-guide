@@ -523,6 +523,7 @@ button.ghost.danger { color: var(--crit); }
   <symbol id="i-right" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M10 2.5v11"/></symbol>
   <symbol id="i-focus" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 5.5V2h3.5M10.5 2H14v3.5M14 10.5V14h-3.5M5.5 14H2v-3.5"/></symbol>
   <symbol id="i-full" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 2H2v4M10 2h4v4M14 10v4h-4M2 10v4h4M2 2l4 4M14 2l-4 4M14 14l-4-4M2 14l4-4"/></symbol>
+  <symbol id="i-first" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 3v10"/><path d="M12.5 3.5 8 8l4.5 4.5"/><path d="M8.5 8H5.5"/></symbol>
   <symbol id="i-undo" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5.5 3 2.5 6l3 3"/><path d="M2.5 6h7a4 4 0 0 1 0 8H7"/></symbol>
   <symbol id="i-theme" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="5.5"/><path d="M8 2.5v11A5.5 5.5 0 0 0 8 2.5Z" fill="currentColor"/></symbol>
   <symbol id="i-chev" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4.5 2.5 8 6l-3.5 3.5"/></symbol>
@@ -561,6 +562,7 @@ button.ghost.danger { color: var(--crit); }
       </div>
     </details>
     <span class="hint" id="saveState" style="white-space:nowrap"></span>
+    <button class="ibtn" id="undoAll" title="Başa dön: açılış anına dön" aria-label="Başa dön" disabled><svg><use href="#i-first"/></svg></button>
     <button class="ibtn" id="undo" title="Geri al (Ctrl+Z)" aria-label="Geri al" disabled><svg><use href="#i-undo"/></svg></button>
     <button class="ibtn" id="redo" title="Yinele (Ctrl+Shift+Z)" aria-label="Yinele" disabled><svg style="transform:scaleX(-1)"><use href="#i-undo"/></svg></button>
     <span class="pill" id="readyPill" title="Plan durumu" role="status">Plan eksik</span>
