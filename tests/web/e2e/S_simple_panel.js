@@ -6,6 +6,7 @@
 // S5: Rezeksiyonda "Kesitte boya" / "Merkez nokta" seçimi; boyama seçilince kesit şeridi gelir.
 // S6: bu panel işlemlerinin hiçbiri planı değiştirmez: plan özeti (SHA-256) aynı kalır.
 // S7: malleol vaka tipinde de 6 numaralı adım.
+// S8: tipi BT'siyle çelişen eski kayıtlı vaka açılınca tip örneğin tipine uyar (Melikhan 2026-10-30: çene seçili, malleol açık).
 'use strict';
 const H = require('./lib');
 
@@ -98,6 +99,14 @@ const H = require('./lib');
     const ev = await h.shot('S7_malleol');
     await h.ev(() => CaseType.set('mandible')); await h.sleep(300);
     return { pass: JSON.stringify(r) === JSON.stringify(want), actual: JSON.stringify(r), evidence: ev };
+  });
+  await h.run('S8', 'Vaka tipi', 'Eski kayıtlı vaka: tip "mandible" ama BT ayak bileği örneği (2026-10-28 öncesi tip değişimi BT\'yi değiştirmiyordu)', 'Vaka açılınca tip örneğe uyar: Malleol kırığı seçili', async () => {
+    const plan = await h.ev(() => { const p = Studio.planOf(); p.source = { type: 'sample', name: 'ankle_ct', fp: 'sample:ankle_ct' }; (p.ext = p.ext || {}).caseType = 'mandible'; return JSON.stringify(p); });
+    await h.ev(p => Studio.openPlan(JSON.parse(p)), plan); await h.idle(); await h.sleep(2000); await h.idle();
+    const r = await h.ev(() => ({ type: CaseType.get(), sel: document.getElementById('caseType').value, src: Studio.S.source.name }));
+    const ev = await h.shot('S8_eski_vaka');
+    await h.ev(() => CaseType.set('mandible')); await h.idle(); await h.sleep(3000); await h.idle();
+    return { pass: r.type === 'ankle' && r.sel === 'ankle' && r.src === 'ankle_ct', actual: JSON.stringify(r), evidence: ev };
   });
   await h.done();
 })().catch(e => { console.error(e); process.exit(1); });

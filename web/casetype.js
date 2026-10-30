@@ -117,7 +117,12 @@ window.CaseType = (function () {
   (window.PlanExt = window.PlanExt || {}).caseType = {
     label: 'Vaka tipi', pre: true,
     get: () => cur,
-    set(x) { set(TYPES[x] ? x : DEF, true); },
+    // a plan on a built-in sample takes the sample's type: cases saved before 2026-10-28 could hold the jaw type over the
+    // ankle sample (the switch then kept the CT), and reopened the ankle CT with "Çene rekonstrüksiyonu" selected
+    set(x) {
+      const src = St && St.S && St.S.source, own = src && src.type === 'sample' && src.name ? (/^ankle/.test(src.name) ? 'ankle' : 'mandible') : null;
+      set(own && TYPES[own] ? own : TYPES[x] ? x : DEF, true);
+    },
   };
 
   return { get: () => cur, set, add, types: () => Object.keys(TYPES), steps: () => stepsOf(TYPES[cur]).filter(id => $(id)), groups: () => groupsOf(TYPES[cur]).map(g => ({ title: g.title, parts: g.parts.filter(p => $(p[0])) })).filter(g => g.parts.length), def: id => TYPES[id] };
