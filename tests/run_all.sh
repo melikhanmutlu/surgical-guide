@@ -38,6 +38,7 @@ if [ "$MODE" = fast ] || [ "$MODE" = all ]; then
   suite server/memory       python3 tests/server/test_memory.py
   suite server/guide_progress python3 tests/server/test_guide_progress.py
   suite server/slot_boss    python3 tests/server/test_slot_boss.py
+  suite server/pads_clip    python3 tests/server/test_pads_clip.py
   suite yolmed_server       python3 test_yolmed_server.py
   suite unit/surgiguide     python3 -I tests/web/unit/test_surgiguide.py
   suite ct_samples          python3 -I tests/test_ct_samples.py

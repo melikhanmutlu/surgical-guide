@@ -96,5 +96,77 @@ window.Seat = (() => {
     }
     return { ok: true, area, dirs, free: free.length, best, blockPts, slides, rots, worstSlide, worstRot, axisU, ms: performance.now() - t0 };
   }
-  return { analyze, FREE_MM2 };
+  // ---------- the fit test (plan 2026-10-30): does the guide sit in one position only? ----------
+  // The guide is moved on the computer by a small step, every way but the one it is put on along (d, held by the hand
+  // and later by the screws' heads): slid T mm in the plane across d (8 directions) and turned A degrees about the bone
+  // axis u, the lateral axis v and d itself, each about a few pivots (the contact centroid and points 5, 10, 15 mm
+  // inside the bone below it, so a shell on a round shaft turning about the shaft's own axis is caught). A motion is
+  // blocked when part of the guide's inner surface would go into bone. The guide is taken as pressed onto the bone: the
+  // clearance is the allowance for periosteum and print, not play, so the inner surface stands for the bone surface.
+  // The inner surface near a voxel p lies e = dist(p) - clear deeper in the guide; after the motion it is
+  // dist(p') - e from the bone, and its approach is (clear + e) - dist(p') = dist(p) - dist(p'). An approach of more
+  // than PEN mm over at least BLOCK_MM2 of surface blocks the motion. dist is the sub-voxel signed distance to the
+  // bone surface (mm, outside > 0) that the guide itself is built on, read trilinearly, so the test is finer than a voxel.
+  // A motion that nothing blocks is a free direction: the guide can sit off its planned place by that much. With the
+  // screws in, a motion is also blocked when it moves a screw across its own axis by more than SCREW_PLAY mm.
+  const FIT = { T: 0.5, A: 2, PEN: 0.05, BLOCK_MM2: 1, SCREW_PLAY: 0.1, PIVOTS: [0, 5, 10, 15] };
+  function freeMoves({ Gm, dist, nx, ny, nz, h, lo, clear, d, screws }, opt = {}) {
+    const o = Object.assign({}, FIT, opt), nxy = nx * ny, N = nx * ny * nz;
+    d = norm(d || [0, 0, 1]);
+    const at = (x, y, z) => {   // trilinear dist at a local position (mm); far outside the grid counts as clear of bone
+      const fx = (x - lo[0]) / h, fy = (y - lo[1]) / h, fz = (z - lo[2]) / h;
+      if (fx < 0 || fy < 0 || fz < 0 || fx > nx - 1 || fy > ny - 1 || fz > nz - 1) return 1e3;
+      const i = Math.min(nx - 2, Math.floor(fx)), j = Math.min(ny - 2, Math.floor(fy)), k = Math.min(nz - 2, Math.floor(fz)), a = fx - i, b = fy - j, c = fz - k, q = i + nx * (j + ny * k);
+      const c00 = dist[q] * (1 - a) + dist[q + 1] * a, c10 = dist[q + nx] * (1 - a) + dist[q + nx + 1] * a;
+      const c01 = dist[q + nxy] * (1 - a) + dist[q + nxy + 1] * a, c11 = dist[q + nxy + nx] * (1 - a) + dist[q + nxy + nx + 1] * a;
+      return (c00 * (1 - b) + c10 * b) * (1 - c) + (c01 * (1 - b) + c11 * b) * c;
+    };
+    // the guide's inner surface: guide voxels within a voxel and a half of the clearance
+    const P = [], E = [];
+    for (let id = 0; id < N; id++) {
+      if (!Gm[id] || dist[id] > clear + 1.5 * h) continue;
+      const i = id % nx, j = ((id / nx) | 0) % ny, k = (id / nxy) | 0;
+      P.push([lo[0] + i * h, lo[1] + j * h, lo[2] + k * h]); E.push(Math.max(0, dist[id] - clear));
+    }
+    if (!P.length) return { ok: false, n: 0 };
+    const c0 = P.reduce((s, q) => [s[0] + q[0], s[1] + q[1], s[2] + q[2]], [0, 0, 0]).map(x => x / P.length);
+    const need = Math.max(1, Math.ceil(o.BLOCK_MM2 / (h * h)));
+    // a motion as a map of points: x -> R (x - pivot) + pivot + t
+    const rotM = (w, deg) => { const t = deg * Math.PI / 180, cs = Math.cos(t), sn = Math.sin(t), [x, y, z] = w, C = 1 - cs; return [[cs + x * x * C, x * y * C - z * sn, x * z * C + y * sn], [y * x * C + z * sn, cs + y * y * C, y * z * C - x * sn], [z * x * C - y * sn, z * y * C + x * sn, cs + z * z * C]]; };
+    const apply = (m, q) => { if (m.t) return [q[0] + m.t[0], q[1] + m.t[1], q[2] + m.t[2]]; const r = [q[0] - m.c[0], q[1] - m.c[1], q[2] - m.c[2]], R = m.R; return [R[0][0] * r[0] + R[0][1] * r[1] + R[0][2] * r[2] + m.c[0], R[1][0] * r[0] + R[1][1] * r[1] + R[1][2] * r[2] + m.c[1], R[2][0] * r[0] + R[2][1] * r[1] + R[2][2] * r[2] + m.c[2]]; };
+    function pen(m) {
+      let n = 0, worst = 0;
+      for (let q = 0; q < P.length; q++) { const p2 = apply(m, P[q]), x = E[q] + clear - at(p2[0], p2[1], p2[2]); if (x > o.PEN) n++; if (x > worst) worst = x; }
+      return { blocked: n >= need, area: n * h * h, worst };
+    }
+    // with the screws in: a screw moved across its axis (at its entry and 10 mm down the drill) holds the guide
+    const scr = (screws || []).filter(Boolean).map(s => ({ e: s.el, a: norm(s.ol) }));
+    const heldByScrews = m => scr.some(s => [0, -10].some(t => { const p = [s.e[0] + s.a[0] * t, s.e[1] + s.a[1] * t, s.e[2] + s.a[2] * t], p2 = apply(m, p), dv = [p2[0] - p[0], p2[1] - p[1], p2[2] - p[2]], al = dot(dv, s.a); return Math.hypot(dv[0] - al * s.a[0], dv[1] - al * s.a[1], dv[2] - al * s.a[2]) > o.SCREW_PLAY; }));
+    const [ea, eb] = basis(d), moves = [];
+    for (let az = 0; az < 360; az += 45) {
+      const ar = az * Math.PI / 180, dir = [0, 1, 2].map(k => Math.cos(ar) * ea[k] + Math.sin(ar) * eb[k]);
+      moves.push({ kind: 'slide', az, dir, axis: Math.abs(dir[0]) >= Math.abs(dir[1]) ? 'u' : 'v', t: dir.map(x => x * o.T) });
+    }
+    for (const [axis, w] of [['u', [1, 0, 0]], ['v', [0, 1, 0]], ['d', d]]) for (const sg of [1, -1]) {
+      const ww = w.map(x => x * sg), piv = axis === 'd' ? [0] : o.PIVOTS;
+      // one rotation entry per axis and sense: free when the guide turns freely about any of the pivots
+      const sub = piv.map(dep => ({ c: [c0[0] - d[0] * dep, c0[1] - d[1] * dep, c0[2] - d[2] * dep], R: rotM(norm(ww), o.A), dep }));
+      moves.push({ kind: 'rot', axis, sign: sg, sub });
+    }
+    for (const m of moves) {
+      if (m.kind === 'slide') { const r = pen(m); m.blocked = r.blocked; m.area = r.area; m.worst = r.worst; m.screwHeld = heldByScrews(m); }
+      else {
+        const rs = m.sub.map(sm => Object.assign(pen(sm), { dep: sm.dep, held: heldByScrews(sm) }));
+        const free = rs.filter(r => !r.blocked);
+        m.blocked = !free.length; m.area = Math.min(...rs.map(r => r.area)); m.worst = Math.min(...rs.map(r => r.worst));
+        m.pivot = free.length ? free[0].dep : null;
+        m.screwHeld = free.length ? free.every(r => r.held) : true;
+        delete m.sub;
+      }
+      m.free = !m.blocked; m.freeScrewed = !m.blocked && !m.screwHeld;
+    }
+    const free = moves.filter(m => m.free), freeScrewed = moves.filter(m => m.freeScrewed);
+    return { ok: true, n: P.length, T: o.T, A: o.A, moves, free: free.length, freeScrewed: freeScrewed.length, total: moves.length, screws: scr.length };
+  }
+  return { analyze, freeMoves, FIT, FREE_MM2 };
 })();

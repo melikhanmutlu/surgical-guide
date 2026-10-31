@@ -122,6 +122,22 @@ var GKernel = (function () {
     T.env = performance.now() - t0; tick(0.57);
     // the saw slots and the two-guide gap as planes in guide-frame coordinates (signed distance = a*uu + b*vv + c*nn - e)
     const slots = K.slots, gp = K.gp;
+    // a slot may be bounded (marginal resection): it exists only where every clip half-space holds
+    const inSl = (s, uu, vv, nn) => !s.clip || s.clip.every(q => q.a * uu + q.b * vv + q.c * nn - q.e >= 0);
+    // pads (plan 2026-10-30, step 5): with g.pads the guide touches the bone only on small round pads just past each saw
+    // slot on the kept side (two per cut, above and below the middle of the body); everywhere else its inner surface
+    // stands `relief` mm further off the bone, so the fit rests on the pads (and the screw sleeves) alone
+    const padAt = new Uint8Array(nx * ny), pads = [];
+    if (g.pads) {
+      const pr = g.padR || 4, off = Math.max(pr + 1, g.W / 4);
+      for (const sl of slots) {
+        if (Math.abs(sl.a) < 0.3) continue;
+        const us = (sl.e - sl.b * vc) / sl.a, side = Math.sign(us - uc) || 1, pu = us + side * (sl.half + (g.bossW || 2) + pr + 1);
+        for (const dv of [-off, off]) pads.push([pu, vc + dv]);
+      }
+      for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) { const uu = lo[0] + i * h, vv = lo[1] + j * h; if (pads.some(pd => Math.hypot(uu - pd[0], vv - pd[1]) <= pr)) padAt[i + nx * j] = 1; }
+    }
+    const relief = g.pads ? (g.relief == null ? 1 : g.relief) : 0;
     const F = new Float32Array(N).fill(h * 4);
     const bridgeLo = cw - 0.5, bridgeHi = cw + 2.5, skirt = g.skirt == null ? 3 : g.skirt;
     // the slot rim (plan 1.3): the shell raised to `boss` mm over the inner surface within bossW mm of each slot side, so
@@ -145,7 +161,7 @@ var GKernel = (function () {
       for (let j = 0; j < ny; j++) {
         const vv = lo[1] + j * h, av = Math.abs(vv - vc), sd = vv > vc ? sUp.pos : sUp.neg, band = sd && av > g.W / 2 - 2;
         for (let i = 0; i < nx; i++) {
-          const id = i + nx * (j + ny * k), uu = lo[0] + i * h, d = dd[id], dE = ddE[id];
+          const id = i + nx * (j + ny * k), uu = lo[0] + i * h, d = dd[id], dE = ddE[id], cl = relief && !padAt[i + nx * j] ? c + relief : c;
           const ev = edgeV[i], eT = pass === 0 || Number.isNaN(ev) ? 1e3 : (g.side > 0 ? ev - g.bridge - vv : vv - ev - g.bridge);
           const outer = Math.abs(uu - uc) - g.L / 2;
           if (outer > 0 || dE > topHi + h) { F[id] = Math.max(outer, dE - topHi); continue; }
@@ -157,18 +173,18 @@ var GKernel = (function () {
             const stop = (band && !shadow) ? Math.max(outer, av - g.W / 2 - stopX, wrapAt[i] - stopZ - nn) : 1e3;
             box = Math.min(box, stop);
           }
-          let shell = Math.max(c - dE, dE - cw);
+          let shell = Math.max(cl - dE, dE - cw);
           if (pass === 1) {   // (pass 0 finds the body edge without the slots, so the rib does not dip into them)
-            if (bossH) for (const s of slots) shell = Math.min(shell, Math.max(Math.abs(s.a * uu + s.b * vv + s.c * nn - s.e) - s.half - bossW, c - dE, dE - c - bossH));
-            for (const s of slots) shell = Math.max(shell, s.half - Math.abs(s.a * uu + s.b * vv + s.c * nn - s.e));
+            if (bossH) for (const s of slots) if (inSl(s, uu, vv, nn)) shell = Math.min(shell, Math.max(Math.abs(s.a * uu + s.b * vv + s.c * nn - s.e) - s.half - bossW, cl - dE, dE - c - bossH));
+            for (const s of slots) if (inSl(s, uu, vv, nn)) shell = Math.max(shell, s.half - Math.abs(s.a * uu + s.b * vv + s.c * nn - s.e));
           }
           const bridge = Math.max(bridgeLo - dE, dE - bridgeHi, eT);
           // near real bone: the envelope point under this voxel is bone, or a shadow face within `skirt` of bone
           F[id] = Math.max(box, d - dE - skirt, Math.min(shell, bridge));
           if (pass === 1 && flg && slots.length) {
             let rim = 1e3;
-            for (const s of slots) rim = Math.min(rim, Math.max(Math.abs(s.a * uu + s.b * vv + s.c * nn - s.e) - s.half - bossW, c - dE, dE - c - flH));
-            for (const s of slots) rim = Math.max(rim, s.half - Math.abs(s.a * uu + s.b * vv + s.c * nn - s.e));
+            for (const s of slots) if (inSl(s, uu, vv, nn)) rim = Math.min(rim, Math.max(Math.abs(s.a * uu + s.b * vv + s.c * nn - s.e) - s.half - bossW, cl - dE, dE - c - flH));
+            for (const s of slots) if (inSl(s, uu, vv, nn)) rim = Math.max(rim, s.half - Math.abs(s.a * uu + s.b * vv + s.c * nn - s.e));
             F[id] = Math.min(F[id], Math.max(outer, av - g.W / 2 - flg, wrapAt[i] - nn, rim, d - dE - skirt));
           }
         }
@@ -267,9 +283,11 @@ var GKernel = (function () {
     // winding follows the grid -> world map, which is a reflection when (u, v, n) is left-handed
     if (K.mirror) { const ix = net.indices; for (let i = 0; i < ix.length; i += 3) { const t = ix[i + 1]; ix[i + 1] = ix[i + 2]; ix[i + 2] = t; } }
     const Seat = seatModule(), seat = Seat && !K.fast ? Seat.analyze({ Gm, B, D, nx, ny, nz, h, lo, clear: c }) : null;
+    // the fit test (0.5 mm / 2° on the sub-voxel distance field), in the fast builds too
+    const fit = Seat && Seat.freeMoves ? Seat.freeMoves({ Gm, dist: dd, nx, ny, nz, h, lo, clear: c, d: seatDir.d, screws: K.screws.filter(Boolean) }) : null;
     const wrapProfile = []; for (let i = 0; i < nx; i += Math.max(1, Math.round(1 / h))) wrapProfile.push([+(lo[0] + i * h).toFixed(2), +wrapAt[i].toFixed(2)]);
     T.kernel = performance.now() - t0; tick(1);
-    return { net, screws: screwOut, wrapProfile, pieces: comps.length, contact: contact * h * h, undercut: undercutCols * h * h, volume: vol * h * h * h, seat, seatDir, dropped,
+    return { net, screws: screwOut, wrapProfile, pieces: comps.length, contact: contact * h * h, undercut: undercutCols * h * h, volume: vol * h * h * h, seat, fit, pads: pads.map(pd => pd.map(x => +x.toFixed(2))), seatDir, dropped,
       bodyW: vol ? +(bvHi - bvLo + h).toFixed(1) : 0, bodyV: vol ? [+bvLo.toFixed(1), +bvHi.toFixed(1)] : null, T, Gm, B, F, edgeV, wrapAt };
   }
   // the buffers a worker answer moves instead of copying

@@ -571,7 +571,7 @@
     S.qcBase = qualityCheck(vol); S.segWarn = []; syncQC();
     S.anchor = null; S.planes = []; S.screws = []; S.sel = null; S.result = null; S.guideOn = false; S.resRemoved = false; unapprove(S.lesion);
     // a new volume is a new patient: the previous case's guide settings and lesion bounds must not carry over (a plan restore keeps its own)
-    if (S.autoAnchor !== false) { S.drillD = null; S.screwDrops = []; S.screwBlocked = []; Object.assign(S.g, G_DEFAULT, { wrapU: null }); Object.assign(S.gAuto, AUTO_DEFAULT); S.fitLog = []; S.autoSize = null; Object.assign(S.lesion, { from: -6, to: 6, margin: CV('margin', 3), condyle: null, type: undefined }); syncGuideInputs(); syncLesion(); }
+    if (S.autoAnchor !== false) { S.drillD = null; S.screwDrops = []; S.screwBlocked = []; Object.assign(S.g, G_DEFAULT, { wrapU: null }); delete S.g.pads; Object.assign(S.gAuto, AUTO_DEFAULT); S.fitLog = []; S.autoSize = null; Object.assign(S.lesion, { from: -6, to: 6, margin: CV('margin', 3), condyle: null, type: undefined, marginSet: undefined }); delete S.lesion.marginal; delete S.lesion.fragile; syncGuideInputs(); syncLesion(); }
     ['guide', 'bar', 'resected', 'anchor', 'lesion'].forEach(id => setPart(id, null, null));
     clearElementParts();
     await segment(true);
@@ -743,7 +743,7 @@
   let rpCache = { key: null, mask: null, piece: null };
   function resPieceKey(E) {
     const cond = E && E.condyle ? (E.B.cond || E.B.p).toArray() : null;
-    return JSON.stringify([S.anchor && S.anchor.p.toArray(), S.anchor && S.anchor.n.toArray(), S.anchor && S.anchor.axis.toArray(), S.g.rot, S.g.kerfSide, S.lesion.condyle || '', cond, S.planes.map(p => [p.off, p.yaw, p.pitch, p.w, p.pv || 0, p.pn || 0])]);
+    return JSON.stringify([S.anchor && S.anchor.p.toArray(), S.anchor && S.anchor.n.toArray(), S.anchor && S.anchor.axis.toArray(), S.g.rot, S.g.kerfSide, S.lesion.condyle || '', cond, S.planes.map(p => [p.off, p.yaw, p.pitch, p.w, p.pv || 0, p.pn || 0]), S.lesion.marginal ?? null]);
   }
   // of the components (labels from G.components) inside the index box lo..hi: the largest of those whose nearest voxel
   // lies within NEAR_TIE mm of the nearest one's distance to the point q
@@ -760,6 +760,52 @@
     const reach = (Math.sqrt(bd) + NEAR_TIE) ** 2;
     return comps.filter(cm => dmin.get(cm.label) <= reach).reduce((a, b) => (!a || b.size > a.size ? b : a), null);
   }
+  // ---------- marginal resection (plan 2026-10-30, step 6) ----------
+  // The lower border is kept: the bone between the two cuts is taken only above a horizontal cut S.lesion.marginal mm
+  // over the lowest bone between the cuts. "Up" is the guide frame's v turned to the patient's superior side. The
+  // horizontal saw slot lies wholly on the resected side (above the plane), so the stated height is what stays.
+  // Offered only with a painted lesion and the canal marked, never for a jaw marked irradiated or atrophic, and only
+  // when the lesion and its margin end at least MARG_MIN mm above the lower border (Clinical marginalMin).
+  let mpCache = { key: null, v: null };
+  function margPlane() {
+    const h = S.lesion.marginal;
+    if (h == null || S.lesion.condyle || !S.anchor || !S.mask || !S.red || S.planes.length < 2) return null;
+    const E = resEnds(); if (!E || E.condyle) return null;
+    const { v } = frameAxes(), up = v.z >= 0 ? v.clone() : v.clone().negate(), w = slotDefault();
+    const key = JSON.stringify([resPieceKey(E), h, w]);
+    if (mpCache.key === key && mpCache.mask === S.mask) return mpCache.v;
+    // the lowest bone of the segment between the cuts (the resected piece of a segmental resection) along up
+    const r = S.red, { A, B } = E, dir = B.p.clone().sub(A.p).normalize(), NA = A.N.clone(), NB = B.N.clone();
+    if (NA.dot(dir) < 0) NA.negate(); if (NB.dot(dir) < 0) NB.negate();
+    delete S.lesion.marginal; let seg; try { seg = resPiece(); } finally { S.lesion.marginal = h; }
+    if (!seg) return null;
+    let lb = Infinity; const nxy = r.nx * r.ny, bx = seg.box;
+    for (let k = bx[2]; k <= bx[5]; k++) for (let j = bx[1]; j <= bx[4]; j++) for (let i = bx[0]; i <= bx[3]; i++) {
+      if (!seg.mask[i + r.nx * j + nxy * k]) continue;
+      const w = G.worldOf(r, i, j, k), d = w[0] * up.x + w[1] * up.y + w[2] * up.z; if (d < lb) lb = d;
+    }
+    if (!Number.isFinite(lb)) return null;
+    const p = S.anchor.p.clone().add(up.clone().multiplyScalar(lb + h - S.anchor.p.dot(up))), pSlot = p.clone().add(up.clone().multiplyScalar(w / 2));
+    const out = { p, pSlot, N: up, w, lb, h, A, B, NA, NB };
+    mpCache = { key, mask: S.mask, v: out };
+    return out;
+  }
+  // the lesion's lowest point along up (painted lesion), for the marginal height and its check
+  function lesionLow(up) { const pts = window.Lesion && Lesion.points ? Lesion.points() : []; let m = Infinity; for (const q of pts) m = Math.min(m, q.dot(up)); return pts.length ? m : null; }
+  function margBlock() {
+    if (S.lesion.fragile) return 'Çene ışınlanmış ya da atrofik olarak işaretli: marjinal rezeksiyon önerilmez.';
+    if (!(window.Lesion && Lesion.count && Lesion.count() > 0)) return 'Marjinal rezeksiyon için lezyonu boyayın: yatay kesi lezyona göre konur.';
+    if (!(S.canals || []).length) return 'Marjinal rezeksiyon için alt alveoler kanalı işaretleyin (Kanal): kanalın konumu bilinmeden alt kenarda bırakılacak kemik değerlendirilemez.';
+    if (S.planes.length < 2) return 'Marjinal rezeksiyon için önce iki kesi gerekir.';
+    return '';
+  }
+  // the height the lesion allows: from the lower border up to the lesion's lowest point less the margin and the slot
+  function margAuto() {
+    const was = S.lesion.marginal; S.lesion.marginal = 0; const M = margPlane(); S.lesion.marginal = was;
+    if (!M) return null;
+    const low = lesionLow(M.N); if (low == null) return null;
+    return Math.floor((low - S.lesion.margin - M.w - M.lb) * 2) / 2;
+  }
   function resPiece() {
     if (!S.anchor || !S.mask || !S.red) return null;
     const E = resEnds(); if (!E) return null;
@@ -774,12 +820,15 @@
     const cand = new Uint8Array(S.mask.length), ax = r.axes, sp = r.sp, o = r.origin;
     // the resected piece starts beyond the saw slot (slot centre pSlot, half width w/2)
     const aT = A.w / 2 + A.N.dot(A.pSlot || A.p), bT = -B.w / 2 + B.N.dot(B.pSlot || B.p);
+    // marginal: only the bone above the horizontal slot
+    const M = margPlane(), mT = M ? M.N.dot(M.pSlot) + M.w / 2 : -Infinity, MN = M ? M.N : null;
     for (let k = lo[2]; k <= hi[2]; k++) for (let j = lo[1]; j <= hi[1]; j++) for (let i = lo[0]; i <= hi[0]; i++) {
       const v = i + r.nx * (j + r.ny * k); if (!S.mask[v]) continue;
       const x = o[0] + ax[0][0] * i * sp[0] + ax[1][0] * j * sp[1] + ax[2][0] * k * sp[2];
       const y = o[1] + ax[0][1] * i * sp[0] + ax[1][1] * j * sp[1] + ax[2][1] * k * sp[2];
       const z = o[2] + ax[0][2] * i * sp[0] + ax[1][2] * j * sp[1] + ax[2][2] * k * sp[2];
       if ((x - ap.x) ** 2 + (y - ap.y) ** 2 + (z - ap.z) ** 2 > R * R) continue;
+      if (MN && x * MN.x + y * MN.y + z * MN.z < mT) continue;
       if (x * A.N.x + y * A.N.y + z * A.N.z > aT && (E.condyle || x * B.N.x + y * B.N.y + z * B.N.z < bT)) cand[v] = 1;
     }
     const { labels, comps } = G.components(cand, r.nx, r.ny, r.nz, 1);
@@ -951,7 +1000,7 @@
     S.lesion.from = -6; S.lesion.to = 6; syncLesion();   // the next centre starts from the default range, not the old one
     // the guide settings go back to the defaults too: the automatic sizing and the fit ladder had written the old
     // case's height, layout (two pieces, bar) and wrap into S.g, and the next guide would have started from them
-    Object.assign(S.g, G_DEFAULT, { wrapU: null }); Object.assign(S.gAuto, AUTO_DEFAULT); S.fitLog = []; S.autoSize = null; S.screwDrops = []; S.screwBlocked = []; syncGuideInputs();
+    Object.assign(S.g, G_DEFAULT, { wrapU: null }); delete S.g.pads; Object.assign(S.gAuto, AUTO_DEFAULT); S.fitLog = []; S.autoSize = null; S.screwDrops = []; S.screwBlocked = []; syncGuideInputs();
     unapproveAll(); $('guideStat').textContent = '';
     if (window.Lesion && Lesion.clear) Lesion.clear();
     ['guide', 'bar', 'resected', 'anchor', 'lesion'].forEach(id => setPart(id, null, null)); clearElementParts();
@@ -1959,6 +2008,35 @@
     if (e.dot(u0) < 0) e.negate();
     S.anchor.axis = e; S.anchor.axisFrom = (S.anchor.axisFrom || 'pca') + '+slab';
   }
+  // the safety margin is a clinical decision: a plan still on the starting value says so, and a margin under the
+  // usual one for malignant and locally aggressive lesions (Clinical marginWarn, ~10 mm) is a warning unless the
+  // surgeon called the lesion benign
+  function marginChecks() {
+    const L = S.lesion, out = [], mw = CV('marginWarn', 10), any = (window.Lesion && Lesion.points && Lesion.count && Lesion.count() > 0) || S.planes.length > 0;
+    if (!any) return out;
+    if (!L.marginSet && !L.type) out.push(['warn', 'Uyarı', `Güvenlik payı hekim tarafından seçilmedi: şu an başlangıç değeri ${fmt(L.margin, 1)} mm. Rezeksiyon adımında lezyon tipini ya da güvenlik payını seçin.`, 'lesion']);
+    else if (L.margin < mw && L.type !== 'benign') out.push(['warn', 'Uyarı', `Güvenlik payı ${fmt(L.margin, 1)} mm; malign ve lokal agresif lezyonlarda genellikle yaklaşık ${fmt(mw, 0)} mm önerilir (örnek eşik). Payı klinik karara göre doğrulayın.`, 'lesion']);
+    // the margin shell against the marked canal and roots (lesion.js shellInfo)
+    const sh = window.Lesion && Lesion.shellInfo ? Lesion.shellInfo() : null;
+    if (sh && sh.hasCanal && sh.canal < L.margin) out.push(['warn', 'Uyarı', `Alt alveoler kanal lezyonun güvenlik payı içinde (lezyona ${fmt(Math.max(0, sh.canal), 1)} mm, pay ${fmt(L.margin, 1)} mm): sinirin korunup korunmayacağı klinik karardır.`, 'lesion']);
+    if (sh && sh.inRoots) out.push(['info', 'Bilgi', `${sh.inRoots} diş kökü lezyonun güvenlik payı içinde.`, 'lesion']);
+    // marginal resection: still allowed, enough bone left, the margin above the horizontal cut, the canal
+    if (L.marginal != null) {
+      const why = margBlock(), M = margPlane(), min = CV('marginalMin', 10);
+      if (why) out.push(['crit', 'Kritik', why, 'lesion']);
+      if (M) {
+        if (M.h < min) out.push(['crit', 'Kritik', `Marjinal rezeksiyonda alt kenarda ${fmt(M.h, 1)} mm kemik kalıyor; en az ${fmt(min, 0)} mm (örnek eşik), altında kırık riski. Segment rezeksiyona dönün ya da yüksekliği artırın.`, 'lesion']);
+        const low = lesionLow(M.N);
+        if (low != null && low - L.margin < M.lb + M.h + M.w - 0.25) out.push(['crit', 'Kritik', `Lezyonun güvenlik payı yatay kesinin altına iniyor (${fmt(M.lb + M.h + M.w - (low - L.margin), 1)} mm): yatay kesiyi indirin ya da segment rezeksiyona dönün.`, 'lesion']);
+        const cut = M.lb + M.h, can = [];
+        (S.canals || []).forEach(c => (c.pts || []).forEach(p => { const q = V(...p); if (q.clone().sub(M.A.p).dot(M.NA) >= 0 && q.clone().sub(M.B.p).dot(M.NB) <= 0) can.push(q.dot(M.N) - cut); }));
+        if (can.length && Math.max(...can) > 0) out.push(['warn', 'Uyarı', `Alt alveoler kanal kesiler arasında yatay kesinin ${fmt(Math.max(...can), 1)} mm üstüne çıkıyor: sinir rezeke parçayla birlikte alınır. Klinik kararla doğrulayın.`, 'lesion']);
+        else if (can.length && Math.max(...can) > -2) out.push(['warn', 'Uyarı', `Alt alveoler kanal yatay kesiye ${fmt(-Math.max(...can), 1)} mm: testere kanala çok yakın geçer.`, 'lesion']);
+        out.push(['info', 'Bilgi', `Marjinal rezeksiyon: alt kenarda ${fmt(M.h, 1)} mm kemik kalıyor, mandibula sürekliliği korunuyor; fibula grefti genellikle gerekmez (fibula planı bilgi amaçlı kalır).`, 'lesion']);
+      } else out.push(['warn', 'Uyarı', 'Marjinal rezeksiyonun yatay kesisi kurulamadı (iki kesi ve kemik gerekir).', 'lesion']);
+    }
+    return out;
+  }
   const lFields = [['from', 'Lezyon başlangıcı', -45, 45, 0.5, 'mm'], ['to', 'Lezyon bitişi', -45, 45, 0.5, 'mm'], ['margin', 'Güvenlik payı', 0, 15, 0.5, 'mm']];
   // C3: the lesion type gives the margin to start from (sample values for the clinical team to set; choosing a type only
   // moves the margin slider, which stays the surgeon's to change; "not set" keeps the margin as it is)
@@ -1967,13 +2045,17 @@
   function syncLesion() {
     lFields.forEach(([k, , , , , unit]) => { $('l_' + k).value = S.lesion[k]; $('lo_' + k).textContent = `${fmt(S.lesion[k])} ${unit}`; });
     $('l_type').value = S.lesion.type || '';
-    $('resType').value = S.lesion.condyle || ''; $('resTypeHint').hidden = !S.lesion.condyle;
+    $('resType').value = S.lesion.marginal != null ? 'M' : S.lesion.condyle || ''; $('resTypeHint').hidden = !S.lesion.condyle;
+    $('margBox').hidden = S.lesion.marginal == null; if (S.lesion.marginal != null) { $('l_marg').value = S.lesion.marginal; $('lo_marg').textContent = `${fmt(S.lesion.marginal, 1)} mm`; }
+    $('l_fragile').checked = !!S.lesion.fragile;
     $('lesStatus').textContent = !S.anchor ? '' : S.lesion.ok ? `${xl('Sınır onaylandı')}${S.lesion.by ? ' · ' + S.lesion.by : ''}.` : 'Sınır onayı bekliyor (Doğrulama ve onay).';
   }
-  lFields.forEach(([k]) => $('l_' + k).addEventListener('input', e => { S.lesion[k] = +e.target.value; unapprove(S.lesion); syncLesion(); updateLesionPart(); renderAppr(); render(); emit('parts'); emit('changed'); }));
+  // the margin is the surgeon's: moving the slider or choosing a lesion type records that it was set by hand (the
+  // starting value alone leaves a warning in the checks, marginChecks)
+  lFields.forEach(([k]) => $('l_' + k).addEventListener('input', e => { S.lesion[k] = +e.target.value; if (k === 'margin') S.lesion.marginSet = true; unapprove(S.lesion); syncLesion(); updateLesionPart(); renderAppr(); render(); emit('parts'); emit('changed'); }));
   $('l_type').addEventListener('change', e => {
     const t = LESION_TYPES[e.target.value]; S.lesion.type = t ? e.target.value : undefined; if (!t) { emit('changed'); return; }
-    S.lesion.margin = t[1]; unapprove(S.lesion); syncLesion(); updateLesionPart(); renderAppr(); render(); emit('parts'); emit('changed');
+    S.lesion.margin = t[1]; S.lesion.marginSet = true; unapprove(S.lesion); syncLesion(); updateLesionPart(); renderAppr(); render(); emit('parts'); emit('changed');
     if (S.anchor && !planBlocked()) suggest();
   });
   // a new range or margin (slider released) proposes the cuts again, so the cuts never lag behind the stated margin
@@ -1991,7 +2073,10 @@
   }
   async function buildGuide(ctx) {
     const t0 = performance.now();
-    const { g, P, u, v, n, pls, scs } = ctx, boneAt = ctx.bone, h = ctx.h || 0.4, T = {};
+    const { P, u, v, n, pls, scs } = ctx, boneAt = ctx.bone, h = ctx.h || 0.4, T = {};
+    // marginal resection: the rib that carries the body across the upright slots runs along the upper edge (the part
+    // over the resected block hangs from it; the lower edge is cut off by the horizontal slot)
+    const M0 = ctx.marg === undefined ? margPlane() : ctx.marg, g = M0 ? Object.assign({}, ctx.g, { side: v.dot(M0.N) >= 0 ? 1 : -1 }) : ctx.g;
     const maxSleeve = Math.max(0, ...scs.map(s => s.sc.sleeveH));
     // optional stops: lips past the upper / lower guide edge that reach around the bone edge (crest, lower border)
     const sUp = stopSides(g, v), anyStop = sUp.pos || sUp.neg, stopX = anyStop ? (g.stopL || 6) : 0, stopZ = anyStop ? (g.stopD || 5) : 0, vc = g.vc || 0;
@@ -2021,6 +2106,15 @@
     const toF = (p, N_) => { const l = Math.hypot(N_.x, N_.y, N_.z); if (!(l > 1e-9) || !isFinite(l)) return null; const a = N_.dot(u) / l, b = N_.dot(v) / l, cc = N_.dot(n) / l, dx = p.x - P.x, dy = p.y - P.y, dz = p.z - P.z; return { a, b, c: cc, e: a * (dx * u.x + dy * u.y + dz * u.z) + b * (dx * v.x + dy * v.y + dz * v.z) + cc * (dx * n.x + dy * n.y + dz * n.z) }; };
     // the saw slot is centred on pSlot (the plane shifted towards the defect when the kerf lies on the resected side)
     const slots = pls.map(pw => { const f = toF(pw.pSlot || pw.p, pw.N); return f && pw.w > 0 ? Object.assign(f, { half: pw.w / 2 }) : null; }).filter(Boolean);
+    // marginal resection: the upright slots stop at the bottom of the horizontal slot (the saw must not go through the
+    // lower border), and the horizontal slot runs only between the upright cuts (to their far slot faces)
+    const M = M0;
+    if (M && slots.length) {
+      const below = toF(M.pSlot, M.N); below.e -= M.w / 2;
+      slots.forEach(sl => { sl.clip = [below]; });
+      const hs = toF(M.pSlot, M.N), ca = toF(M.A.pSlot || M.A.p, M.NA), cb = toF(M.B.pSlot || M.B.p, M.NB.clone().negate());
+      if (hs && ca && cb) { ca.e -= M.A.w / 2; cb.e -= M.B.w / 2; slots.push(Object.assign(hs, { half: M.w / 2, clip: [ca, cb] })); }
+    }
     const gp = gap && { A: toF(gap.A.p, gap.A.N), B: toF(gap.B.p, gap.B.N), ta: gap.A.w / 2 + g.flange, tb: gap.B.w / 2 + g.flange };
     const kScrews = scs.map(s => {
       if (!s.entry) return null;
@@ -2049,7 +2143,7 @@
       return { inBone: Math.min(inBone, s.sc.len), crossesPlane, slotGap, exitAt, cutGap };
     });
     const K = { h, lo, nx, ny, nz, B, soft, sUp, stopX, stopZ, vc, uc, slots, gp, screws: kScrews, seatDir: ctx.seatDir || null, fast: !!ctx.fast,
-      g: { wrap: g.wrap, wrapU: g.wrapU || null, L: g.L, W: g.W, clear: g.clear, peri: g.peri || 0, wall: g.wall, bridge: g.bridge, side: g.side, skirt: g.skirt, fit: g.fit || 0, boss: g.boss || 0, bossW: g.bossW || 2, slotFlange: g.slotFlange || 0 },
+      g: { wrap: g.wrap, wrapU: g.wrapU || null, L: g.L, W: g.W, clear: g.clear, peri: g.peri || 0, wall: g.wall, bridge: g.bridge, side: g.side, skirt: g.skirt, fit: g.fit || 0, boss: g.boss || 0, bossW: g.bossW || 2, slotFlange: g.slotFlange || 0, pads: g.pads ? 1 : 0, padR: 4, relief: 1 },
       // winding follows the grid -> world map, which is a reflection when (u, v, n) is left-handed
       mirror: u.dot(new THREE.Vector3().crossVectors(v, n)) < 0, debugFp: ctx.debugFp || null };
     const k = await kernel(K, onP ? f => onP(0.08 + 0.87 * f) : null);
@@ -2058,7 +2152,7 @@
     T.mesh = performance.now() - t0; if (onP) onP(1);
     // screw results in the order of scs: no entry, no guide body under the sleeve, or the drill path and the sleeve's shadow
     const screwInfo = scs.map((s, i) => { const r = k.screws[i]; if (!r.ok) return Object.assign({ s }, r); const o = Object.assign({ s, ok: true }, paths[i]); if (r.shadowed != null) o.shadowed = r.shadowed; return o; });
-    return { mesh, result: { wrapProfile: k.wrapProfile, pieces: k.pieces, contact: k.contact, undercut: k.undercut, volume: k.volume, screwInfo, pls, seat: k.seat, seatDir: k.seatDir, dropped: k.dropped, bodyW: k.bodyW, bodyV: k.bodyV, ms: performance.now() - t0, T },
+    return { mesh, result: { wrapProfile: k.wrapProfile, pieces: k.pieces, contact: k.contact, undercut: k.undercut, volume: k.volume, screwInfo, pls, seat: k.seat, fits: [k.fit], pads: k.pads, seatDir: k.seatDir, dropped: k.dropped, bodyW: k.bodyW, bodyV: k.bodyV, ms: performance.now() - t0, T },
       grid: { Gm: k.Gm, B: k.B, F: k.F, nx, ny, nz, h, lo, P: P.clone(), u: u.clone(), v: v.clone(), n: n.clone(), edgeV: k.edgeV, wrapAt: k.wrapAt } };
   }
   // two separate guides: nothing between the outermost cuts except a capture flange beyond each slot
@@ -2258,7 +2352,7 @@
       seat = Object.assign({}, worse, { free: Math.min(seats[0].free, seats[1].free), worstSlide: seats.reduce((a, b) => (b.worstSlide.r < a.worstSlide.r ? b : a)).worstSlide, worstRot: seats.reduce((a, b) => (b.worstRot.r < a.worstRot.r ? b : a)).worstRot, parts: seats });
     } else if (seats.length) seat = seats.find(s => s.ok) || seats[0];
     const sum = k => parts.reduce((s, p) => s + p.result[k], 0);
-    const result = { pieces: sum('pieces'), contact: sum('contact'), undercut: sum('undercut'), volume: sum('volume'), screwInfo, pls, seat, wrapProfile: parts[0].wrapProfile, parts, ms: sum('ms'), T: parts[0].result.T };
+    const result = { pieces: sum('pieces'), contact: sum('contact'), undercut: sum('undercut'), volume: sum('volume'), screwInfo, pls, seat, fits: parts.map(p => (p.result.fits || [])[0]), pads: [].concat(...parts.map(p => p.result.pads || [])), wrapProfile: parts[0].wrapProfile, parts, ms: sum('ms'), T: parts[0].result.T };
     // the connecting bar: a separate part, built only for the guide that is shown (the fit ladder asks for the route only)
     let barMesh = null;
     if (withBar) { result.bar = barPlan(parts, g); if (result.bar.ok && !ctx.noBarMesh) barMesh = buildBarMesh(result.bar.spec, 0.4); }
@@ -2660,6 +2754,7 @@
       <h3 class="sub">Rezeksiyon ve guide</h3>
       <dl class="kv"><dt>Rezeksiyon boyu (eksende)</dt><dd>${sorted.length >= 2 ? fmt(sorted.at(-1).off - sorted[0].off) + ' mm' : '–'}</dd><dt>Rezeke parça hacmi</dt><dd>${S.resectedVolume ? fmt(S.resectedVolume / 1000, 2) + ' cm³' : '–'}</dd><dt>Guide temas alanı (yaklaşık)</dt><dd>${fmt(R.contact, 0)} mm²</dd><dt>Guide hacmi</dt><dd>${fmt(R.volume / 1000, 2)} cm³</dd></dl>
       ${R.seat && R.seat.ok ? '<h3 class="sub">Takma ve stabilite</h3>' : ''}
+      ${(R.fits || []).some(f => f && f.ok) ? `<dl class="kv"><dt>${xl('Oturma testi')}</dt><dd>${(R.fits || []).filter(f => f && f.ok).map(f => xl(`${f.total - f.free}/${f.total} hareket engelli`)).join(' · ')}</dd></dl>` : ''}
       ${R.seat && R.seat.ok ? `<dl class="kv"><dt>Takma yönü</dt><dd>${R.seat.free ? (R.seat.best.tilt ? fmt(R.seat.best.tilt, 0) + '° eğik' : 'dik') : 'yok'}</dd><dt>Uygun yönler</dt><dd>${R.seat.free}/${R.seat.dirs.length}</dd><dt>Kayma direnci (en zayıf)</dt><dd>%${fmt(R.seat.worstSlide.r * 100, 0)}</dd><dt>Dönme direnci (en zayıf)</dt><dd>%${fmt(R.seat.worstRot.r * 100, 0)} · ${({ u: 'eksen', v: 'yanal', n: 'oturma' })[R.seat.worstRot.axis]}</dd></dl>` : ''}
       <p class="hint" style="color:var(--faint)">Hesaplama süresi ${fmt(R.ms / 1000, 1)} sn</p>`;
   }
@@ -2761,6 +2856,7 @@
       // two cuts that take out no bone (a wedge between them that misses the jaw)
       if (S.planes.length >= 2 && S.resectedVolume != null && S.resectedVolume < 200) out.push(['crit', 'Kritik', `Rezeksiyon parçası boş ya da çok küçük (${fmt(S.resectedVolume / 1000, 2)} cm³): kesiler arasında çıkarılacak kemik yok. Kesileri yeniden önerin ya da elle düzeltin.`, 'p0']);
       // the stump faces have to clear the lesion by the safety margin (painted lesion, else the lesion range on the axis)
+      marginChecks().forEach(x => out.push(x));
       lesionMargins().forEach(m => { if (m.d < S.lesion.margin - 0.5) out.push(['crit', 'Kritik', `Kesi ${m.i + 1} lezyona ${fmt(m.d, 1)} mm uzakta, güvenlik payı ${fmt(S.lesion.margin, 1)} mm; kesiyi lezyondan uzaklaştırın ya da kesileri yeniden önerin.`, 'p' + m.i]); });
       // graft-to-stump gap at each end: the half slot the saw takes from the stump (0 when the kerf lies on the resected side)
       const E = resEnds();
@@ -2830,15 +2926,27 @@
       if (g && ((need[0] && cnt[0] < 1) || (need[1] && cnt[1] < 1))) out.push(['crit', 'Kritik', `İki guide düzeninde her guide en az bir vidayla sabitlenmeli (şu an ${cnt[0]} + ${cnt[1]}).`, 'guide']);
     }
     const st = R.seat;
+    // the fit test (seat.js freeMoves): every small motion but the insertion should run the guide into bone
+    const fits = (R.fits || []).filter(f => f && f.ok), fitDone = fits.length > 0;
+    if (fitDone) {
+      const many = fits.length > 1, lbl = { slide: { u: 'kemik ekseni boyunca kayma', v: 'yanal kayma' }, rot: { u: 'kemik ekseni etrafında dönme', v: 'yanal eksen etrafında dönme', d: 'takma ekseni etrafında dönme' } };
+      const names = key => { const set = []; fits.forEach((f, i) => f.moves.filter(m => m[key]).forEach(m => { const t = lbl[m.kind][m.axis] + (many ? ` (guide ${i + 1})` : ''); if (!set.includes(t)) set.push(t); })); return set.join(', '); };
+      const T = fmt(fits[0].T, 1), A = fmt(fits[0].A, 0), nScr = S.screws.length;
+      if (nScr && fits.some(f => f.freeScrewed)) out.push(['crit', 'Kritik', `Oturma testi: vidalar takılıyken bile guide yerinden oynayabiliyor (${names('freeScrewed')}; ${T} mm / ${A}° sanal oynatma kemiğe çarpmıyor, vidalar da tutmuyor). Vidaları guide üzerinde birbirinden uzağa yayın ya da vida ekleyin.`, 'guide']);
+      else if (fits.some(f => f.free)) out.push(['warn', 'Uyarı', `Oturma testi: vidalar takılmadan önce guide tek konuma oturmuyor (${names('free')}; ${T} mm / ${A}° sanal oynatma kemiğe çarpmıyor). Vidalar açılana kadar guide'ı kemiğe bastırarak tutun; daha belirgin bir kemik yüzeyine taşımayı ya da sarmayı artırmayı düşünün.`, 'guide']);
+      else out.push(['info', 'Bilgi', `Oturma testi geçti: guide ${T} mm kaydırma ve ${A}° döndürmede her yönde kemiğe çarpıyor (${fits.reduce((a, f) => a + f.total, 0)} hareket); tek konumda oturuyor.`, 'guide']);
+    }
+    if (S.g.pads) out.push(['warn', 'Uyarı', `Pedli guide deneyseldir (${(R.pads || []).length} ped): basılı kemik modelinde oturma ve kesi doğruluğu ölçülmeden hastada kullanmayın.`, 'guide']);
     if (st && st.ok) {
       if (!st.free) out.push(['crit', 'Kritik', `Guide hiçbir yönde takılamıyor; en iyi yönde bile ${fmt(st.best.block, 0)} mm² kemik guide'ın üstünde kalıyor. Sarma derinliğini azaltın ya da guide'ı taşıyın.`, 'guide']);
       else if (st.best.tilt > 0) out.push(['warn', 'Uyarı', `Guide dik oturtulamıyor; yalnız yaklaşık ${st.best.tilt}° eğik takılabilir (${st.free}/${st.dirs.length} yön uygun). Ameliyatta takma yönü açıklanmalı.`, 'guide']);
       const sw = st.worstSlide, along = Math.abs(sw.dir[0]) > Math.abs(sw.dir[1]);
-      if (sw.r < 0.05) out.push(['warn', 'Uyarı', along ? `Vidalar takılmadan önce guide kemik ekseni boyunca kayabilir: temasın yalnız %${fmt(sw.r * 100, 0)}'i direnç gösteriyor. Belirgin bir anatomik çıkıntıya taşımayı ya da sarmayı artırmayı düşünün.` : `Vidalar takılmadan önce guide yanal yönde kayabilir: temasın yalnız %${fmt(sw.r * 100, 0)}'i direnç gösteriyor. Belirgin bir anatomik çıkıntıya taşımayı ya da sarmayı artırmayı düşünün.`, 'guide']);
+      // (the fit test above measures the same in mm and degrees; the contact shares stay for builds without it)
+      if (!fitDone && sw.r < 0.05) out.push(['warn', 'Uyarı', along ? `Vidalar takılmadan önce guide kemik ekseni boyunca kayabilir: temasın yalnız %${fmt(sw.r * 100, 0)}'i direnç gösteriyor. Belirgin bir anatomik çıkıntıya taşımayı ya da sarmayı artırmayı düşünün.` : `Vidalar takılmadan önce guide yanal yönde kayabilir: temasın yalnız %${fmt(sw.r * 100, 0)}'i direnç gösteriyor. Belirgin bir anatomik çıkıntıya taşımayı ya da sarmayı artırmayı düşünün.`, 'guide']);
       const wr = st.worstRot;
-      if (wr.r < 0.05) out.push(['warn', 'Uyarı', wr.axis === 'u' ? `Guide kemik ekseni etrafında dönebilir: temasın yalnız %${fmt(wr.r * 100, 0)}'i direnç gösteriyor.` : wr.axis === 'v' ? `Guide yanal eksen etrafında dönebilir: temasın yalnız %${fmt(wr.r * 100, 0)}'i direnç gösteriyor.` : `Guide oturma ekseni etrafında dönebilir: temasın yalnız %${fmt(wr.r * 100, 0)}'i direnç gösteriyor.`, 'guide']);
+      if (!fitDone && wr.r < 0.05) out.push(['warn', 'Uyarı', wr.axis === 'u' ? `Guide kemik ekseni etrafında dönebilir: temasın yalnız %${fmt(wr.r * 100, 0)}'i direnç gösteriyor.` : wr.axis === 'v' ? `Guide yanal eksen etrafında dönebilir: temasın yalnız %${fmt(wr.r * 100, 0)}'i direnç gösteriyor.` : `Guide oturma ekseni etrafında dönebilir: temasın yalnız %${fmt(wr.r * 100, 0)}'i direnç gösteriyor.`, 'guide']);
     } else if (R.undercut > 4) out.push(['crit', 'Kritik', `Guide kemiğin altına sarıyor (${fmt(R.undercut, 0)} mm² alttan kesik); oturtulup çıkarılamaz. Sarma derinliğini azaltın.`, 'guide']);
-    if (R.contact < 150) out.push(['warn', 'Uyarı', `Temas alanı ${fmt(R.contact, 0)} mm²; oturma belirsiz olabilir (örnek eşik 150 mm²). Sarmayı artırın ya da guide'ı daha geniş bir kemik yüzeyine taşıyın.`, 'guide']);
+    if (R.contact < 150 && !S.g.pads) out.push(['warn', 'Uyarı', `Temas alanı ${fmt(R.contact, 0)} mm²; oturma belirsiz olabilir (örnek eşik 150 mm²). Sarmayı artırın ya da guide'ı daha geniş bir kemik yüzeyine taşıyın.`, 'guide']);
     R.screwInfo.forEach((si, i) => {
       if (!si.ok && si.noBody) out.push(['crit', 'Kritik', `Vida ${i + 1} altında guide gövdesi yok: kemik girişi guide'ın sarma sınırının ${fmt(Math.max(0, -(si.depth || 0)), 1)} mm altında ya da gövdenin dışında; kovan boşlukta kalırdı. Vidayı kaydırın ya da sarmayı artırın.`, 's' + i]);
       else if (!si.ok) out.push(['crit', 'Kritik', `Vida ${i + 1} kemiğe ulaşmıyor; vidayı kemiğin üstüne kaydırın.`, 's' + i]);
@@ -3760,6 +3868,7 @@
     gFields.forEach(([k, , , , st, unit]) => { $('g_' + k).value = S.g[k]; $('go_' + k).textContent = `${fmt(S.g[k], st < 1 ? (st < 0.1 ? 2 : 1) : 0)} ${unit}`; });
     $('g_side').value = String(S.g.side); $('g_split').value = String(S.g.split || 0);
     if ($('g_kerf')) $('g_kerf').value = String(S.g.kerfSide ? 1 : 0);
+    if ($('g_pads')) $('g_pads').value = S.g.pads ? '1' : '0';
     // values still chosen from the bone are marked on their control
     ['L', 'W', 'wrap'].forEach(k => { const el = $('gc_' + k); if (el && el.classList) el.classList.toggle('auto', !!S.gAuto[k]); });
     $('g_stopT').checked = !!S.g.stopT; $('g_stopB').checked = !!S.g.stopB; $('stopBox').hidden = !(S.g.stopT || S.g.stopB || S.g.stopP); if ($('g_stopP')) $('g_stopP').checked = !!S.g.stopP; if ($('g_bar')) $('g_bar').checked = !!S.g.bar;
@@ -3810,14 +3919,31 @@
     syncGuideInputs(); unapproveAll(); schedule(false);
   });
   // where the saw slot lies: on the resected side (the graft meets the stump flush) or centred on the planned plane
+  if ($('g_pads')) $('g_pads').addEventListener('change', e => { if (+e.target.value) S.g.pads = 1; else delete S.g.pads; unapproveAll(); schedule(true); });
   if ($('g_kerf')) $('g_kerf').addEventListener('change', e => { S.g.kerfSide = +e.target.value ? 1 : 0; unapproveAll(); if (S.anchor && S.planes.length && S.guideOn) placeScrews(); schedule(true); });
   // the controls' automatic marks are reset with a new plan
   $('gAutoReset') && $('gAutoReset').addEventListener('click', () => { Object.assign(S.gAuto, AUTO_DEFAULT); if (S.anchor && S.planes.length) { placeScrews(); S.sel = null; } S.refit = true; syncGuideInputs(); schedule(false); });
   $('resType').addEventListener('change', async e => {
+    if (e.target.value === 'M') {
+      const why = margBlock(), back = () => { e.target.value = S.lesion.condyle || ''; };
+      if (why) { alertMsg(xl(why)); back(); return; }
+      const hA = margAuto(), min = CV('marginalMin', 10);
+      if (hA == null || hA < min) { alertMsg(xl(`Lezyon güvenlik payıyla alt kenara çok yakın: alt kenarda en az ${fmt(min, 0)} mm kemik kalmıyor (kalan ${fmt(Math.max(0, hA || 0), 1)} mm). Segment rezeksiyon gerekir.`)); back(); return; }
+      S.lesion.condyle = null; S.lesion.marginal = hA; if (S.g.split) { S.g.split = 0; syncGuideInputs(); }
+      unapprove(S.lesion); syncLesion(); schedule(true); return;
+    }
+    if (S.lesion.marginal != null) { delete S.lesion.marginal; unapprove(S.lesion); }
     const side = e.target.value || null;
     if (side && window.Ref && !Ref.get()) await Ref.compute(false);
     if (side && !(window.Ref && Ref.get() && Ref.get().cond[side])) { alertMsg('Kondil bulunamadı; Anatomi adımında kondili elle seçin.'); e.target.value = S.lesion.condyle || ''; return; }
     S.lesion.condyle = side; unapprove(S.lesion); syncLesion(); schedule(true);
+  });
+  $('l_marg').addEventListener('input', e => { S.lesion.marginal = +e.target.value; $('lo_marg').textContent = `${fmt(S.lesion.marginal, 1)} mm`; });
+  $('l_marg').addEventListener('change', () => { unapprove(S.lesion); syncLesion(); schedule(true); });
+  $('l_fragile').addEventListener('change', e => {
+    if (e.target.checked) S.lesion.fragile = true; else delete S.lesion.fragile;
+    if (S.lesion.fragile && S.lesion.marginal != null) { delete S.lesion.marginal; unapprove(S.lesion); syncLesion(); schedule(true); alertMsg(xl('Işınlanmış ya da atrofik çenede marjinal rezeksiyon önerilmez: segment rezeksiyona dönüldü.')); }
+    else emit('changed');
   });
   syncGuideInputs();
 
@@ -3939,7 +4065,7 @@
 ${draft ? `<p>Onay bekleyen: ${esc(miss.join(', ') || '-')}${S.crit ? ` · ${S.crit} kritik kontrol` : ''}</p>` : ''}
 <h2>Vaka</h2><p>${esc(caseLine())}</p><p>Segmentasyon: ${esc(S.segMethod)}</p>
 <h2>Görüntü kalite kontrolü</h2><ul>${li(S.qc)}</ul>
-<h2>Rezeksiyon aralığı</h2><p>Lezyon ${fmt(S.lesion.from)} ile ${fmt(S.lesion.to)} mm arası, güvenlik payı ${fmt(S.lesion.margin)} mm${S.lesion.type && LESION_TYPES[S.lesion.type] ? ` (${esc(xl(LESION_TYPES[S.lesion.type][0]))})` : ''} · ${st(S.lesion)}</p>
+<h2>Rezeksiyon aralığı</h2><p>Lezyon ${fmt(S.lesion.from)} ile ${fmt(S.lesion.to)} mm arası, güvenlik payı ${fmt(S.lesion.margin)} mm${S.lesion.type && LESION_TYPES[S.lesion.type] ? ` (${esc(xl(LESION_TYPES[S.lesion.type][0]))})` : ''}${S.lesion.marginal != null ? ` · ${xl(`marjinal rezeksiyon, alt kenarda ${fmt(S.lesion.marginal, 1)} mm kemik kalır`)}` : ''}${S.g.pads ? ` · ${xl('pedli guide (deneysel)')}` : ''} · ${st(S.lesion)}</p>
 ${(() => { const r = window.ErrProp && ErrProp.run(); return r ? `<h2>${esc(xl('Hata yayılımı (öngörü)'))}</h2><p class="small">${esc(xl('Yuvadaki testere boşluğu ve guide oturma boşluğundan beklenen sapma aralığı (Monte Carlo; model örnek varsayımlara dayanır, ölçüm değildir).'))}</p><table><thead><tr><th>${esc(xl('Nokta'))}</th><th>${esc(xl('Ortanca'))}</th><th>%95</th><th>${esc(xl('En çok'))}</th></tr></thead><tbody>${r.res.map(x => `<tr><td>${esc(x.name)}</td><td>${fmt(x.p50, 2)} mm</td><td>${fmt(x.p95, 2)} mm</td><td>${fmt(x.max, 2)} mm</td></tr>`).join('')}</tbody></table>` : ''; })()}
 ${window.Clinical ? `<h2>Klinik eşikler</h2><p class="small">${esc(xl('Kontrollerin kullandığı değerler; örnek değerlerdir, klinik ekip belirler.'))}${Clinical.changed().length ? ' ' + esc(xl('Bu kurulumda değiştirilmiş değerler * ile işaretli.')) : ''}</p><table><tbody>${Clinical.list().map(([t, v, u, ch]) => `<tr><td>${esc(xl(t))}${ch ? ' *' : ''}</td><td>${fmt(v, v >= 100 ? 0 : 1)} ${esc(u)}</td></tr>`).join('')}</tbody></table>` : ''}
 <h2>Kesi düzlemleri</h2><table><tr><th>Kesi</th><th>Konum</th><th>Yatay açı</th><th>Dikey açı</th><th>Yuva</th><th>Durum</th></tr>${S.planes.map((p, i) => `<tr><td>${i + 1}</td><td>${fmt(p.off)} mm</td><td>${fmt(p.yaw)}°</td><td>${fmt(p.pitch)}°</td><td>${fmt(p.w)} mm</td><td>${st(p)}</td></tr>`).join('')}</table>
@@ -3970,8 +4096,18 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   // and cells part bone, part soft tissue (partial volume, the slice terraces) place the surface between cells
   const HU_SOFT = 50;
   const softOcc = (hu, thr) => { const hw = Math.max(100, thr - HU_SOFT); return Math.max(0, Math.min(255, Math.round(255 * (0.5 + (hu - thr) / (2 * hw))))); };
+  // the saw slots of a server request: the planes, and for a marginal resection the upright slots bounded below by the
+  // horizontal one and the horizontal slot bounded by the upright cuts (as buildGuide clips them)
+  function margPlanes(c, arr) {
+    const M = c.marg === undefined ? margPlane() : c.marg, out = c.pls.map(pl => ({ p: arr(pl.pSlot || pl.p), N: arr(pl.N), w: pl.w }));
+    if (!M || !out.length) return out;
+    out.forEach(o => { o.clip = [{ p: arr(M.pSlot), N: arr(M.N), t: M.w / 2 }]; });
+    out.push({ p: arr(M.pSlot), N: arr(M.N), w: M.w, clip: [{ p: arr(M.A.pSlot || M.A.p), N: arr(M.NA), t: M.A.w / 2 }, { p: arr(M.B.pSlot || M.B.p), N: arr(M.NB.clone().negate()), t: M.B.w / 2 }] });
+    return out;
+  }
   function guideRequest(c) {
-    const { vol, g } = c, arr = q => [q.x, q.y, q.z];
+    const { vol } = c, arr = q => [q.x, q.y, q.z], Mg = c.marg === undefined ? margPlane() : c.marg;
+    const g = Mg ? Object.assign({}, c.g, { side: c.v.dot(Mg.N) >= 0 ? 1 : -1 }) : c.g;
     const top = g.clear + Math.max(g.wall + Math.max(g.bridge, 0, ...c.scs.map(s => s.sc.sleeveH)), g.boss || 0) + 6;
     const ss = stopSides(g, c.v), sx = ss.pos || ss.neg ? (g.stopL || 6) : 0, sz = ss.pos || ss.neg ? (g.stopD || 5) : 0;
     const deep = Math.max(g.wrap + 4, ...(c.wrapProfile || []).map(q => 4 - q[1])) + sz, R = Math.hypot(Math.abs(g.uc || 0) + g.L / 2 + 4, Math.abs(g.vc || 0) + g.W / 2 + 4 + Math.max(sx, g.slotFlange > 0 ? g.slotFlange : 0), Math.max(deep, top)) + 6, ic = G.indexOf(vol, arr(c.P)), dims = [vol.nx, vol.ny, vol.nz];
@@ -4006,8 +4142,8 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     let bin = ''; for (let i = 0; i < mask.length; i += 0x8000) bin += String.fromCharCode.apply(null, mask.subarray(i, i + 0x8000));
     return {
       crop: { nx, ny, nz, sp: vol.sp.slice(), origin: G.worldOf(vol, ...lo), axes: vol.axes.map(a => a.slice()) }, mask_b64: btoa(bin), ...(soft ? { mask_scale: 255 } : {}),
-      frame: { p: arr(c.P), u: arr(c.u), v: arr(c.v), n: arr(c.n) }, g: Object.assign(clone(c.g), { clear: c.g.clear + (c.g.peri || 0) }), resolution: 0.2,
-      planes: c.pls.map(pl => ({ p: arr(pl.pSlot || pl.p), N: arr(pl.N), w: pl.w })),
+      frame: { p: arr(c.P), u: arr(c.u), v: arr(c.v), n: arr(c.n) }, g: Object.assign(clone(g), { clear: g.clear + (g.peri || 0) }), resolution: 0.2,
+      planes: margPlanes(c, arr),
       gap: (gp => gp && { A: { p: arr(gp.A.p), N: arr(gp.A.N), w: gp.A.w }, B: { p: arr(gp.B.p), N: arr(gp.B.N), w: gp.B.w }, flange: c.g.flange })(c.gap || splitGap(c.g, c.pls)),
       screws: c.scs.filter(s => s.entry).map(s => ({ entry: arr(s.entry), dir: arr(s.dir), d: s.sc.d + (c.g.fit || 0), D: s.sc.D, sleeveH: s.sc.sleeveH })),
       wrap_profile: c.wrapProfile || null,
@@ -4072,7 +4208,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     const bin = atob(js.stl_b64), u8 = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
     return { stl: u8, watertight: js.watertight, bodies: js.bodies, volume: js.volume_mm3, clear: js.bone_clear_mm, inBone: js.in_bone_verts };
   }
-  const prodKey = () => JSON.stringify([S.source && S.source.fp, S.g, S.anchor && vec(S.anchor.p), S.anchor && vec(S.anchor.n), S.planes.map(p => [p.off, p.yaw, p.pitch, p.w]), S.screws.map(s => [s.u, s.v, s.tiltU, s.tiltV, s.d, s.D, s.sleeveH, s.part || 0]), S.segMethod, $('thr').value, [...S.selected].sort((a, b) => a - b), window.SegEdit ? SegEdit.key() : '']);
+  const prodKey = () => JSON.stringify([S.source && S.source.fp, S.g, S.anchor && vec(S.anchor.p), S.anchor && vec(S.anchor.n), S.planes.map(p => [p.off, p.yaw, p.pitch, p.w]), S.screws.map(s => [s.u, s.v, s.tiltU, s.tiltV, s.d, s.D, s.sleeveH, s.part || 0]), S.segMethod, $('thr').value, [...S.selected].sort((a, b) => a - b), window.SegEdit ? SegEdit.key() : ''].concat(S.lesion.marginal != null ? [['marginal', S.lesion.marginal]] : []));
   // the bone of the production STL and of the guide preview (plan 1.2): on a threshold segmentation the CT itself at full
   // resolution (HU >= threshold inside the planning bone), also after brush / eraser edits: the edits (segEdits, on the
   // 0.8 mm grid) then add the painted cells and take out the erased ones, and only there the surface is the 0.8 mm
@@ -4303,6 +4439,8 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
       if (!plan.g || plan.g.kerfSide === undefined) S.g.kerfSide = 0;
       // plans saved before the slot rim existed had none: keep them as they were approved (the slot play check still applies)
       if (!plan.g || plan.g.boss === undefined) S.g.boss = 0;
+      // the pad layout (plan 2026-10-30) is stored only when it is on, so plans written before it keep their hash
+      if (plan.g && plan.g.pads) S.g.pads = 1; else delete S.g.pads;
       S.g.kerfSide = S.g.kerfSide ? 1 : 0;
       S.g.wrapU = Array.isArray(plan.g && plan.g.wrapU) ? plan.g.wrapU.slice(0, 64).map(x => [Number(x[0]), Number(x[1])]).filter(x => x.every(Number.isFinite) && x[1] >= 1 && x[1] <= 20) : null;
       if (S.g.wrapU && S.g.wrapU.length < 2) S.g.wrapU = null;
@@ -4316,7 +4454,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
       S.g.stopT = S.g.stopT ? 1 : 0; S.g.stopB = S.g.stopB ? 1 : 0; clampTo(S.g, 'stopL', 2, 15); clampTo(S.g, 'stopD', 1, 15);
       S.g.stopP = S.g.stopP ? 1 : 0; S.g.bar = S.g.bar ? 1 : 0; clampTo(S.g, 'bossW', 1, 4);
       const L0 = { from: -6, to: 6, margin: CV('margin', 3) }, pl = plan.lesion || {};
-      S.lesion = Object.assign(num(pl, ['from', 'to', 'margin'], L0), who(pl), { condyle: pl.condyle === 'R' || pl.condyle === 'L' ? pl.condyle : null }, pl.type && LESION_TYPES[pl.type] ? { type: pl.type } : {});
+      S.lesion = Object.assign(num(pl, ['from', 'to', 'margin'], L0), who(pl), { condyle: pl.condyle === 'R' || pl.condyle === 'L' ? pl.condyle : null }, pl.type && LESION_TYPES[pl.type] ? { type: pl.type } : {}, pl.marginSet === true ? { marginSet: true } : {}, pl.fragile === true ? { fragile: true } : {}, Number.isFinite(pl.marginal) && pl.marginal >= 5 && pl.marginal <= 30 && !pl.condyle ? { marginal: pl.marginal } : {});
       const P0 = { off: 0, yaw: 0, pitch: 0, w: 1.2 }, C0 = Object.assign({ u: 0, v: 0, tiltU: 0, tiltV: 0 }, SCREW_DEFAULT.mandible);
       // pv / pn: the cut's point moved within its plane (a cut turned with the bone, cutAlongBone). The plane is the same
       // without them, but the cut point is where the defect, the graft ends and the plan hash start from: keep them

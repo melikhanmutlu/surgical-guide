@@ -77,4 +77,52 @@ test('A2: a shell on a round shaft (the fibula) resists neither rotation about t
   assert.ok(Math.min(...r.rots.filter(x => x.axis === 'v').map(x => x.r)) > 0.05);
 });
 
+// ---------- the fit test (plan 2026-10-30): Seat.freeMoves on the sub-voxel signed distance ----------
+// signed distance to the bone (mm, outside > 0) as the kernel builds it before the blur
+function fitGrid(nx, ny, nz, boneFn, guideFn, h = 0.5, clear = 0.3) {
+  const g = grid(nx, ny, nz, boneFn, guideFn, h), N = nx * ny * nz, dist = new Float32Array(N);
+  for (let i = 0; i < N; i++) dist[i] = g.B[i] ? -h / 2 : g.D[i] * h - h / 2;
+  // the guide's inner surface sits `clear` off the bone: guide voxels closer than that are not guide
+  for (let i = 0; i < N; i++) if (g.Gm[i] && dist[i] < clear) g.Gm[i] = 0;
+  return { Gm: g.Gm, dist, nx, ny, nz, h, lo: [0, 0, 0], clear, d: [0, 0, 1] };
+}
+const moveOf = (r, kind, axis) => r.moves.filter(m => m.kind === kind && m.axis === axis);
+
+test('fit test: a flat plate on flat bone slides and twists freely (the free directions are reported)', () => {
+  const r = Seat.freeMoves(fitGrid(NX, NY, NZ, (i, j, k) => k < 8, (i, j, k) => k >= 8 && k < 13 && i > 3 && i < 26 && j > 3 && j < 16));
+  assert.ok(r.ok && r.n > 0);
+  assert.ok(r.moves.filter(m => m.kind === 'slide').every(m => m.free), 'every slide on a flat face is free');
+  assert.ok(moveOf(r, 'rot', 'd').every(m => m.free), 'twisting on a flat face is free');
+  // tilting about u or v pushes one edge into the bone
+  assert.ok(moveOf(r, 'rot', 'u').every(m => !m.free) && moveOf(r, 'rot', 'v').every(m => !m.free), JSON.stringify(r.moves.filter(m => m.kind === 'rot').map(m => [m.axis, m.sign, m.free, m.pivot])));
+});
+
+test('fit test: a guide in a groove cannot slide across it, only along it', () => {
+  const bone = (i, j, k) => k < 8 || ((j < 5 || j > 14) && k < 14);
+  const r = Seat.freeMoves(fitGrid(NX, NY, NZ, bone, (i, j, k) => k >= 8 && k < 16 && i > 3 && i < 26 && j >= 5 && j <= 14));
+  const sl = r.moves.filter(m => m.kind === 'slide');
+  assert.ok(sl.filter(m => Math.abs(m.dir[1]) > 0.5).every(m => !m.free), 'across the groove blocked');
+  assert.ok(sl.filter(m => Math.abs(m.dir[0]) > 0.99).every(m => m.free), 'along the groove free');
+});
+
+test('fit test: a box over a block fits in one place only, even for a step of a fifth of a voxel', () => {
+  // a 10 x 6 block on a base; the guide covers the block's top and four sides
+  const blk = (i, j, k) => k < 6 || (i >= 10 && i < 20 && j >= 7 && j < 13 && k < 12);
+  const r = Seat.freeMoves(fitGrid(NX, NY, NZ, blk, (i, j, k) => i >= 7 && i < 23 && j >= 4 && j < 16 && k >= 6 && k < 15));
+  assert.equal(r.free, 0, JSON.stringify(r.moves.filter(m => m.free).map(m => [m.kind, m.axis, m.az, m.sign])));
+  // a step of a fifth of a voxel (0.1 mm) across the block is still seen: the distance is read between the voxels
+  const fine = Seat.freeMoves(fitGrid(NX, NY, NZ, blk, (i, j, k) => i >= 7 && i < 23 && j >= 4 && j < 16 && k >= 6 && k < 15), { T: 0.1 });
+  assert.equal(fine.free, 0, 'a 0.1 mm slide is blocked: ' + JSON.stringify(fine.moves.filter(m => m.free).map(m => [m.kind, m.axis, m.az])));
+});
+
+test('fit test with screws: two pins hold every slide and twist the bone alone lets through; one pin lets it turn about itself', () => {
+  const g = fitGrid(NX, NY, NZ, (i, j, k) => k < 8, (i, j, k) => k >= 8 && k < 13 && i > 3 && i < 26 && j > 3 && j < 16);
+  const two = Seat.freeMoves(Object.assign({}, g, { screws: [{ el: [4, 5, 4], ol: [0, 0, 1] }, { el: [11, 5, 4], ol: [0, 0, 1] }] }));
+  assert.ok(two.free > 0 && two.freeScrewed === 0, `free ${two.free}, with screws ${two.freeScrewed}`);
+  const one = Seat.freeMoves(Object.assign({}, g, { screws: [{ el: [7.5, 5, 4], ol: [0, 0, 1] }] }));
+  // the one pin stands at the contact centroid: the twist about it stays free, the slides are held
+  assert.ok(moveOf(one, 'rot', 'd').every(m => m.freeScrewed), 'one pin: the guide still turns about it');
+  assert.ok(one.moves.filter(m => m.kind === 'slide').every(m => !m.freeScrewed), 'one pin holds the slides');
+});
+
 await run('seat.js');

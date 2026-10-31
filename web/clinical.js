@@ -17,6 +17,8 @@ window.Clinical = (function () {
     metalCore: [1.25, 'Metal çekirdeği (mineden ayırmak için en az yarıçap)', 'mm', 0, 3],
     metalBand: [1.5, 'Guide altında metal arama bandı', 'mm', 0.5, 5],
     margin: [3, 'Güvenlik payı (başlangıç)', 'mm', 0, 15],
+    marginalMin: [10, 'Marjinal rezeksiyonda alt kenarda kalan kemik (en az)', 'mm', 5, 20],
+    marginWarn: [10, 'Güvenlik payı (malign / agresif lezyonda altı uyarı)', 'mm', 0, 15],
     // guide screws against the saw slots and the osteotomy (sleeve column in the guide and drill path in bone)
     screwSlotGap: [2, 'Vida kovanı ile kesi yuvası arası (otomatik yerleşim, altı uyarı)', 'mm', 0.5, 6],
     screwSlotMin: [0.5, 'Vida kovanı ile kesi yuvası arası (en az, altı kritik)', 'mm', 0, 3],

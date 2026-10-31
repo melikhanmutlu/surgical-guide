@@ -513,6 +513,8 @@ def _validate_guide(req):
     planes, screws = req.get("planes") or [], req.get("screws") or []
     need(isinstance(planes, list) and all(isinstance(p, dict) and _vec(p.get("p")) and _vec(p.get("N")) and _num(p.get("w")) for p in planes),
          "planes must be a list of {p, N, w}")
+    need(all(p.get("clip") is None or (isinstance(p.get("clip"), list) and len(p["clip"]) <= 4 and all(isinstance(c, dict) and _vec(c.get("p")) and _vec(c.get("N")) and (c.get("t") is None or _num(c.get("t"))) for c in p["clip"])) for p in planes),
+         "planes[].clip must be a list of up to 4 {p, N, t}")
     need(isinstance(screws, list) and all(isinstance(s, dict) and _vec(s.get("entry")) and _vec(s.get("dir")) and all(_num(s.get(k)) for k in ("d", "D", "sleeveH"))
                                           for s in screws), "screws must be a list of {entry, dir, d, D, sleeveH}")
     gap = req.get("gap")
@@ -700,6 +702,12 @@ def build_guide(req, progress=None):
                    "bridge": (bridge, 0, 30), "vc": (vc, -50, 50), "uc": (uc, -100, 100), "skirt": (skirt, 0, 30),
                    "boss": (boss, 0, 15), "bossW": (boss_w, 0.5, 6)})
     boss_h = boss if boss > wall else 0.0
+    # pads (g.pads, gkernel.js, plan 2026-10-30): the guide touches the bone only on round pads of radius padR just past
+    # each saw slot; elsewhere its inner surface stands `relief` mm further off
+    pads_on = bool(g.get("pads"))
+    pad_r = float(g.get("padR") or 4)
+    relief = (1.0 if g.get("relief") is None else float(g["relief"])) if pads_on else 0.0
+    _check_ranges({"padR": (pad_r, 1, 15), "relief": (relief, 0, 5)})
     # optional per-position wrap depth ([[uu, depth], ...], the automatic sizing's profile): the depth at uu is the
     # smaller of g.wrap and the profile's value
     wrap_u = None
@@ -985,8 +993,32 @@ def build_guide(req, progress=None):
         Nf = R.T @ _unit(pl["N"])
         e = float(Nf @ to_f(pl["p"]))
         half = float(pl["w"]) / 2
+        # clip: the slot exists only where every half-space N.(x - p) >= -t holds (marginal resection, app.js buildGuide)
+        clips = []
+        for c_ in pl.get("clip") or []:
+            Nc = R.T @ _unit(c_["N"])
+            clips.append((Nc, float(Nc @ to_f(c_["p"])) - float(c_.get("t") or 0)))
         if half > 0:
-            slots.append((Nf, e, half))
+            slots.append((Nf, e, half, clips))
+
+    def slot_here(clips, i):
+        """Where on slab i the slot exists (True everywhere for an unbounded slot)."""
+        m = np.ones((ny, nz), bool)
+        for Nc, ec in clips:
+            m &= (Nc[0] * UU[i] + Nc[1] * VV2 + Nc[2] * NN2 - ec) >= 0
+        return m
+    # the pads in guide-frame (u, v): two per cut on the kept side, as gkernel.js places them
+    pad_at = np.zeros((nx, ny), bool)
+    if pads_on:
+        off = max(pad_r + 1, W / 4)
+        for Nf, e, half, _c in slots:
+            if abs(Nf[0]) < 0.3:
+                continue
+            us = (e - Nf[1] * vc) / Nf[0]
+            sd_ = 1.0 if us - uc >= 0 else -1.0
+            pu = us + sd_ * (half + boss_w + pad_r + 1)
+            for dv in (-off, off):
+                pad_at |= np.hypot(UU[:, None] - pu, VV[None, :] - (vc + dv)) <= pad_r
 
     def slab(i, with_slots, e_t):
         """The field of slab i: the box (length, width, wrap line, stops), the shell band on the envelope (cut by the
@@ -1000,14 +1032,18 @@ def build_guide(req, progress=None):
             box = np.where(band_j & shadow, np.maximum(box, r), box)
             sv = np.where(band_j & ~shadow, np.maximum(np.maximum(outer, av2 - W / 2 - stop_x2), wrap_at[i] - stop_z2 - NN2), 1e3)
             box = np.where(sd2, np.minimum(box, sv), box)
-        shell = np.maximum(clear - dde_i, dde_i - cw)
+        cl = np.where(pad_at[i][:, None], clear, clear + relief).astype(np.float32) if relief else clear
+        shell = np.maximum(cl - dde_i, dde_i - cw)
         if with_slots:
+            ins = [slot_here(cs, i) if cs else None for _n, _e, _h, cs in slots]
             if boss_h:
-                for Nf, e, half in slots:
+                for (Nf, e, half, _c), m in zip(slots, ins):
                     sd = np.abs(Nf[0] * UU[i] + Nf[1] * VV2 + Nf[2] * NN2 - e)
-                    shell = np.minimum(shell, np.maximum(np.maximum(sd - half - boss_w, clear - dde_i), dde_i - clear - boss_h))
-            for Nf, e, half in slots:
-                shell = np.maximum(shell, half - np.abs(Nf[0] * UU[i] + Nf[1] * VV2 + Nf[2] * NN2 - e))
+                    b_ = np.maximum(np.maximum(sd - half - boss_w, cl - dde_i), dde_i - clear - boss_h)
+                    shell = np.minimum(shell, b_ if m is None else np.where(m, b_, 1e3))
+            for (Nf, e, half, _c), m in zip(slots, ins):
+                c_ = half - np.abs(Nf[0] * UU[i] + Nf[1] * VV2 + Nf[2] * NN2 - e)
+                shell = np.maximum(shell, c_ if m is None else np.where(m, c_, -1e3))
         br = np.maximum(bridge_lo - dde_i, dde_i - bridge_hi)
         if e_t is not None:
             br = np.maximum(br, e_t)
@@ -1015,11 +1051,13 @@ def build_guide(req, progress=None):
         if with_slots and flg > 0 and slots:
             fl_h = boss_h or wall
             rim = np.full(f.shape, 1e3, np.float32)
-            for Nf, e, half in slots:
+            for (Nf, e, half, _c), m in zip(slots, ins):
                 sd = np.abs(Nf[0] * UU[i] + Nf[1] * VV2 + Nf[2] * NN2 - e)
-                rim = np.minimum(rim, np.maximum(np.maximum(sd - half - boss_w, clear - dde_i), dde_i - clear - fl_h))
-            for Nf, e, half in slots:
-                rim = np.maximum(rim, half - np.abs(Nf[0] * UU[i] + Nf[1] * VV2 + Nf[2] * NN2 - e))
+                b_ = np.maximum(np.maximum(sd - half - boss_w, cl - dde_i), dde_i - clear - fl_h)
+                rim = np.minimum(rim, b_ if m is None else np.where(m, b_, 1e3))
+            for (Nf, e, half, _c), m in zip(slots, ins):
+                c_ = half - np.abs(Nf[0] * UU[i] + Nf[1] * VV2 + Nf[2] * NN2 - e)
+                rim = np.maximum(rim, c_ if m is None else np.where(m, c_, -1e3))
             fb = np.maximum(np.maximum(outer, av2 - W / 2 - flg), wrap_at[i] - NN2)
             f = np.minimum(f, np.maximum(np.maximum(fb, rim), dd_i - dde_i - skirt))
         return np.where(far, np.maximum(outer, dde_i - top_hi), f).astype(np.float32)
@@ -1093,7 +1131,7 @@ def build_guide(req, progress=None):
                     i_, j_, k_ = idx
                     if F[i_, j_, k_] < 0:
                         hit += 1
-                    elif clear - r < dde[i_, j_, k_] <= cw + r and any(abs(Nf @ q - e) < half + r for Nf, e, half in slots):
+                    elif clear - r < dde[i_, j_, k_] <= cw + r and any(abs(Nf @ q - e) < half + r for Nf, e, half, _c in slots):
                         hit += 1
         if not (cnt and hit >= 0.5 * cnt):
             screw_info.append({"ok": False, "no_body": True})
@@ -1134,7 +1172,7 @@ def build_guide(req, progress=None):
                 put = in_cyl & (sleeve < 0)
                 if put.any():
                     uu_, vv_, nn_ = UU[sl[0]][:, None, None], VV[sl[1]][None, :, None], NN[sl[2]][None, None, :]
-                    for Nf, e, half in slots:
+                    for Nf, e, half, _c in slots:
                         in_slot += int(np.count_nonzero(put & (np.abs(Nf[0] * uu_ + Nf[1] * vv_ + Nf[2] * nn_ - e) < half)))
             F[sl] = np.where(in_cyl, np.minimum(F[sl], sleeve), F[sl])
         if n_all and shaded > 0.1 * n_all:

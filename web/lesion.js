@@ -9,6 +9,9 @@ window.Lesion = (function () {
   const { S, V, fmt, bus } = St, $ = id => document.getElementById(id);
   const COLOR = 0xd9363e;
   let shown = '', tool = null, mask = null, radius = 4, stroke = null, lastPaint = null, planMsg = '', planning = false;
+  // lastAxis: the slice axis of the last brush stroke (the slices are filled in between along it); sugg: the region a
+  // click grew (an orange proposal the surgeon adds or drops, never part of the plan by itself)
+  let lastAxis = 2, sugg = null, suggMsg = '';
 
   const n = () => S.red ? S.red.nx * S.red.ny * S.red.nz : 0;
   const ensure = () => { const N = n(); if (!mask || mask.length !== N) mask = new Uint8Array(N); };
@@ -32,7 +35,7 @@ window.Lesion = (function () {
   function stamp(world, axis, erase) {
     ensure();
     const r = S.red, c = G.indexOf(r, world), dim = [r.nx, r.ny, r.nz], rad = r.sp.map(s => Math.ceil(radius / s));
-    if (axis != null) rad[axis] = 0;
+    if (axis != null) { rad[axis] = 0; if (!erase) lastAxis = axis; }
     const lo = c.map((x, a) => Math.max(0, Math.round(x) - rad[a])), hi = c.map((x, a) => Math.min(dim[a] - 1, Math.round(x) + rad[a]));
     let changed = 0;
     for (let k = lo[2]; k <= hi[2]; k++) for (let j = lo[1]; j <= hi[1]; j++) for (let i = lo[0]; i <= hi[0]; i++) {
@@ -46,6 +49,7 @@ window.Lesion = (function () {
   }
   function paint(world, axis, first) {
     if (!tool || !S.red) return;
+    if (tool === 'grow') { if (first) grow(world); return; }
     if (first) stroke = { n: 0 };
     if (!stroke) return;
     stroke.n += stamp(world, axis, tool === 'erase'); lastPaint = { p: world, axis };
@@ -104,20 +108,159 @@ window.Lesion = (function () {
   function changed() { planMsg = ''; build(); status(); St.emit('changed'); if (window.MPR) MPR.redraw(); }
 
   // ---------- 3D body ----------
-  function build() {
+  function build() { body('lesionPaint', 'Lezyon (boyanan)', count() ? painted().list : null, COLOR, 0.55); buildShell(); }
+  function body(key, name, L, color, opacity) {
     const r = S.red;
-    if (!r || !count()) { St.setPart('lesionPaint', null, null); return; }
-    const L = painted().list, b = [Infinity, Infinity, Infinity, -1, -1, -1];
+    if (!r || !L || !L.length) { St.setPart(key, null, null); return; }
+    const b = [Infinity, Infinity, Infinity, -1, -1, -1];
     for (const v of L) { const i = v % r.nx, j = ((v / r.nx) | 0) % r.ny, k = (v / (r.nx * r.ny)) | 0; if (i < b[0]) b[0] = i; if (j < b[1]) b[1] = j; if (k < b[2]) b[2] = k; if (i > b[3]) b[3] = i; if (j > b[4]) b[4] = j; if (k > b[5]) b[5] = k; }
     // the surface is taken on the painted box (plus 2 voxels) only, not on the whole working grid
     const bb = [b[0] - 2, b[1] - 2, b[2] - 2, b[3] + 2, b[4] + 2, b[5] + 2].map((x, a) => Math.max(0, Math.min([r.nx, r.ny, r.nz][a % 3] - 1, x)));
     const sx = bb[3] - bb[0] + 1, sy = bb[4] - bb[1] + 1, sz = bb[5] - bb[2] + 1, f = new Float32Array(sx * sy * sz);
     for (const v of L) { const i = v % r.nx, j = ((v / r.nx) | 0) % r.ny, k = (v / (r.nx * r.ny)) | 0; f[(i - bb[0]) + sx * ((j - bb[1]) + sy * (k - bb[2]))] = 1; }
     const toW = (i, j, k) => St.toWorldRed(i + bb[0], j + bb[1], k + bb[2]);
-    const m = St.meshFromNets(G.surfaceNets(f, sx, sy, sz, 0.5), toW, new THREE.MeshStandardMaterial({ color: COLOR, roughness: 0.7, transparent: true, opacity: 0.55, depthWrite: false }));
+    const m = St.meshFromNets(G.surfaceNets(f, sx, sy, sz, 0.5), toW, new THREE.MeshStandardMaterial({ color, roughness: 0.7, transparent: true, opacity, depthWrite: false }));
     m.renderOrder = 4;
-    St.setPart('lesionPaint', 'Lezyon (boyanan)', m, COLOR);
+    St.setPart(key, name, m, color);
   }
+
+  // ---------- the margin shell (plan 2026-10-30, step 4) ----------
+  // The painted lesion grown by the safety margin in every direction: shown see-through in 3D, and measured against the
+  // marked canal and roots (Canal: S.canals, S.roots), so the surgeon sees what the margin takes with it. The cuts
+  // already clear every painted voxel by the margin (planFromLesion); the shell adds what the cuts cannot show: the
+  // canal and the roots inside the margin, and how much bone is left under it (marginal resection, app.js).
+  const SHELL_COLOR = 0xe8a33c;
+  let shellMemo = null;
+  function shellInfo() {
+    const r = S.red, L = painted().list, mg = S.lesion ? S.lesion.margin : 0;
+    if (!r || !L.length) return null;
+    if (shellMemo && shellMemo.ver === ver && shellMemo.mask === mask && shellMemo.mg === mg && shellMemo.red === r) return shellMemo;
+    const b = [Infinity, Infinity, Infinity, -1, -1, -1];
+    for (const v of L) { const q = [v % r.nx, ((v / r.nx) | 0) % r.ny, (v / (r.nx * r.ny)) | 0]; for (let a = 0; a < 3; a++) { if (q[a] < b[a]) b[a] = q[a]; if (q[a] > b[a + 3]) b[a + 3] = q[a]; } }
+    const pad = r.sp.map(x => Math.ceil((mg + 2) / x) + 1), lo = [0, 1, 2].map(a => Math.max(0, b[a] - pad[a])), hi = [0, 1, 2].map(a => Math.min([r.nx, r.ny, r.nz][a] - 1, b[a + 3] + pad[a]));
+    const sx = hi[0] - lo[0] + 1, sy = hi[1] - lo[1] + 1, sz = hi[2] - lo[2] + 1, m = new Uint8Array(sx * sy * sz);
+    for (const v of L) { const i = v % r.nx - lo[0], j = ((v / r.nx) | 0) % r.ny - lo[1], k = ((v / (r.nx * r.ny)) | 0) - lo[2]; m[i + sx * (j + sy * k)] = 1; }
+    const D = G.edt(m, sx, sy, sz, r.sp);
+    // the lesion's surface voxels (for distances to the canal and roots)
+    const surf = [];
+    for (const v of L) {
+      const i = v % r.nx, j = ((v / r.nx) | 0) % r.ny, k = (v / (r.nx * r.ny)) | 0;
+      if (i > 0 && j > 0 && k > 0 && i < r.nx - 1 && j < r.ny - 1 && k < r.nz - 1 && mask[v - 1] && mask[v + 1] && mask[v - r.nx] && mask[v + r.nx] && mask[v - r.nx * r.ny] && mask[v + r.nx * r.ny]) continue;
+      surf.push(G.worldOf(r, i, j, k));
+    }
+    const near = p => { let d = Infinity; for (const q of surf) { const x = p[0] - q[0], y = p[1] - q[1], z = p[2] - q[2], e = x * x + y * y + z * z; if (e < d) d = e; } return Math.sqrt(d); };
+    let canal = null, roots = [];
+    (S.canals || []).forEach(c => (c.pts || []).forEach(p => { const d = near(p) - (window.Canal ? Canal.R_CANAL : 1.5); if (canal == null || d < canal) canal = d; }));
+    (S.roots || []).forEach((rt, i) => { let d = Infinity; for (let t = 0; t <= 1.0001; t += 0.1) { const p = [0, 1, 2].map(a => rt.a[a] + (rt.b[a] - rt.a[a]) * t); d = Math.min(d, near(p) - (rt.r || 2.5)); } roots.push({ i, d }); });
+    shellMemo = { ver, mask, mg, red: r, lo, sx, sy, sz, D, canal, roots, hasCanal: (S.canals || []).length > 0, hasRoots: (S.roots || []).length > 0, inRoots: roots.filter(x => x.d < mg).length };
+    return shellMemo;
+  }
+  function buildShell() {
+    const r = S.red, sh = shellInfo(), mg = S.lesion ? S.lesion.margin : 0;
+    if (!sh || !(mg > 0)) { St.setPart('lesionShell', null, null); return; }
+    const f = new Float32Array(sh.D.length); for (let i = 0; i < f.length; i++) f[i] = -sh.D[i];
+    const toW = (i, j, k) => St.toWorldRed(i + sh.lo[0], j + sh.lo[1], k + sh.lo[2]);
+    const m = St.meshFromNets(G.surfaceNets(f, sh.sx, sh.sy, sh.sz, -mg), toW, new THREE.MeshStandardMaterial({ color: SHELL_COLOR, roughness: 0.8, transparent: true, opacity: 0.18, depthWrite: false, side: THREE.DoubleSide }));
+    m.renderOrder = 3;
+    St.setPart('lesionShell', 'Güvenlik payı kabuğu', m, SHELL_COLOR);
+  }
+  // one line for the status: the margin shell against the canal and the roots
+  function shellLine() {
+    const sh = shellInfo(), mg = S.lesion ? S.lesion.margin : 0; if (!sh) return '';
+    const parts = [];
+    if (sh.hasCanal) parts.push(sh.canal < mg ? xl(`kanal pay içinde (lezyona ${fmt(Math.max(0, sh.canal), 1)} mm)`) : xl(`kanala ${fmt(sh.canal, 1)} mm`));
+    else parts.push(xl('kanal işaretlenmedi'));
+    if (sh.hasRoots) parts.push(sh.inRoots ? xl(`${sh.inRoots} diş kökü pay içinde`) : xl('diş kökleri pay dışında'));
+    return ` ${xl(`Güvenlik payı kabuğu (${fmt(mg, 1)} mm):`)} ${parts.join(', ')}.`;
+  }
+
+  // ---------- fill between the painted slices (plan 2026-10-30, step 3) ----------
+  // The lesion is painted on a few slices (the first, the widest, the last); the slices in between are filled by
+  // blending the painted shapes: each painted slice's signed distance (in-plane, mm) is interpolated linearly between
+  // two painted slices and the voxels at or below zero are painted. It reads no density, so it cannot run into the
+  // canal or the marrow; it also knows nothing past the bone, so a lesion breaking through the cortex is painted by hand.
+  function sliceDist(axis, k) {
+    const r = S.red, a1 = axis === 0 ? 1 : 0, a2 = axis === 2 ? 1 : 2, d = [r.nx, r.ny, r.nz], n1 = d[a1], n2 = d[a2], m = new Uint8Array(n1 * n2), ix = [0, 0, 0]; ix[axis] = k;
+    let any = 0;
+    for (let b = 0; b < n2; b++) for (let a = 0; a < n1; a++) { ix[a1] = a; ix[a2] = b; if (mask[ix[0] + r.nx * (ix[1] + r.ny * ix[2])]) { m[a + n1 * b] = 1; any++; } }
+    return any ? { sd: G.sdf(m, n1, n2, 1, [r.sp[a1], r.sp[a2], 1]), a1, a2, n1, n2 } : null;
+  }
+  function fillBetween(axis = lastAxis) {
+    if (!mask || !S.red) return 0;
+    const r = S.red, dim = [r.nx, r.ny, r.nz], has = [];
+    for (let k = 0; k < dim[axis]; k++) { const ix = [0, 0, 0]; ix[axis] = k; let hit = false; const a1 = axis === 0 ? 1 : 0, a2 = axis === 2 ? 1 : 2;
+      for (let b = 0; b < dim[a2] && !hit; b++) for (let a = 0; a < dim[a1]; a++) { ix[a1] = a; ix[a2] = b; if (mask[ix[0] + r.nx * (ix[1] + r.ny * ix[2])]) { hit = true; break; } }
+      if (hit) has.push(k); }
+    let added = 0;
+    for (let q = 1; q < has.length; q++) {
+      const k1 = has[q - 1], k2 = has[q]; if (k2 - k1 < 2) continue;
+      const A = sliceDist(axis, k1), B = sliceDist(axis, k2); if (!A || !B) continue;
+      for (let k = k1 + 1; k < k2; k++) {
+        const t = (k - k1) / (k2 - k1), ix = [0, 0, 0]; ix[axis] = k;
+        for (let b = 0; b < A.n2; b++) for (let a = 0; a < A.n1; a++) {
+          const c = a + A.n1 * b; if ((1 - t) * A.sd[c] + t * B.sd[c] > 0) continue;
+          ix[A.a1] = a; ix[A.a2] = b; const v = ix[0] + r.nx * (ix[1] + r.ny * ix[2]); if (!mask[v]) { mask[v] = 1; added++; }
+        }
+      }
+    }
+    if (added) { ver++; dirty = true; changed(); }
+    return added;
+  }
+
+  // ---------- one click: grow the dark region (proposal) ----------
+  // A lytic lesion is darker than the bone round it. From the clicked voxel the region grows over voxels of a similar
+  // density (within GROW_TOL HU of the seed's mean), below the bone threshold, within GROW_R mm of the seed and inside
+  // the bone's own shell: the bone is closed over breaches up to ~3 mm (dilated by GROW_CLOSE voxels) and the region
+  // may reach GROW_CLOSE voxels past the space it encloses, so a lesion stops at the cortex and does not spill along the
+  // outside of the jaw. The canal and the marrow are dark too: the proposal is shown in orange to be checked on the
+  // slices and added by hand. A sclerotic (bright) lesion is not found this way at all.
+  const GROW_TOL = 150, GROW_R = 30, GROW_CLOSE = 2;
+  function grow(world) {
+    const r = S.red; if (!r || !r.hu) return;
+    const thr = (St.segThr && St.segThr()) ?? 300, c = G.indexOf(r, world).map(Math.round), dim = [r.nx, r.ny, r.nz];
+    if (c.some((x, a) => x < 1 || x >= dim[a] - 1)) return;
+    let sum = 0, cnt = 0;
+    for (let dk = -1; dk <= 1; dk++) for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) { sum += r.hu[(c[0] + di) + r.nx * ((c[1] + dj) + r.ny * (c[2] + dk))]; cnt++; }
+    const hu0 = sum / cnt;
+    if (hu0 >= thr) { sugg = null; suggMsg = xl('Tıklanan yer kemik yoğunluğunda: koyu (litik) lezyonun içine tıklayın. Parlak (sklerotik) lezyon otomatik bulunamaz, fırçayla boyayın.'); showSugg(); return; }
+    const R = r.sp.map(s => Math.ceil(GROW_R / s)), lo = c.map((x, a) => Math.max(0, x - R[a])), hi = c.map((x, a) => Math.min(dim[a] - 1, x + R[a]));
+    const bx = hi[0] - lo[0] + 1, by = hi[1] - lo[1] + 1, bz = hi[2] - lo[2] + 1, N = bx * by * bz, at = (i, j, k) => (i + lo[0]) + r.nx * ((j + lo[1]) + r.ny * (k + lo[2]));
+    const bone = new Uint8Array(N);
+    for (let k = 0; k < bz; k++) for (let j = 0; j < by; j++) for (let i = 0; i < bx; i++) if (r.hu[at(i, j, k)] >= thr) bone[i + bx * (j + by * k)] = 1;
+    const Db = G.edt(bone, bx, by, bz), closed = new Uint8Array(N); for (let q = 0; q < N; q++) closed[q] = Db[q] <= GROW_CLOSE ? 1 : 0;
+    const out = G.exterior(closed, bx, by, bz), cav = new Uint8Array(N); for (let q = 0; q < N; q++) cav[q] = !out[q] && !closed[q] ? 1 : 0;
+    const Dc = G.edt(cav, bx, by, bz), seed = (c[0] - lo[0]) + bx * ((c[1] - lo[1]) + by * (c[2] - lo[2]));
+    const ok = q => Dc[q] <= GROW_CLOSE && !bone[q];
+    if (!ok(seed)) { sugg = null; suggMsg = xl('Tıklanan yer kemiğin içinde kapalı bir boşlukta değil: lezyon kemik dışına açılıyorsa fırçayla boyayın.'); showSugg(); return; }
+    const seen = new Uint8Array(N), queue = new Int32Array(N), bxy = bx * by, list = []; let head = 0, tail = 0;
+    seen[seed] = 1; queue[tail++] = seed;
+    while (head < tail) {
+      const q = queue[head++], i = q % bx, j = ((q / bx) | 0) % by, k = (q / bxy) | 0, v = at(i, j, k);
+      if (Math.abs(r.hu[v] - hu0) > GROW_TOL) continue;
+      list.push(v);
+      for (const [di, dj, dk] of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]) {
+        const i2 = i + di, j2 = j + dj, k2 = k + dk; if (i2 < 0 || j2 < 0 || k2 < 0 || i2 >= bx || j2 >= by || k2 >= bz) continue;
+        const q2 = i2 + bx * (j2 + by * k2); if (seen[q2] || !ok(q2)) continue; seen[q2] = 1; queue[tail++] = q2;
+      }
+    }
+    sugg = Int32Array.from(list);
+    const vol = list.length * r.sp[0] * r.sp[1] * r.sp[2] / 1000;
+    suggMsg = `${xl(`Öneri ${fmt(vol, 2)} cm³: tıklanan noktadan kemik duvarına kadar koyu bölge.`)} ${xl('Kanal ve ilik de koyu görünür: öneriyi kesitlerde kontrol edin, uygunsa "Öneriyi ekle"ye basın. Kemik dışına taşan kısmı fırçayla ekleyin.')}`;
+    showSugg();
+  }
+  function showSugg() {
+    body('lesionSugg', 'Lezyon önerisi', sugg, 0xf08c28, 0.45);
+    $('lsSuggBox').hidden = !sugg && !suggMsg; $('lsSuggMsg').textContent = suggMsg;
+    $('lsSuggAdd').disabled = $('lsSuggDrop').disabled = !sugg || !sugg.length;
+    if (window.MPR) MPR.redraw();
+  }
+  function suggAdd() {
+    if (!sugg || !sugg.length) return; ensure();
+    let n = 0; for (const v of sugg) if (!mask[v]) { mask[v] = 1; n++; }
+    sugg = null; suggMsg = ''; showSugg();
+    if (n) { ver++; dirty = true; changed(); }
+  }
+  function suggDrop() { sugg = null; suggMsg = ''; showSugg(); }
 
   // ---------- 3D: paint on whatever surface is showing (skin, soft tissue or another layer, or bone); Alt orbits ----------
   const cv = St.renderer.domElement, mouse = new THREE.Vector2();
@@ -134,12 +277,12 @@ window.Lesion = (function () {
   }
   let down3 = false;
   cv.addEventListener('pointerdown', e => {
-    if (!tool || e.altKey || e.button !== 0) return;
+    if (!tool || tool === 'grow' || e.altKey || e.button !== 0) return;
     const h = hit3D(e); if (!h) return;
     down3 = true; cv.setPointerCapture(e.pointerId); ring(h); paint(h.point.toArray(), null, true);
   });
   cv.addEventListener('pointermove', e => {
-    if (!tool) return;
+    if (!tool || tool === 'grow') return;
     const h = hit3D(e); if (h) ring(h); else ringOff();
     if (down3 && h) paint(h.point.toArray(), null, false);
   });
@@ -150,8 +293,17 @@ window.Lesion = (function () {
 
   // ---------- slices: painted voxels red (the brush outline follows the pointer, mpr.js) ----------
   (window.SliceOverlays = window.SliceOverlays || []).push((v, ctx, T, dpr, A) => {
-    if (!S.red || (!mask && !lastPaint)) return;
+    if (!S.red || (!mask && !lastPaint && !sugg)) return;
     const r = S.red, k = Math.round(G.indexOf(r, G.worldOf(S.vol, ...A.st.cur))[v.axis]);
+    if (sugg && sugg.length && k >= 0 && k < [r.nx, r.ny, r.nz][v.axis]) {
+      const a1 = v.ix, a2 = v.iy, sx = r.sp[a1] / S.vol.sp[a1] * T.sx * T.s, sy = r.sp[a2] / S.vol.sp[a2] * T.sy * T.s;
+      ctx.fillStyle = 'rgba(240,140,40,.45)';
+      for (const q of sugg) {
+        const ix = [q % r.nx, ((q / r.nx) | 0) % r.ny, (q / (r.nx * r.ny)) | 0]; if (ix[v.axis] !== k) continue;
+        const im = A.idxToImg(v, A.toIdx(G.worldOf(r, ...ix)));
+        ctx.fillRect(T.fx(im[0]) - sx / 2, T.fy(im[1]) - sy / 2, sx + 0.5, sy + 0.5);
+      }
+    }
     if (mask && k >= 0 && k < [r.nx, r.ny, r.nz][v.axis]) {
       const a1 = v.ix, a2 = v.iy, d1 = [r.nx, r.ny, r.nz][a1], d2 = [r.nx, r.ny, r.nz][a2], ix = [0, 0, 0]; ix[v.axis] = k;
       const sx = r.sp[a1] / S.vol.sp[a1] * T.sx * T.s, sy = r.sp[a2] / S.vol.sp[a2] * T.sy * T.s;
@@ -182,15 +334,15 @@ window.Lesion = (function () {
     if (!tool) { ringOff(); clearMarkers(); setTimeout(autoAfterPaint, 0); }
     document.querySelectorAll('#lsTools [data-t]').forEach(b => b.setAttribute('aria-pressed', b.dataset.t === tool));
     const b = $('modeBadge');
-    if (tool) { b.hidden = false; b.textContent = shown = `Lezyon ${tool === 'erase' ? 'silgisi' : 'fırçası'}: kesitlerde ya da 3B görünümde sürükleyin · döndürmek için Alt · Esc ile bitir`; }
+    if (tool) { b.hidden = false; b.textContent = shown = tool === 'grow' ? 'Lezyon önerisi: kesitte lezyonun içine tıklayın · Esc ile bitir' : `Lezyon ${tool === 'erase' ? 'silgisi' : 'fırçası'}: kesitlerde ya da 3B görünümde sürükleyin · döndürmek için Alt · Esc ile bitir`; }
     else if (/^Lezyon/.test(b.textContent) || (shown && (b.textContent === shown || b.textContent === xl(shown)))) b.hidden = true;
   }
   function status() {
     const c = count(), r = S.red, vol = r ? c * r.sp[0] * r.sp[1] * r.sp[2] / 1000 : 0;
     let ext = '';
     if (c && S.anchor) { const { u } = St.frameAxes(), o = points().map(q => q.sub(S.anchor.p).dot(u)); let mn = Infinity, mx = -Infinity; for (const x of o) { if (x < mn) mn = x; if (x > mx) mx = x; } ext = xl(` · eksende ${fmt(mx - mn)} mm`); }
-    $('lsStat').textContent = c ? `${xl(`Boyanan lezyon ${fmt(vol, 2)} cm³`)}${ext}.${planMsg}` : '';
-    $('lsPlan').disabled = !c || planning; $('lsClear').disabled = !c;
+    $('lsStat').textContent = c ? `${xl(`Boyanan lezyon ${fmt(vol, 2)} cm³`)}${ext}.${shellLine()}${planMsg}` : '';
+    $('lsPlan').disabled = !c || planning; $('lsClear').disabled = !c; $('lsFill').disabled = !c;
   }
   let wrapNote = '';
   async function plan() {
@@ -221,21 +373,33 @@ window.Lesion = (function () {
     <span class="seg tools" id="lsTools" role="group" aria-label="Lezyon aracı">
       <button data-t="paint" aria-pressed="false"><svg class="i"><use href="#i-brush"/></svg>Fırça</button>
       <button data-t="erase" aria-pressed="false"><svg class="i"><use href="#i-eraser"/></svg>Silgi</button>
+      <button data-t="grow" aria-pressed="false" title="Kesitte lezyonun içine tıklayın: koyu bölge kemik duvarına kadar önerilir"><svg class="i"><use href="#i-target"/></svg>Tıkla bul</button>
     </span>
     <div class="ctl"><div class="ctl-row"><label for="lsRad">Fırça yarıçapı</label><output id="lsRadO">4 mm</output></div><input type="range" id="lsRad" min="1" max="12" step="0.5" value="4"></div>
+    <div class="btns"><button id="lsFill" disabled title="Boyanan kesitlerin arasındaki kesitleri şekli düzgünce değiştirerek doldurur"><svg class="i"><use href="#i-files"/></svg>Kesitler arasını doldur</button></div>
+    <div class="col" id="lsSuggBox" hidden><p class="hint" id="lsSuggMsg" role="status"></p><div class="btns"><button class="accent" id="lsSuggAdd" disabled>Öneriyi ekle</button><button id="lsSuggDrop" class="ghost" disabled>Öneriyi sil</button></div></div>
     <div class="btns"><button class="primary" id="lsPlan" disabled><svg class="i"><use href="#i-spark"/></svg>Lezyondan kesi öner</button><button id="lsClear" disabled>Temizle</button></div>
     <p class="hint" id="lsStat"></p>
-    <p class="hint more">Lezyonun ilk ve son göründüğü kesitleri de boyayın. Kesiler boyanan bölgeyi güvenlik payı kadar dışarıda bırakır; açı, en az kemik alınacak şekilde 30°'ye kadar seçilir.</p>`;
+    <p class="hint more">En kolay yol: lezyonun ilk göründüğü, en geniş ve son göründüğü üç kesiti boyayıp "Kesitler arasını doldur"a basın. Kemik dışına taşan kısmı ayrıca boyayın. Kesiler boyanan bölgeyi güvenlik payı kadar dışarıda bırakır; açı, en az kemik alınacak şekilde 30°'ye kadar seçilir.</p>`;
   document.querySelectorAll('#lsTools [data-t]').forEach(b => b.addEventListener('click', () => setTool(b.dataset.t)));
   $('lsRad').addEventListener('input', e => { radius = +e.target.value; $('lsRadO').textContent = `${fmt(radius, 1)} mm`; });
   // with a guide on, a new proposal builds the guide again from scratch as the first automatic plan does ("Hazırla"),
   // not out of the last guide's fit (Melikhan 2026-10-28)
   $('lsPlan').addEventListener('click', () => (S.guideOn && St.autoPrep ? St.autoPrep() : plan()));
   $('lsClear').addEventListener('click', () => { mask = null; dirty = false; changed(); });
+  $('lsFill').addEventListener('click', () => { const n = fillBetween(); planMsg = n ? ' ' + xl(`Kesitler arası dolduruldu (${n} voksel).`) : ' ' + xl('Doldurulacak boşluk yok: aynı yöndeki en az iki kesiti, aralarında boş kesit bırakarak boyayın.'); status(); if (n) setTimeout(autoAfterPaint, 0); });
+  $('lsSuggAdd').addEventListener('click', () => { suggAdd(); setTimeout(autoAfterPaint, 0); });
+  $('lsSuggDrop').addEventListener('click', suggDrop);
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && tool) setTool(tool); });
   St.onEndModes(() => { if (tool) setTool(tool); });
-  bus.addEventListener('volume', e => { if (tool) setTool(tool); if (!(e.detail && e.detail.restoring)) { mask = null; St.setPart('lesionPaint', null, null); status(); } });
-  bus.addEventListener('changed', () => { if (!stroke) status(); });
+  bus.addEventListener('volume', e => { if (tool) setTool(tool); sugg = null; suggMsg = ''; showSugg(); if (!(e.detail && e.detail.restoring)) { mask = null; St.setPart('lesionPaint', null, null); status(); } });
+  let shellKey = '';
+  bus.addEventListener('changed', () => {
+    if (stroke) return;
+    const k = JSON.stringify([ver, S.lesion && S.lesion.margin, (S.canals || []).length, (S.roots || []).length, (S.canals || []).map(c => (c.pts || []).length)]);
+    if (k !== shellKey) { shellKey = k; shellMemo = null; buildShell(); }
+    status();
+  });
 
   // ---------- plan storage (run-length encoded) ----------
   function rle(a) { const out = []; let cur = 0, run = 0; for (let i = 0; i < a.length; i++) { if (a[i] === cur) run++; else { out.push(run.toString(36)); cur ^= 1; run = 1; } } out.push(run.toString(36)); return out.join(','); }
@@ -250,5 +414,5 @@ window.Lesion = (function () {
   };
   status();
 
-  return { clear: () => { mask = null; dirty = false; planMsg = ''; changed(); }, autoAfterPaint, active: () => !!tool, tool: () => tool, brush: () => (tool ? { r: radius, color: tool === 'erase' ? '#e5e8eb' : '#ff6b6b' } : null), paint, strokeEnd, points, setTool, plan, off: () => { if (tool) setTool(tool); } };
+  return { count, shellInfo, fillBetween, grow, suggAdd, suggDrop, sugg: () => (sugg ? sugg.length : 0), mask: () => mask, clear: () => { mask = null; dirty = false; planMsg = ''; changed(); }, autoAfterPaint, active: () => !!tool, tool: () => tool, brush: () => (tool ? { r: radius, color: tool === 'erase' ? '#e5e8eb' : '#ff6b6b' } : null), paint, strokeEnd, points, setTool, plan, off: () => { if (tool) setTool(tool); } };
 })();

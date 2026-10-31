@@ -88,7 +88,9 @@
   document.querySelectorAll('#rxMode button').forEach(b => b.addEventListener('click', () => rxMode(b.dataset.m, true)));
   rxMode(store.get(RX) === 'point' ? 'point' : 'paint');
   // the safety margin is the one number of the range form the main flow needs; it moves next to the region tools
-  const mg = $('l_margin') && $('l_margin').closest('.ctl');
+  // (with the lesion type before it: the type proposes the margin, the surgeon confirms or changes it)
+  const ty = $('l_type') && $('l_type').closest('.ctl'), mg = $('l_margin') && $('l_margin').closest('.ctl');
+  if (ty && $('rxMargin')) $('rxMargin').appendChild(ty);
   if (mg && $('rxMargin')) $('rxMargin').appendChild(mg);
 
   // ---------- review step: the state of the checks at a glance ----------

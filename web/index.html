@@ -707,7 +707,9 @@ button.ghost.danger { color: var(--crit); }
             <div class="btns"><button class="accent" id="pickAnchor"><svg class="i"><use href="#i-target"/></svg>Bölgeyi modelde seç</button><button class="primary" id="autoPrep"><svg class="i"><use href="#i-spark"/></svg>Otomatik planla</button></div>
           </div>
           <div class="col" id="rxMargin"></div>
-          <div class="ctl"><label for="resType" class="lbl2">Rezeksiyon tipi</label><select id="resType"><option value="">Segment (iki kesi arası)</option><option value="R">Kondil dahil, sağ (tek kesi)</option><option value="L">Kondil dahil, sol (tek kesi)</option></select></div>
+          <div class="ctl"><label for="resType" class="lbl2">Rezeksiyon tipi</label><select id="resType"><option value="">Segment (iki kesi arası)</option><option value="R">Kondil dahil, sağ (tek kesi)</option><option value="L">Kondil dahil, sol (tek kesi)</option><option value="M">Marjinal (alt kenar korunur)</option></select></div>
+          <div class="col" id="margBox" hidden><div class="ctl"><div class="ctl-row"><label for="l_marg">Alt kenarda kalan kemik</label><output id="lo_marg"></output></div><input type="range" id="l_marg" min="5" max="30" step="0.5"></div><p class="hint more">Kesiler arasında yalnız yatay kesinin üstündeki kemik çıkar; alt kenar ve mandibulanın sürekliliği korunur. Yükseklik lezyonun en alt noktasından güvenlik payı ve testere payı çıkarılarak önerilir.</p></div>
+          <label class="chk"><input type="checkbox" id="l_fragile"> Işınlanmış ya da atrofik çene</label>
           <p class="hint" id="resTypeHint" hidden>Ramus ve kondil, kondile en uzak kesiden itibaren çıkarılır. Diğer kesiler yalnız guide yuvası olarak kalır. Kondil konumu Anatomi adımındaki referanstan gelir.</p>
           <div id="neoBox" class="col" hidden></div>
           <div class="col" id="sq1">
@@ -745,6 +747,7 @@ button.ghost.danger { color: var(--crit); }
           <p class="hint" id="gNone">Guide henüz oluşturulmadı. Kesileri belirledikten sonra oluşturun.</p>
           <div id="guideList" class="col"></div>
           <div class="ctl"><label for="g_split" class="lbl2">Düzen</label><select id="g_split" data-seg><option value="0" data-short="Tek parça">Tek parça (köprülü)</option><option value="1">İki parça</option><option value="2" data-short="İki eksen">İki parça, her kesi kendi ekseninde</option></select></div>
+          <div class="ctl"><label for="g_pads" class="lbl2">Kemiğe temas</label><select id="g_pads" data-seg><option value="0" data-short="Sürekli">Sürekli gövde</option><option value="1" data-short="Pedler">Pedler (deneysel)</option></select><p class="hint more" data-for="g_pads">Pedler: guide kemiğe yalnız her kesinin ötesindeki küçük yuvarlak pedlerle (ve vida kovanlarıyla) değer, gövdenin geri kalanı kemikten 1 mm uzak durur. Oturma testi guide'ın tek konumda oturup oturmadığını gösterir. Basılı kemik modelinde doğrulanmadan hastada kullanmayın.</p></div>
           <div class="stepwarn" data-for="guide"></div>
           <details class="sec adv" id="adv_st5" data-adv><summary>Gelişmiş</summary><div class="col">
             <div class="btns end" id="guideDel2Box" hidden><button id="guideDel2" class="sm" title="Guide ve vidaları kaldırır; kesiler yerinde kalır"><svg class="i"><use href="#i-trash"/></svg>Guide'ı sil</button></div>
