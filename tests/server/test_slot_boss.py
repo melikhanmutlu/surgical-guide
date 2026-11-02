@@ -99,6 +99,22 @@ class SlotBoss(unittest.TestCase):
         self.assertTrue(solid_at(tm, past).all())
         self.assertFalse(solid_at(tm, [[1.2, 10.0, 2.3], [8.0, 8.0, 2.3], [0.0, 8.0, 1.5], [0.0, 8.0, 3.5]]).any())
 
+    def test_wing_carries_the_rim_along_the_cut(self):
+        """Slot wing (Melikhan 2026-11-02, planes[].wing = [vLo, vHi], app.js slotWing): the rim runs along the cut over
+        the bone past the body (here to |v| = 10, the body is 6 each side), the slot open through it; nothing past the
+        wing or away from the slot; a bad wing is a 400."""
+        q = flat_request(5.0); q["planes"][0]["wing"] = [-10.0, 10.0]
+        out = Y.build_guide(q); tm = mesh(out)
+        self.assertTrue(tm.is_watertight)
+        along = [[1.2, 9.0, 0.3 + 1.0], [-1.2, -9.0, 0.3 + 1.0], [1.2, -8.0, 0.3 + 1.0]]
+        self.assertFalse(solid_at(mesh(self.boss), along).any())
+        self.assertTrue(solid_at(tm, along).all())
+        self.assertFalse(solid_at(tm, [[1.2, 11.5, 1.3], [8.0, 9.0, 1.3], [0.0, 9.0, 1.3], [0.0, -9.0, 3.0]]).any())
+        q["planes"][0]["wing"] = [5.0, -5.0]
+        with self.assertRaises(Y.HttpError) as e:
+            Y.build_guide(q)
+        self.assertEqual(e.exception.code, 400)
+
     def test_bad_boss_is_a_400(self):
         q = flat_request(5.0)
         q["g"]["boss"] = "high"

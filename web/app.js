@@ -1557,6 +1557,7 @@
       let inside = 0; for (const q of pts) if (sideOf(pw2[0], 0, q) > 0 && sideOf(pw2[1], 1, q) > 0) inside++;
       if (pts.length && inside < 0.95 * pts.length) S.planes = straight;
     }
+    centreCuts();
     if (S.guideOn) placeScrews(); else S.screws = [];
     unapprove(S.lesion); S.sel = null;
     updateLesionPart(); schedule(true);
@@ -1747,6 +1748,7 @@
     for (const a of A) { for (const b of B) if (!pair || a.cost + b.cost < pair[0].cost + pair[1].cost) { if (!crosses(a, b)) pair = [a, b]; } }
     if (!pair) pair = [AA.find(c => !c.pl.yaw && !c.pl.pitch), BB.find(c => !c.pl.yaw && !c.pl.pitch)];
     S.planes = pair.map(c => c.pl);
+    centreCuts();
     if (S.guideOn) placeScrews(); else S.screws = [];
     unapprove(S.lesion); S.sel = null;
     syncLesion(); updateLesionPart(); schedule(true);
@@ -1839,7 +1841,7 @@
     let rung = 0;
     const onP = h => rung === 1 && opt.onProgress ? (h > 0.5 ? f => opt.onProgress(0.3 * f) : f => opt.onProgress(0.3 + 0.7 * f)) : null;
     const test = async (h = 0.8) => {
-      const o = await buildGuideSet(Object.assign({ g: S.g, P: S.anchor.p, pls: planesWorld(), scs: screwsWorld(), bone: boneAt, field: guideField(), h, noBarMesh: true, onProgress: onP(h) }, frameAxes())); const R = o.result, want = S.g.split && S.planes.length >= 2 ? 2 : 1;
+      const o = await buildGuideSet(Object.assign({ g: S.g, P: S.anchor.p, pls: planesWorld(), scs: screwsWorld(), bone: boneAt, field: guideField(), h, noBarMesh: true, wings: true, onProgress: onP(h) }, frameAxes())); const R = o.result, want = S.g.split && S.planes.length >= 2 ? 2 : 1;
       const bad = screwsBad(R), scOk = !bad, piecesOk = R.pieces === want, seatFree = !R.seat || !R.seat.ok || R.seat.free > 0;
       if (!scOk) log.push({ step: 'screws', split: S.g.split, wrap: S.g.wrap, flange: S.g.flange, ok: false, screws: bad });
       const score = (piecesOk ? 1000 : 0) + (seatFree ? 100 : 0) - bad - (h > 0.5 ? 0.5 : 0);
@@ -2081,7 +2083,10 @@
     // optional stops: lips past the upper / lower guide edge that reach around the bone edge (crest, lower border)
     const sUp = stopSides(g, v), anyStop = sUp.pos || sUp.neg, stopX = anyStop ? (g.stopL || 6) : 0, stopZ = anyStop ? (g.stopD || 5) : 0, vc = g.vc || 0;
     const uc = g.uc || 0;
-    const flX = g.slotFlange > 0 ? g.slotFlange : 0, lo = [uc - g.L / 2 - 4, vc - g.W / 2 - 4 - Math.max(stopX, flX), -Math.max(g.wrap + 10, 30) - Math.max(0, g.L / 2 - 15) * 0.6], hi = [uc + g.L / 2 + 4, vc + g.W / 2 + 4 + Math.max(stopX, flX), g.clear + Math.max(g.wall + Math.max(maxSleeve, g.bridge), g.boss || 0) + 6];
+    // slot wings: the slot rim carried across the whole bone the cut goes through (ctx.wings, the mandible guides)
+    const wings = ctx.wings && !M0 ? pls.map(pw => slotWing(P, u, v, n, pw, g, boneAt)) : [];
+    const wLo = Math.min(0, ...wings.filter(Boolean).map(w => w[0] - (vc - g.W / 2))), wHi = Math.max(0, ...wings.filter(Boolean).map(w => w[1] - (vc + g.W / 2)));
+    const flX = g.slotFlange > 0 ? g.slotFlange : 0, lo = [uc - g.L / 2 - 4, vc - g.W / 2 - 4 - Math.max(stopX, flX, -wLo), -Math.max(g.wrap + 10, 30) - Math.max(0, g.L / 2 - 15) * 0.6], hi = [uc + g.L / 2 + 4, vc + g.W / 2 + 4 + Math.max(stopX, flX, wHi), g.clear + Math.max(g.wall + Math.max(maxSleeve, g.bridge), g.boss || 0) + 6];
     const nx = Math.ceil((hi[0] - lo[0]) / h) + 1, ny = Math.ceil((hi[1] - lo[1]) / h) + 1, nz = Math.ceil((hi[2] - lo[2]) / h) + 1, N = nx * ny * nz, nxy = nx * ny;
     const toWorld = (a, b, c) => { const x = lo[0] + a * h, y = lo[1] + b * h, z = lo[2] + c * h; return [P.x + u.x * x + v.x * y + n.x * z, P.y + u.y * x + v.y * y + n.y * z, P.z + u.z * x + v.z * y + n.z * z]; };
     if (ctx.field && ctx.field.prepare) { const cs = []; for (const a of [0, nx - 1]) for (const b of [0, ny - 1]) for (const c of [0, nz - 1]) cs.push(toWorld(a, b, c)); ctx.field.prepare(cs); }
@@ -2105,7 +2110,7 @@
     const c = g.clear + (g.peri || 0), cw = c + g.wall, gap = ctx.gap || splitGap(g, pls);
     const toF = (p, N_) => { const l = Math.hypot(N_.x, N_.y, N_.z); if (!(l > 1e-9) || !isFinite(l)) return null; const a = N_.dot(u) / l, b = N_.dot(v) / l, cc = N_.dot(n) / l, dx = p.x - P.x, dy = p.y - P.y, dz = p.z - P.z; return { a, b, c: cc, e: a * (dx * u.x + dy * u.y + dz * u.z) + b * (dx * v.x + dy * v.y + dz * v.z) + cc * (dx * n.x + dy * n.y + dz * n.z) }; };
     // the saw slot is centred on pSlot (the plane shifted towards the defect when the kerf lies on the resected side)
-    const slots = pls.map(pw => { const f = toF(pw.pSlot || pw.p, pw.N); return f && pw.w > 0 ? Object.assign(f, { half: pw.w / 2 }) : null; }).filter(Boolean);
+    const slots = pls.map((pw, k) => { const f = toF(pw.pSlot || pw.p, pw.N); return f && pw.w > 0 ? Object.assign(f, { half: pw.w / 2 }, wings[k] ? { wing: wings[k] } : {}) : null; }).filter(Boolean);
     // marginal resection: the upright slots stop at the bottom of the horizontal slot (the saw must not go through the
     // lower border), and the horizontal slot runs only between the upright cuts (to their far slot faces)
     const M = M0;
@@ -2152,8 +2157,24 @@
     T.mesh = performance.now() - t0; if (onP) onP(1);
     // screw results in the order of scs: no entry, no guide body under the sleeve, or the drill path and the sleeve's shadow
     const screwInfo = scs.map((s, i) => { const r = k.screws[i]; if (!r.ok) return Object.assign({ s }, r); const o = Object.assign({ s, ok: true }, paths[i]); if (r.shadowed != null) o.shadowed = r.shadowed; return o; });
-    return { mesh, result: { wrapProfile: k.wrapProfile, pieces: k.pieces, contact: k.contact, undercut: k.undercut, volume: k.volume, screwInfo, pls, seat: k.seat, fits: [k.fit], pads: k.pads, seatDir: k.seatDir, dropped: k.dropped, bodyW: k.bodyW, bodyV: k.bodyV, ms: performance.now() - t0, T },
+    return { mesh, result: { wrapProfile: k.wrapProfile, wings: wings.some(Boolean) ? wings : null, pieces: k.pieces, contact: k.contact, undercut: k.undercut, volume: k.volume, screwInfo, pls, seat: k.seat, fits: [k.fit], pads: k.pads, seatDir: k.seatDir, dropped: k.dropped, bodyW: k.bodyW, bodyV: k.bodyV, ms: performance.now() - t0, T },
       grid: { Gm: k.Gm, B: k.B, F: k.F, nx, ny, nz, h, lo, P: P.clone(), u: u.clone(), v: v.clone(), n: n.clone(), edgeV: k.edgeV, wrapAt: k.wrapAt } };
+  }
+  // Slot wing (Melikhan 2026-11-02: on a tall section, the ramus, the guide's slot covered only the guide's own band
+  // and the saw was guided over part of the cut): where the bone the cut goes through runs past the guide body across
+  // the guide (v), the slot rim is carried along the cut over that bone, WING_PAD mm past it, at most WING_MAX mm past
+  // the body edge. The bone is followed outwards from the body along the slot line (a gap of up to 2 mm is crossed).
+  // [vLo, vHi] in the guide frame, or null when the bone ends within the body and its flange.
+  const WING_MAX = 30, WING_PAD = 2, WING_DEPTH = 4;
+  function slotWing(P, u, v, n, pw, g, boneAt) {
+    const N = pw.N, a = N.dot(u), b = N.dot(v), c = N.dot(n); if (Math.abs(a) < 0.3) return null;
+    const d = (pw.pSlot || pw.p).clone().sub(P), e = a * d.dot(u) + b * d.dot(v) + c * d.dot(n), vc = g.vc || 0, q = V(), nLo = -Math.max(g.wrap + 10, 20);
+    const has = vv => { for (let nn = 4; nn >= nLo; nn -= 0.5) { const uu = (e - b * vv - c * nn) / a; q.copy(P).addScaledVector(u, uu).addScaledVector(v, vv).addScaledVector(n, nn); if (boneAt(q)) return true; } return false; };
+    const reach = dir => { let last = null, gap = 0; for (let t = 0; t <= g.W / 2 + WING_MAX + 1e-9; t += 0.5) { if (has(vc + dir * t)) { last = t; gap = 0; } else if (t > g.W / 2 && (gap += 0.5) > 2) break; } return last; };
+    const edge = g.W / 2 + (g.slotFlange > 0 ? g.slotFlange : 0), lim = g.W / 2 + WING_MAX;
+    const tp = reach(1), tn = reach(-1), hi = tp == null ? 0 : Math.min(lim, tp + WING_PAD), lo = tn == null ? 0 : Math.min(lim, tn + WING_PAD);
+    if (hi <= edge + 1 && lo <= edge + 1) return null;
+    return [+(vc - Math.max(lo, g.W / 2)).toFixed(2), +(vc + Math.max(hi, g.W / 2)).toFixed(2)];
   }
   // two separate guides: nothing between the outermost cuts except a capture flange beyond each slot
   function splitGap(g, pls) {
@@ -2607,7 +2628,7 @@
     const pls = planesWorld(), scs = screwsWorld();
     let out = takeFit();
     if (out && out.result.bar && out.result.bar.ok && S.g.bar) out.barMesh = buildBarMesh(out.result.bar.spec, 0.4);
-    if (!out) out = await buildGuideSet(Object.assign({ g: S.g, P: S.anchor.p, pls, scs, bone: boneAt, field: guideField(), onProgress: (sp => f => { if (ver === live.ver) sp(f); })(busySpan(f0, 1)) }, frameAxes()));
+    if (!out) out = await buildGuideSet(Object.assign({ g: S.g, P: S.anchor.p, pls, scs, bone: boneAt, field: guideField(), wings: true, onProgress: (sp => f => { if (ver === live.ver) sp(f); })(busySpan(f0, 1)) }, frameAxes()));
     if (ver < live.shown) { disposeObj(out.mesh); if (out.barMesh) disposeObj(out.barMesh); return; }
     live.shown = ver; S.liveScrews = null;
     setPart('guide', 'Guide', out.mesh, COLORS.guide);
@@ -2626,11 +2647,20 @@
   }
 
   // ---------- planes / screws as scene parts ----------
+  // the cut disc covers the bone it cuts (its section from the cut point, plus 4 mm) instead of a fixed size
+  const discMemo = new Map();
+  function discR(pw) {
+    const def = Math.max(S.g.W, 26) * 0.8, key = [pw.p.x, pw.p.y, pw.p.z, pw.N.x, pw.N.y, pw.N.z].map(x => x.toFixed(1)).join() + (S.mask ? S.mask.length : 0);
+    if (discMemo.has(key)) return discMemo.get(key);
+    const sec = cutSection(pw.p, pw.N), rr = sec ? Math.max(10, Math.min(def, sec.c.distanceTo(pw.p) + sec.r + 4)) : def;
+    if (discMemo.size > 64) discMemo.clear();
+    discMemo.set(key, rr); return rr;
+  }
   function clearElementParts() { Object.keys(parts).filter(k => k.startsWith('plane') || k.startsWith('screw')).forEach(k => setPart(k, null, null)); }
   function rebuildElementParts(pls, screwInfo) {
     clearElementParts();
     pls.forEach((pw, i) => {
-      const m = new THREE.Mesh(new THREE.CircleGeometry(Math.max(S.g.W, 26) * 0.8, 48), new THREE.MeshBasicMaterial({ color: COLORS.plane, transparent: true, opacity: S.sel === 'p' + i ? 0.38 : 0.2, side: THREE.DoubleSide, depthWrite: false }));
+      const m = new THREE.Mesh(new THREE.CircleGeometry(discR(pw), 48), new THREE.MeshBasicMaterial({ color: COLORS.plane, transparent: true, opacity: S.sel === 'p' + i ? 0.38 : 0.2, side: THREE.DoubleSide, depthWrite: false }));
       m.position.copy(pw.p); m.quaternion.setFromUnitVectors(V(0, 0, 1), pw.N);
       setPart('plane' + i, `Kesi ${i + 1}`, m, COLORS.plane);
     });
@@ -2739,7 +2769,7 @@
     box.innerHTML = `<h3 class="sub">${isP ? 'Kesi' : 'Vida'} ${i + 1}</h3>` + fields.map(([k, t, mn, mx, st, unit]) => `<div class="ctl"><div class="ctl-row"><label for="f_${k}">${t}</label><output id="o_${k}">${fmt(o[k], st < 1 ? 1 : 0)} ${unit}</output></div><input type="range" id="f_${k}" min="${mn}" max="${mx}" step="${st}" value="${o[k]}"></div>`).join('') +
       `<p class="hint">${apprText(o)}</p><p class="hint more">3B görünümde kesiyi ya da vidayı tutup sürükleyebilir, tutamaçla da taşıyabilirsiniz (W taşı, E döndür). Taşıma eksenleri varsayılan olarak kesiyle birlikte döner: biri kesiye dik, ikisi kesi düzleminde.</p><p class="hint more">Kesitlerde (aksiyel, koronal, sagittal) kesi çizgisini sürükleyerek taşıyabilir, çizgideki yuvarlak tutamaçla kesiyi o kesit düzleminde döndürebilirsiniz.</p>` +
       `<div class="btns end"><button id="delEl" class="sm"><svg class="i"><use href="#i-trash"/></svg>${isP ? 'Kesiyi sil' : 'Vidayı sil'}</button></div>`;
-    fields.forEach(([k, , , , st, unit]) => $('f_' + k).addEventListener('input', e => { const c0 = isP && /yaw|pitch/.test(k) ? planesWorld()[i].p : null; o[k] = +e.target.value; if (c0) { pivotCut(o, c0); syncSliders(o); syncGizmo(); } if (!isP && /^(u|v|tilt)/.test(k)) o.hand = 1; unapprove(o); $('o_' + k).textContent = `${fmt(o[k], st < 1 ? 1 : 0)} ${unit}`; schedule(isP, true); }));
+    fields.forEach(([k, , , , st, unit]) => $('f_' + k).addEventListener('input', e => { const c0 = isP && /yaw|pitch/.test(k) ? cutPivot(i) : null; o[k] = +e.target.value; if (c0) { if (!moveCutTo(o, c0, cutNormal(o.yaw, o.pitch))) pivotCut(o, c0); syncSliders(o); syncGizmo(); } else if (isP && k === 'off') { centreCut(i); syncGizmo(); } if (!isP && /^(u|v|tilt)/.test(k)) o.hand = 1; unapprove(o); $('o_' + k).textContent = `${fmt(o[k], st < 1 ? 1 : 0)} ${unit}`; schedule(isP, true); }));
     $('delEl').addEventListener('click', () => { (isP ? S.planes : S.screws).splice(i, 1); S.sel = null; unapproveAll(); schedule(isP); });
   }
   function renderMeasures() {
@@ -3457,6 +3487,44 @@
     o.pv = Math.max(-80, Math.min(80, Math.round(d.dot(v) * 10) / 10)); o.pn = Math.max(-80, Math.min(80, Math.round(d.dot(n) * 10) / 10));
     return true;
   }
+  // The bone section a cut goes through (Melikhan 2026-11-02: a cut turns about the middle of the bone it cuts and
+  // slides along the bone, not about a point on the guide axis that may lie outside the bone): the bone voxels within
+  // half a voxel of the plane, within CENTRE_R mm of a point that moves to their mean (mean shift, a few rounds), so
+  // it settles in the middle of the cross-section next to the start point. { c: centre, r: radius covering the
+  // section } or null when the plane meets too little bone there.
+  const CENTRE_R = 18;
+  function cutSection(p, N) {
+    const r = S.red; if (!r || !S.mask || !p || !N) return null;
+    const slab = Math.max(0.6, Math.max(...r.sp) * 0.6), q = V(), rad = r.sp.map(sp => Math.ceil(CENTRE_R / sp) + 1);
+    let c = p.clone(), out = null;
+    for (let it = 0; it < 5; it++) {
+      const ci = G.indexOf(r, [c.x, c.y, c.z]), m = V(); let cnt = 0, far = 0;
+      for (let k = Math.max(0, Math.floor(ci[2] - rad[2])); k <= Math.min(r.nz - 1, Math.ceil(ci[2] + rad[2])); k++)
+        for (let j = Math.max(0, Math.floor(ci[1] - rad[1])); j <= Math.min(r.ny - 1, Math.ceil(ci[1] + rad[1])); j++)
+          for (let i = Math.max(0, Math.floor(ci[0] - rad[0])); i <= Math.min(r.nx - 1, Math.ceil(ci[0] + rad[0])); i++) {
+            if (!S.mask[i + r.nx * (j + r.ny * k)]) continue;
+            q.set(...G.worldOf(r, i, j, k));
+            if (Math.abs(q.clone().sub(p).dot(N)) > slab) continue;
+            const d2 = q.distanceToSquared(c); if (d2 > CENTRE_R * CENTRE_R) continue;
+            m.add(q); cnt++; if (d2 > far) far = d2;
+          }
+      if (cnt < 12) return out;
+      m.multiplyScalar(1 / cnt); m.addScaledVector(N, -m.clone().sub(p).dot(N));   // kept in the plane
+      const step = m.distanceTo(c); c = m; out = { c: c.clone(), r: Math.sqrt(far), n: cnt };
+      if (step < 0.2) break;
+    }
+    return out;
+  }
+  // the cut's point moved to the middle of the bone it cuts (the plane itself stays); false when it cannot be
+  function centreCut(i) {
+    const o = S.planes[i]; if (!o || !S.anchor) return false;
+    const pw = planesWorld()[i], sec = pw && cutSection(pw.p, pw.N);
+    if (!sec || sec.c.distanceTo(pw.p) < 0.25) return false;
+    return moveCutTo(o, sec.c, pw.N);
+  }
+  function centreCuts() { S.planes.forEach((_, i) => centreCut(i)); }
+  // the point a cut turns about: the middle of its bone section, or its own point where it meets no bone
+  function cutPivot(i) { const pw = planesWorld()[i]; if (!pw) return null; const sec = cutSection(pw.p, pw.N); return sec ? sec.c : pw.p.clone(); }
   // a cut's normal from its yaw / pitch in the guide frame (as planesWorld)
   function cutNormal(yaw, pitch) {
     const { u, n } = frameAxes(), N = u.clone().applyAxisAngle(n, deg(yaw));
@@ -3485,7 +3553,8 @@
     gizmo.addEventListener('dragging-changed', e => {
       controls.enabled = !e.value;
       if (e.value) { gz.used = true; gz.start = gizmoStart(); return; }
-      const moved = gz.start && gz.start.moved, wasGuide = gz.start && gz.start.guide; gz.start = null;
+      const moved = gz.start && gz.start.moved, wasGuide = gz.start && gz.start.guide, wasCut = gz.start && gz.start.so && gz.start.so.isP ? gz.start.so.i : -1; gz.start = null;
+      if (moved && wasCut >= 0) centreCut(wasCut);
       if (moved) schedule(wasGuide || (S.sel && S.sel[0] === 'p'), false); syncGizmo();
     });
     gizmo.addEventListener('objectChange', () => { if (gz.start) gizmoApply(); });
@@ -3529,7 +3598,7 @@
     if (S.guideSel) { const { u, v } = frameAxes(); return { guide: true, q0: proxy.quaternion.clone(), rot0: S.g.rot, u0: u, v0: v, key: String(S.g.rot) }; }
     const so = selObj(); if (!so) return null;
     const o = so.o, st = { so, p0: proxy.position.clone(), q0: proxy.quaternion.clone(), o0: Object.assign({}, o), space: moveSpace(), key: [o.off, o.yaw, o.pitch, o.pv, o.pn, o.u, o.v, o.tiltU, o.tiltV].join() };
-    if (so.isP) { const pw = planesWorld()[so.i]; st.N0 = pw.N.clone(); st.c0 = pw.p.clone(); } else st.d0 = screwWorld(so.o).dir.clone();
+    if (so.isP) { const pw = planesWorld()[so.i]; st.N0 = pw.N.clone(); st.c0 = gz.mode === 'rotate' ? cutPivot(so.i) : pw.p.clone(); } else st.d0 = screwWorld(so.o).dir.clone();
     return st;
   }
   const clampR = (x, a, b, st) => Math.max(a, Math.min(b, Math.round(x / st) * st));
@@ -3633,7 +3702,7 @@
         const N = gz.start.N0.clone().applyQuaternion(dq);
         o.yaw = clampR(THREE.MathUtils.radToDeg(Math.atan2(N.dot(v), N.dot(u))), -89, 89, 0.5);
         o.pitch = clampR(THREE.MathUtils.radToDeg(-Math.asin(Math.max(-1, Math.min(1, N.dot(n))))), -89, 89, 0.5);
-        pivotCut(o, gz.start.c0);
+        if (!moveCutTo(o, gz.start.c0, cutNormal(o.yaw, o.pitch))) pivotCut(o, gz.start.c0);
       }
     } else {
       if (gz.mode === 'translate') { o.u = clampR(o0.u + d.dot(u), -80, 80, 0.5); o.v = clampR(o0.v + d.dot(v), -40, 40, 0.5); }
@@ -3764,7 +3833,8 @@
   });
   const ddEnd = e => {
     if (!dd.on) return;
-    const { isP } = dd.on, moved = dd.moved; dd.on = null; controls.enabled = true;
+    const { isP, i } = dd.on, moved = dd.moved; dd.on = null; controls.enabled = true;
+    if (moved && isP) centreCut(i);
     try { renderer.domElement.releasePointerCapture(e.pointerId); } catch (x) {}
     if (!moved) return;
     schedule(isP, false);
@@ -4099,7 +4169,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   // the saw slots of a server request: the planes, and for a marginal resection the upright slots bounded below by the
   // horizontal one and the horizontal slot bounded by the upright cuts (as buildGuide clips them)
   function margPlanes(c, arr) {
-    const M = c.marg === undefined ? margPlane() : c.marg, out = c.pls.map(pl => ({ p: arr(pl.pSlot || pl.p), N: arr(pl.N), w: pl.w }));
+    const M = c.marg === undefined ? margPlane() : c.marg, out = c.pls.map((pl, k) => Object.assign({ p: arr(pl.pSlot || pl.p), N: arr(pl.N), w: pl.w }, !M && c.wings && c.wings[k] ? { wing: c.wings[k].slice() } : {}));
     if (!M || !out.length) return out;
     out.forEach(o => { o.clip = [{ p: arr(M.pSlot), N: arr(M.N), t: M.w / 2 }]; });
     out.push({ p: arr(M.pSlot), N: arr(M.N), w: M.w, clip: [{ p: arr(M.A.pSlot || M.A.p), N: arr(M.NA), t: M.A.w / 2 }, { p: arr(M.B.pSlot || M.B.p), N: arr(M.NB.clone().negate()), t: M.B.w / 2 }] });
@@ -4110,7 +4180,8 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
     const g = Mg ? Object.assign({}, c.g, { side: c.v.dot(Mg.N) >= 0 ? 1 : -1 }) : c.g;
     const top = g.clear + Math.max(g.wall + Math.max(g.bridge, 0, ...c.scs.map(s => s.sc.sleeveH)), g.boss || 0) + 6;
     const ss = stopSides(g, c.v), sx = ss.pos || ss.neg ? (g.stopL || 6) : 0, sz = ss.pos || ss.neg ? (g.stopD || 5) : 0;
-    const deep = Math.max(g.wrap + 4, ...(c.wrapProfile || []).map(q => 4 - q[1])) + sz, R = Math.hypot(Math.abs(g.uc || 0) + g.L / 2 + 4, Math.abs(g.vc || 0) + g.W / 2 + 4 + Math.max(sx, g.slotFlange > 0 ? g.slotFlange : 0), Math.max(deep, top)) + 6, ic = G.indexOf(vol, arr(c.P)), dims = [vol.nx, vol.ny, vol.nz];
+    const wx = Math.max(0, ...(c.wings || []).filter(Boolean).map(w => Math.max((g.vc || 0) - w[0], w[1] - (g.vc || 0)) - g.W / 2));
+    const deep = Math.max(g.wrap + 4, ...(c.wrapProfile || []).map(q => 4 - q[1])) + sz, R = Math.hypot(Math.abs(g.uc || 0) + g.L / 2 + 4, Math.abs(g.vc || 0) + g.W / 2 + 4 + Math.max(sx, g.slotFlange > 0 ? g.slotFlange : 0, wx), Math.max(deep, top)) + 6, ic = G.indexOf(vol, arr(c.P)), dims = [vol.nx, vol.ny, vol.nz];
     const lo = [0, 1, 2].map(a => Math.max(0, Math.floor(ic[a] - R / vol.sp[a]))), hi = [0, 1, 2].map(a => Math.min(dims[a] - 1, Math.ceil(ic[a] + R / vol.sp[a])));
     const [nx, ny, nz] = [0, 1, 2].map(a => hi[a] - lo[a] + 1);
     if (nx < 2 || ny < 2 || nz < 2) throw new Error('Guide bölgesi hacmin dışında.');
@@ -4239,12 +4310,12 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
       if (two) {
         // a two-frame guide: one server call per piece on its own frame, the two STLs joined into one file
         const rs = [];
-        for (const pt of S.result.parts) rs.push(await serverGuide(Object.assign({ vol: S.vol, red: S.red, F: S.maskF, thr: segThr(), g: pt.g, P: pt.frame.P, pls: pt.pls, gap: pt.gap, scs: pt.lug ? pt.scs.concat([pt.lug]) : pt.scs, wrapProfile: pt.wrapProfile, seatDir: pt.result.seatDir }, pt.frame), ac.signal, call(1)));
+        for (const pt of S.result.parts) rs.push(await serverGuide(Object.assign({ vol: S.vol, red: S.red, F: S.maskF, thr: segThr(), g: pt.g, P: pt.frame.P, pls: pt.pls, gap: pt.gap, scs: pt.lug ? pt.scs.concat([pt.lug]) : pt.scs, wrapProfile: pt.wrapProfile, seatDir: pt.result.seatDir, wings: pt.result.wings }, pt.frame), ac.signal, call(1)));
         r = { stl: mergeStl(rs[0].stl, rs[1].stl), watertight: rs.every(x => x.watertight), bodies: rs.reduce((s, x) => s + x.bodies, 0), volume: rs.reduce((s, x) => s + x.volume, 0), faces: rs.reduce((s, x) => s + x.faces, 0), ms: rs.reduce((s, x) => s + x.ms, 0),
           productionOk: rs.every(x => x.productionOk), issues: rs.flatMap((x, k) => x.issues.map(i => Object.assign({ piece: k + 1 }, i))), screwsMissing: rs.reduce((s, x) => s + x.screwsMissing, 0), screwNos: rs.flatMap(x => x.screwNos),
           resolution: Math.max(...rs.map(x => x.resolution || 0)) || null, requestedResolution: rs[0].requestedResolution, version: rs[0].version,
           printChecks: rs.every(x => x.printChecks) ? ['thin_wall_mm3', 'bone_overlap_mm3', 'undercut_mm3'].reduce((o, k) => Object.assign(o, { [k]: rs.reduce((a, x) => a + (+x.printChecks[k] || 0), 0) }), { min_wall_mm: rs[0].printChecks.min_wall_mm }) : null };
-      } else r = await serverGuide(Object.assign({ vol: S.vol, red: S.red, F: S.maskF, thr: segThr(), g: S.g, P: S.anchor.p, pls: planesWorld(), scs: screwsWorld(), wrapProfile: S.result && S.result.wrapProfile, seatDir: S.result && S.result.seatDir }, frameAxes()), ac.signal, call(1));
+      } else r = await serverGuide(Object.assign({ vol: S.vol, red: S.red, F: S.maskF, thr: segThr(), g: S.g, P: S.anchor.p, pls: planesWorld(), scs: screwsWorld(), wrapProfile: S.result && S.result.wrapProfile, seatDir: S.result && S.result.seatDir, wings: S.result && S.result.wings }, frameAxes()), ac.signal, call(1));
       // the connecting bar: a separate part, its own server call (exact solids; the server also measures its bone clearance)
       if (withBar) { stage('Sunucuda bağlantı köprüsü hazırlanıyor…'); const done = call(0.1); r.bar = await serverBar(S.result.bar.spec, ac.signal); done(1); }
       S.prod = Object.assign(r, { key: prodKey(), sha256: await sha256Bytes(r.stl) });
@@ -4517,7 +4588,7 @@ ${S.prod && S.prod.key === prodKey() ? `<p>Üretim STL'i sunucuda yüzey tabanl�
   function sfetch(u, o) { return window.ServerAuth ? ServerAuth.fetch(u, o) : fetch(u, o); }
   function serverUrl() { return ($('aiUrl').value || '').trim().replace(/\/+$/, ''); }
   function select(sel) { if (sel) S.guideSel = false; S.sel = sel; emit('select', sel); renderElements(); rebuildElementParts(S.result ? S.result.pls : planesWorld(), S.result ? S.result.screwInfo : []); applyExplode(); render(); }
-  window.Studio = { setVisible, userHidden: () => [...userHidden], bg: bgCall, loadSample, samplePair, sampleFor, SAMPLES, chooseAxis, nearestPiece, netsOf, blurNetsOf, renamePart, partName, guideBuilds: () => guideBuilds, mandibleView, endModes, onEndModes, startLoad, loadStopped, loadBusy: () => committing, LOAD_CANCELLED, renderComps, setGuideRot, setGuideRoll, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, setOpacity, resEnds, splitGap, cutMisses, evalScrew, resectedAt, resectedNear, resPiece, boneTrack, cutAlongBone, bestScrew,
+  window.Studio = { setVisible, userHidden: () => [...userHidden], bg: bgCall, loadSample, samplePair, sampleFor, SAMPLES, chooseAxis, nearestPiece, netsOf, blurNetsOf, renamePart, partName, guideBuilds: () => guideBuilds, mandibleView, endModes, onEndModes, startLoad, loadStopped, loadBusy: () => committing, LOAD_CANCELLED, renderComps, setGuideRot, setGuideRoll, planFromLesion, fitWrap, anchorFromLesion, placeScrews, caseLine, renderParts, setOpacity, resEnds, splitGap, cutMisses, evalScrew, resectedAt, resectedNear, resPiece, boneTrack, cutAlongBone, cutSection, centreCut, margPlanes, bestScrew,
     boneSections, autoPrep, exportPackage, sha256Bytes, prodRecord, sizeBody, autoBody, buildGuideSet, cutsAngle, cutFrame, pieceFrames, pieceBody, screwBodyOn, pieceWrapTop, frameAt, stumpGap, mergeStl, mergeMeshes, AUTO_DEFAULT, G_DEFAULT, unapproveAll, pendingList: pending, gizmo, proxy, syncGizmo, gz, gizmoStart, gizmoApply, cutMoveBasis, moveCutTo, moveSpace, cutNormal, turnCut, live, camF, ctlF, setSplit, resize, goTo, refPos, approveItem, renderChecks, updateMarkers, placeMarkers, renderElements, esc, ray, toWorldRed, setMode, rebuildBone, segment, S, parts, buildGuide, boneAtIn, meshFromNets, applyExplode, renderer, bus, emit, render, scene, camera, controls, renderer, V, fmt, planOf, applyPlan, openPlan, frameAxes, planesWorld, screwWorld, schedule, select, serverUrl, alertMsg, busy, busyFrac, busySpan, busyText, boneAt, unapprove, mat, setPart, COLORS, fitTo, rebuildResection, regenerate, updatePanels, sleep, fieldAt, serverGuide, guideRequest, stlOf, offer, zip, zipBytes, G, segThr, screwsWorld, deg, readSample, readDicom, stamp, clone, renderAppr, setVolume, boneField, simplifyMesh, BAR, barPlan, barSdf, buildBarMesh, placeLug, longCase, axisOffBone, ramusAxis, stopSides, LONG_MM, CUT_OFF_MAX, prodKey, productionSTL, exportOne, softOcc, boneDoubt, boneKey, runFix, printIssues, printLine, serverBar, guideField, lockState: () => lock, bonelessCut, qualityCheck, syncQC, segEdits, editsAt, slotDefault, slotDepth, slotPlay, SLOT_PLAY_MAX, reframe, exclusive, settled, makeGuide, screwSlotGap, screwsNearSlots, clearScrew, clearSlotScrews, sleeveSlotGap, SCREW_SLOT_GAP, SCREW_SLOT_MIN, prodReply, prodWhy, gateChecks, swInfo, swLine, sfetch, reportHTML, lesionMargins, anchorFromSlice, ramusAxis };
   bus.addEventListener('planeDragged', () => { renderElements(); schedule(true, 'drag'); });
   // messages assembled at run time are written in the language that was active: write them again when it changes

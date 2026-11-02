@@ -145,7 +145,7 @@ var GKernel = (function () {
     const bossH = g.boss > g.wall ? g.boss : 0, bossW = g.bossW || 2, topHi = Math.max(bridgeHi, c + bossH);
     // the slot flange (plan A3, Lohn 2025): the slot rim (or the wall where there is no rim) carried slotFlange mm past
     // the body's edges across the guide (v), so the blade rests on a longer guiding face at each slot
-    const flg = g.slotFlange > 0 ? g.slotFlange : 0, flH = bossH || g.wall;
+    const flg = g.slotFlange > 0 ? g.slotFlange : 0, flH = bossH || g.wall, wingy = slots.some(s => s.wing), WING_DEPTH = 4;
     // the bridge (the rib that carries the body across the saw slots) runs along the body's own +v / -v edge at each
     // position along the guide: on a bone curved across v the box edge lies off the body, so a rib there would float
     const edgeV = new Float32Array(nx).fill(NaN);
@@ -181,11 +181,18 @@ var GKernel = (function () {
           const bridge = Math.max(bridgeLo - dE, dE - bridgeHi, eT);
           // near real bone: the envelope point under this voxel is bone, or a shadow face within `skirt` of bone
           F[id] = Math.max(box, d - dE - skirt, Math.min(shell, bridge));
-          if (pass === 1 && flg && slots.length) {
+          if (pass === 1 && (flg || wingy) && slots.length) {
+            // per slot: the flange's reach across v (the body plus slotFlange, or the slot's wing over the bone the cut
+            // goes through, app.js slotWing) and its depth (the wrap line on the body, WING_DEPTH below the bone top on a wing)
             let rim = 1e3;
-            for (const s of slots) if (inSl(s, uu, vv, nn)) rim = Math.min(rim, Math.max(Math.abs(s.a * uu + s.b * vv + s.c * nn - s.e) - s.half - bossW, cl - dE, dE - c - flH));
+            const ct = colTopBone[i + nx * j], wDep = (ct > -Infinity ? ct - WING_DEPTH : wrapAt[i]) - nn;
+            for (const s of slots) {
+              if (!inSl(s, uu, vv, nn) || (!flg && !s.wing)) continue;
+              const vb = s.wing ? Math.max(vv - s.wing[1], s.wing[0] - vv) : av - g.W / 2 - flg, dep = s.wing && av > g.W / 2 + flg ? wDep : wrapAt[i] - nn;
+              rim = Math.min(rim, Math.max(Math.abs(s.a * uu + s.b * vv + s.c * nn - s.e) - s.half - bossW, cl - dE, dE - c - flH, vb, dep));
+            }
             for (const s of slots) if (inSl(s, uu, vv, nn)) rim = Math.max(rim, s.half - Math.abs(s.a * uu + s.b * vv + s.c * nn - s.e));
-            F[id] = Math.min(F[id], Math.max(outer, av - g.W / 2 - flg, wrapAt[i] - nn, rim, d - dE - skirt));
+            F[id] = Math.min(F[id], Math.max(outer, rim, d - dE - skirt));
           }
         }
       }

@@ -372,7 +372,7 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
       else if (d.kind === 'plane') dragPlane(v, d.i, X, Y);
       else if (d.kind === 'paint') { const T = xf(v); d.P.paint(toWorld(imgToIdx(v, T.ix(X), T.iy(Y))), v.axis, false); }
     });
-    const end = () => { if (st.drag && st.drag.kind === 'handle' && st.drag.h.end) st.drag.h.end(); if (st.drag && st.drag.kind === 'plane') { St.unapprove(S.planes[st.drag.i]); St.schedule(true); if (St.syncGizmo) St.syncGizmo(); } if (st.drag && st.drag.kind === 'turn' && st.drag.moved) { St.schedule(true); if (St.syncGizmo) St.syncGizmo(); } if (st.drag && st.drag.kind === 'paint') st.drag.P.strokeEnd(); st.drag = null; c.style.cursor = brushOf() ? 'none' : 'crosshair'; };
+    const end = () => { if (st.drag && st.drag.kind === 'handle' && st.drag.h.end) st.drag.h.end(); if (st.drag && st.drag.kind === 'plane') { St.unapprove(S.planes[st.drag.i]); if (St.centreCut) St.centreCut(st.drag.i); St.schedule(true); if (St.syncGizmo) St.syncGizmo(); } if (st.drag && st.drag.kind === 'turn' && st.drag.moved) { if (St.centreCut && st.drag.i != null) St.centreCut(st.drag.i); St.schedule(true); if (St.syncGizmo) St.syncGizmo(); } if (st.drag && st.drag.kind === 'paint') st.drag.P.strokeEnd(); st.drag = null; c.style.cursor = brushOf() ? 'none' : 'crosshair'; };
     c.addEventListener('pointerup', end); c.addEventListener('pointercancel', end);
     c.addEventListener('pointerleave', () => { if (st.hover && st.hover.v === v.id) { st.hover = null; redraw(); } });
     c.addEventListener('dblclick', () => { st.max = st.max === v.id ? null : v.id; layout(); });

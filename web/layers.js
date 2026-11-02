@@ -9,7 +9,7 @@ window.Layers = (function () {
   const { S, fmt, bus } = St, $ = id => document.getElementById(id);
   const PRESETS = {
     skin: { name: 'Cilt (dış yüzey)', min: -300, max: 3071, color: 0xe2a48c, opacity: 0.22, outer: true },
-    muscle: { name: 'Kas ve yumuşak doku', min: 20, max: 100, color: 0xc0504d, opacity: 0.35 },
+    muscle: { name: 'Kas ve yumuşak doku', min: 20, max: 100, color: 0xa89070, opacity: 0.3 },
     fat: { name: 'Yağ', min: -150, max: -30, color: 0xf0d58c, opacity: 0.3 },
     vessel: { name: 'Damar (kontrastlı BT)', min: 180, max: 450, color: 0xb02a5a, opacity: 0.7 },
     teeth: { name: 'Diş ve metal', min: 1500, max: 3071, color: 0xf4f1e6, opacity: 0.9 },
@@ -108,9 +108,11 @@ window.Layers = (function () {
     add(k);
   });
 
-  // new volume: skin on by default; the other layers keep their ranges and are rebuilt if they were on
+  // new volume: skin and soft tissue on by default (Melikhan 2026-11-02: a tumour in the soft tissue should show, and be
+  // painted, from the start; the lesion brush in 3D paints inside the model it starts on); the other layers keep their
+  // ranges and are rebuilt if they were on. The soft tissue is not red, so it does not read as the painted lesion.
   bus.addEventListener('volume', async () => {
-    if (!layers.length) layers.push(Object.assign({ id: ++seq, kind: 'skin', on: true }, PRESETS.skin));
+    if (!layers.length) ['skin', 'muscle'].forEach(k => layers.push(Object.assign({ id: ++seq, kind: k, on: true }, PRESETS[k])));
     for (const L of layers) await build(L);
     render();
   });
@@ -135,5 +137,10 @@ window.Layers = (function () {
   render();
   // a stable key for the layer list's names (web/app.js partNames): the layer's place in the list, not its run-time id
   const keyOf = id => { const i = layers.findIndex(L => pid(L) === id); return i < 0 ? id : 'layer@' + i; };
-  return { add, keyOf, setOpacity, list: () => layers, targets: () => layers.map(L => St.parts[pid(L)]).filter(pt => pt && pt.visible).map(pt => pt.obj), PRESETS };
+  // the layer a 3D object belongs to (the lesion brush paints only inside the model it starts on)
+  function layerOf(obj) {
+    for (const L of layers) { const pt = St.parts[pid(L)]; if (!pt) continue; for (let o = obj; o; o = o.parent) if (o === pt.obj) return L; }
+    return null;
+  }
+  return { add, keyOf, layerOf, setOpacity, list: () => layers, targets: () => layers.map(L => St.parts[pid(L)]).filter(pt => pt && pt.visible).map(pt => pt.obj), PRESETS };
 })();

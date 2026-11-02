@@ -32,7 +32,10 @@ window.Lesion = (function () {
   }
 
   // ---------- painting: a disc in the slice plane ----------
-  function stamp(world, axis, erase) {
+  // allow (3D strokes): the voxels of the segmented model the stroke started on (bone, a soft tissue or skin layer), so
+  // the brush ball centred on a surface does not paint the air or the tissue around it (Melikhan 2026-11-02: the
+  // painted lesion bulged ~ one brush radius out of the bone)
+  function stamp(world, axis, erase, allow) {
     ensure();
     const r = S.red, c = G.indexOf(r, world), dim = [r.nx, r.ny, r.nz], rad = r.sp.map(s => Math.ceil(radius / s));
     if (axis != null) { rad[axis] = 0; if (!erase) lastAxis = axis; }
@@ -42,17 +45,27 @@ window.Lesion = (function () {
       const d = [(i - c[0]) * r.sp[0], (j - c[1]) * r.sp[1], (k - c[2]) * r.sp[2]]; if (axis != null) d[axis] = 0;
       if (d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > radius * radius) continue;
       const v = i + r.nx * (j + r.ny * k);
+      if (allow && !erase && !allow(v)) continue;
       if (erase ? mask[v] : !mask[v]) { mask[v] = erase ? 0 : 1; changed++; }
     }
     if (changed) ver++;
     return changed;
   }
-  function paint(world, axis, first) {
+  // the voxels of one segmented model on the working grid: the bone model (S.mask) or a tissue layer's HU range
+  function modelVoxels(obj) {
+    const r = S.red; if (!r || !obj) return null;
+    const is = id => { const pt = St.parts[id]; if (!pt) return false; for (let o = obj; o; o = o.parent) if (o === pt.obj) return true; return false; };
+    if ((is('bone') || is('resected')) && S.mask && S.mask.length === r.nx * r.ny * r.nz) return v => S.mask[v] === 1;
+    const L = window.Layers && Layers.layerOf ? Layers.layerOf(obj) : null;
+    if (L && r.hu) return L.outer ? v => r.hu[v] >= L.min : v => r.hu[v] >= L.min && r.hu[v] <= L.max;
+    return null;
+  }
+  function paint(world, axis, first, obj) {
     if (!tool || !S.red) return;
     if (tool === 'grow') { if (first) grow(world); return; }
-    if (first) stroke = { n: 0 };
+    if (first) stroke = { n: 0, allow: axis == null ? modelVoxels(obj) : null };
     if (!stroke) return;
-    stroke.n += stamp(world, axis, tool === 'erase'); lastPaint = { p: world, axis };
+    stroke.n += stamp(world, axis, tool === 'erase', axis == null ? stroke.allow : null); lastPaint = { p: world, axis };
     marker(world, axis);
     if (window.MPR) MPR.redraw();
   }
@@ -273,13 +286,13 @@ window.Lesion = (function () {
     const h = St.ray.intersectObjects(t, false)[0]; if (!h) return null;
     const nrm = h.face ? h.face.normal.clone().transformDirection(h.object.matrixWorld) : St.ray.ray.direction.clone().negate();
     if (nrm.dot(St.ray.ray.direction) > 0) nrm.negate();
-    return { point: h.point.clone(), nrm };
+    return { point: h.point.clone(), nrm, obj: h.object };
   }
   let down3 = false;
   cv.addEventListener('pointerdown', e => {
     if (!tool || tool === 'grow' || e.altKey || e.button !== 0) return;
     const h = hit3D(e); if (!h) return;
-    down3 = true; cv.setPointerCapture(e.pointerId); ring(h); paint(h.point.toArray(), null, true);
+    down3 = true; cv.setPointerCapture(e.pointerId); ring(h); paint(h.point.toArray(), null, true, h.obj);
   });
   cv.addEventListener('pointermove', e => {
     if (!tool || tool === 'grow') return;
@@ -369,7 +382,7 @@ window.Lesion = (function () {
     if (pl.length) planMsg = ` ${xl('Kesiler')} ${pl.map(q => `${fmt(q.off, 1)} mm${ang(q)}`).join(` ${xl('ve')} `)}.${S.guideOn ? xl(` ${S.screws.length} vida yerleştirildi.`) : ''}${wrapNote}`;
     status();
   }
-  $('lesPaint').innerHTML = `<p class="hint more">Fırça lezyonu kırmızıyla boyar: kesitlerde ya da 3B görünümde görünen yüzeyin (cilt, yumuşak doku, kemik) üstünde. Kemiği Anatomi adımındaki Katmanlar'dan kapatabilirsiniz. Silgi boyamayı geri alır. Fırçayı bırakınca (Esc) kesiler lezyonu güvenlik payı kadar dışarıda bırakacak şekilde konur, rezeksiyon parçası çıkarılır ve guide oluşturulur.</p>
+  $('lesPaint').innerHTML = `<p class="hint more">Fırça lezyonu kırmızıyla boyar: kesitlerde ya da 3B görünümde görünen yüzeyin (cilt, yumuşak doku, kemik) üstünde. 3B'de yalnız fırçayla tıklanan modelin (kemik, yumuşak doku ya da cilt) içi boyanır, dışındaki hava ve doku boyanmaz. Kemiği Anatomi adımındaki Katmanlar'dan kapatabilirsiniz. Silgi boyamayı geri alır. Fırçayı bırakınca (Esc) kesiler lezyonu güvenlik payı kadar dışarıda bırakacak şekilde konur, rezeksiyon parçası çıkarılır ve guide oluşturulur.</p>
     <span class="seg tools" id="lsTools" role="group" aria-label="Lezyon aracı">
       <button data-t="paint" aria-pressed="false"><svg class="i"><use href="#i-brush"/></svg>Fırça</button>
       <button data-t="erase" aria-pressed="false"><svg class="i"><use href="#i-eraser"/></svg>Silgi</button>

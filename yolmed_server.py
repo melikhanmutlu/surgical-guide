@@ -61,6 +61,7 @@ MAX_CROP = 128e6                      # voxels in a guide crop (a 100 mm guide a
 MAX_BODY = int(MAX_CROP * 4 / 3) + 8 * 1024 * 1024   # a /guide request: the crop's mask in base64 plus the plan fields
 MAX_PLAN_BODY = 4 * 1024 * 1024       # case and version requests carry only plan JSON
 MAX_GRID = 40e6                       # guide grid cells (~2 GB peak at this size)
+WING_DEPTH = 4.0                      # a slot wing reaches this far below the bone top (gkernel.js WING_DEPTH)
 MAX_PLANES = 64                       # saw slots / screws in one guide (a guide has a handful; each one costs a boolean)
 MAX_SCREWS = 64
 MAX_TEXT = 2000                       # kind, fingerprint, note
@@ -515,6 +516,8 @@ def _validate_guide(req):
          "planes must be a list of {p, N, w}")
     need(all(p.get("clip") is None or (isinstance(p.get("clip"), list) and len(p["clip"]) <= 4 and all(isinstance(c, dict) and _vec(c.get("p")) and _vec(c.get("N")) and (c.get("t") is None or _num(c.get("t"))) for c in p["clip"])) for p in planes),
          "planes[].clip must be a list of up to 4 {p, N, t}")
+    need(all(p.get("wing") is None or (isinstance(p.get("wing"), list) and len(p["wing"]) == 2 and all(_num(x) and -80 <= float(x) <= 80 for x in p["wing"]) and float(p["wing"][0]) < float(p["wing"][1])) for p in planes),
+         "planes[].wing must be [vLo, vHi] within [-80, 80]")
     need(isinstance(screws, list) and all(isinstance(s, dict) and _vec(s.get("entry")) and _vec(s.get("dir")) and all(_num(s.get(k)) for k in ("d", "D", "sleeveH"))
                                           for s in screws), "screws must be a list of {entry, dir, d, D, sleeveH}")
     gap = req.get("gap")
@@ -793,6 +796,12 @@ def build_guide(req, progress=None):
     # resolution is built at the next coarser one (reported in the answer) rather than refused.
     max_sleeve = max([float(s["sleeveH"]) for s in screws] or [0.0])
     ext_pos, ext_neg = max(ext_pos, flg), max(ext_neg, flg)
+    # slot wings (planes[].wing = [vLo, vHi], app.js slotWing): the slot rim carried along the cut over the bone past the
+    # body; the grid reaches over them
+    for pl in planes:
+        if pl.get("wing"):
+            ext_pos = max(ext_pos, float(pl["wing"][1]) - vc - W / 2)
+            ext_neg = max(ext_neg, vc - W / 2 - float(pl["wing"][0]))
     lo = np.array([uc - L / 2 - 4, vc - W / 2 - 4 - ext_neg, -max(wrap + 10, 30) - max(0.0, L / 2 - 15) * 0.6])
     hi = np.array([uc + L / 2 + 4, vc + W / 2 + 4 + ext_pos, clear + max(wall + max(max_sleeve, bridge), boss) + 6])
     # grow the box around both ends of every sleeve (a tilted or wide sleeve near an edge would otherwise be clipped and
@@ -988,7 +997,7 @@ def build_guide(req, progress=None):
             sd_j |= ~pos_j; stop_x[~pos_j], stop_z[~pos_j] = stop["neg"]
         band_j = (sd_j & (np.abs(VV - vc) > W / 2 - 2))[:, None]
         sd2, stop_x2, stop_z2 = sd_j[:, None], stop_x[:, None], stop_z[:, None]
-    slots = []
+    slots, wings = [], []
     for pl in planes:
         Nf = R.T @ _unit(pl["N"])
         e = float(Nf @ to_f(pl["p"]))
@@ -1000,6 +1009,7 @@ def build_guide(req, progress=None):
             clips.append((Nc, float(Nc @ to_f(c_["p"])) - float(c_.get("t") or 0)))
         if half > 0:
             slots.append((Nf, e, half, clips))
+            wings.append(tuple(float(x) for x in pl["wing"]) if pl.get("wing") and not clips else None)
 
     def slot_here(clips, i):
         """Where on slab i the slot exists (True everywhere for an unbounded slot)."""
@@ -1048,18 +1058,29 @@ def build_guide(req, progress=None):
         if e_t is not None:
             br = np.maximum(br, e_t)
         f = np.maximum(np.maximum(box, dd_i - dde_i - skirt), np.minimum(shell, br))
-        if with_slots and flg > 0 and slots:
+        if with_slots and (flg > 0 or any(wings)) and slots:
+            # per slot: the flange's reach across v (the body plus slotFlange, or the slot's wing) and its depth (the wrap
+            # line on the body, WING_DEPTH below the bone top on a wing), as gkernel.js
             fl_h = boss_h or wall
             rim = np.full(f.shape, 1e3, np.float32)
-            for (Nf, e, half, _c), m in zip(slots, ins):
+            ct = col_top[i][:, None]
+            w_dep = np.where(np.isfinite(ct), ct - WING_DEPTH, wrap_at[i]) - NN2
+            for (Nf, e, half, _c), m, wg in zip(slots, ins, wings):
+                if not flg and wg is None:
+                    continue
                 sd = np.abs(Nf[0] * UU[i] + Nf[1] * VV2 + Nf[2] * NN2 - e)
                 b_ = np.maximum(np.maximum(sd - half - boss_w, cl - dde_i), dde_i - clear - fl_h)
+                if wg is None:
+                    vb, dep = av2 - W / 2 - flg, wrap_at[i] - NN2
+                else:
+                    vb = np.maximum(VV2 - wg[1], wg[0] - VV2)
+                    dep = np.where(av2 > W / 2 + flg, w_dep, wrap_at[i] - NN2)
+                b_ = np.maximum(np.maximum(b_, vb), dep)
                 rim = np.minimum(rim, b_ if m is None else np.where(m, b_, 1e3))
             for (Nf, e, half, _c), m in zip(slots, ins):
                 c_ = half - np.abs(Nf[0] * UU[i] + Nf[1] * VV2 + Nf[2] * NN2 - e)
                 rim = np.maximum(rim, c_ if m is None else np.where(m, c_, -1e3))
-            fb = np.maximum(np.maximum(outer, av2 - W / 2 - flg), wrap_at[i] - NN2)
-            f = np.minimum(f, np.maximum(np.maximum(fb, rim), dd_i - dde_i - skirt))
+            f = np.minimum(f, np.maximum(np.maximum(outer, rim), dd_i - dde_i - skirt))
         return np.where(far, np.maximum(outer, dde_i - top_hi), f).astype(np.float32)
     # pass 0 (no slots, no bridge limit) finds the body's own +v / -v edge per position along the guide: the bridge (the
     # rib across the saw slots) runs `bridge` wide inside that edge, not the box edge, so it never floats
