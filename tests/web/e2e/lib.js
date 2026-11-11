@@ -111,6 +111,11 @@ async function start(opt = {}) {
       try {
         const r = await fn() || {};
         Object.assign(row, r);
+        // a verdict built from an `a && b` chain can come out null, undefined, 0 or '': that is a failed check, not an
+        // information row (Denetim 8: such rows printed INFO and were never counted). A row without a verdict leaves
+        // `pass` out; a step that cannot run here returns { skip: true }.
+        if ('pass' in r && r.pass !== true && r.pass !== false && !r.skip) row.pass = false;
+        if (r.skip) row.pass = null;
       } catch (e) {
         row.pass = false; row.actual = 'HARNESS/EXC: ' + (e.message || e).toString().slice(0, 300);
         try { row.evidence = (row.evidence ? row.evidence + ', ' : '') + await h.shot(id.replace(/[^\w.-]/g, '_') + '_exc'); } catch (_) {}
@@ -253,6 +258,8 @@ async function start(opt = {}) {
       try { await browser.close(); } catch (_) {}
       const p = results.filter(r => r.pass === true).length, f = results.filter(r => r.pass === false).length;
       console.log(`== ${name}: ${p} pass, ${f} fail, ${results.length - p - f} info, ${errors.length} console/page errors, ${errors.filter(e => e.kind === 'csp').length} CSP violations${TOKEN ? `, token dialog ${h.tokenAsked}×` : ''}`);
+      // a scenario with a failed step ends with exit code 1, so run_all.sh and CI see it
+      if (f) process.exitCode = 1;
       return { pass: p, fail: f, results, errors };
     },
   };

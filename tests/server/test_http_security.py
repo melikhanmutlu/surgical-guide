@@ -206,6 +206,19 @@ class Headers(unittest.TestCase):
         self.assertEqual(r["version"], json.loads(call(self.base, "GET", "/health")[2])["version"])
         self.assertIn("production_ok", r)
 
+    def test_bad_guide_numbers_are_a_400_not_a_500(self):
+        """K3 F3 / F4: pad fields, an integer too large for a float in a wing or a clip, a wing past what the studio can
+        send: a 400 that names the field, not an uncaught error (a 500 with a traceback)."""
+        def bad(**kw):
+            q = tiny_guide_request()
+            for k, v in kw.items():
+                (q["g"] if k in ("padR", "relief", "pads", "padSide") else q["planes"][0])[k] = v
+            return q
+        for q in (bad(padR="abc"), bad(relief={}), bad(pads="no"), bad(padSide=2), bad(wing=[-(10 ** 400), 5]),
+                  bad(clip=[{"p": [0, 0, 0], "N": [0, 1, 0], "t": 10 ** 400}]), bad(wing=[-5, 5 + 32 + 0.5])):
+            st, r = J(call(self.base, "POST", "/guide", q))
+            self.assertEqual(st, 400, (q["g"], q["planes"], r))
+
 
 if __name__ == "__main__":
     unittest.main()

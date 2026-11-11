@@ -171,11 +171,18 @@ window.SegEdit = (function () {
     if (!S.red || !S.mask) return 0;
     ensure();
     const s = pieceAt(world.toArray ? world.toArray() : world); if (s < 0) { status('Tıklanan yerde kemik yok.'); return 0; }
-    const { seen } = grow(s);
+    const { seen, n: np } = grow(s);
+    // one click must not empty the planning bone (a bone in one piece is all "the piece"): refuse, the eraser or the
+    // scissors still remove it on purpose (Shift keeps the clicked piece, so something always stays)
+    if (!keepOnly) { let left = 0; for (let v = 0; v < seen.length && !left; v++) if (S.mask[v] && !seen[v]) left = 1; if (!left && np) { status('Tıklanan parça kemik modelinin tamamı; silinirse planlama kemiği kalmaz.'); return 0; } }
     let cut = 0;
     for (let v = 0; v < seen.length; v++) if (S.mask[v] && (keepOnly ? !seen[v] : seen[v])) { del[v] = 1; add[v] = 0; S.mask[v] = 0; cut++; }
-    if (cut) await commit(keepOnly ? `Yalnız tıklanan parça bırakıldı: ${cut} voksel çıkarıldı` : `Parça silindi: ${cut} voksel`);
-    else status('Başka parça yok.');
+    if (cut) {
+      await commit(keepOnly ? `Yalnız tıklanan parça bırakıldı: ${cut} voksel çıkarıldı` : `Parça silindi: ${cut} voksel`);
+      // the midline and the condyles were found with that piece on (the skull base, cut off and clicked away): find
+      // them again on what is left, as the upper-jaw split does (Ref computes once per volume by itself)
+      if (window.Ref && Ref.get && Ref.get() && Ref.compute) await Ref.compute(true);
+    } else status('Başka parça yok.');
     return cut;
   }
 

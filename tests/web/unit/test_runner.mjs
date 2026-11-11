@@ -44,4 +44,18 @@ test('run_all.sh lists every unit suite of this folder, each by a file name that
   assert.deepEqual({ missing, unlisted }, { missing: [], unlisted: [] });
 });
 
+// Denetim 8 (2026-11-10): test_flow.mjs ended with process.exit(0), which overrode the exit code 1 the runner sets on a
+// failed test: the suite could never fail in run_all.sh. No suite leaves with a fixed 0; the e2e scenarios end with
+// exit code 1 on a failed step (lib.js done) and run_all.sh passes it on.
+test('no unit suite exits with a fixed 0; the e2e runner passes a failed scenario on', () => {
+  const dir = path.dirname(fileURLToPath(import.meta.url)), bad = [];
+  for (const f of fs.readdirSync(dir).filter(f => /^test_.*\.mjs$/.test(f) && f !== 'test_runner.mjs'))
+    if (/process\.exit\(\s*0?\s*\)/.test(fs.readFileSync(path.join(dir, f), 'utf8'))) bad.push(f);
+  assert.deepEqual(bad, []);
+  const e2e = path.join(dir, '..', 'e2e');
+  assert.match(fs.readFileSync(path.join(e2e, 'lib.js'), 'utf8'), /if \(f\) process\.exitCode = 1/);
+  const sh = fs.readFileSync(path.join(e2e, 'run_all.sh'), 'utf8');
+  assert.match(sh, /PIPESTATUS\[0\]/); assert.match(sh, /exit 1/);
+});
+
 await run('test_runner');

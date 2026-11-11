@@ -80,11 +80,17 @@ const fs = require('fs'), path = require('path'), { execFileSync } = require('ch
     const edited = await h.ev(() => !!(SegEdit.edited && SegEdit.edited()));
     await page.evaluate(() => { const d = document.getElementById('secLayers'); if (!d.open) d.querySelector('summary').click(); });
     const n0 = await page.locator('#layerBox [data-on]').count();
-    await page.selectOption('#layerKind', { index: 1 }).catch(() => {});
+    // a new volume already has the skin and soft tissue layers (7a277ac), and "Katman ekle" on a kind already in the
+    // list shows that layer again instead of adding a second copy: add the first preset kind not in the list yet
+    const kind = await h.ev(() => { const have = new Set(Layers.list().map(L => L.kind)); return [...document.querySelectorAll('#layerKind option')].map(o => o.value).find(k => k !== 'custom' && !have.has(k)) || 'custom'; });
+    await page.selectOption('#layerKind', kind);
     await page.click('#layerAdd'); await h.idle();
     const n1 = await page.locator('#layerBox [data-on]').count();
+    // the same kind again: shown, not duplicated
+    await page.click('#layerAdd'); await h.idle();
+    const n2 = await page.locator('#layerBox [data-on]').count();
     const cb = page.locator('#layerBox [data-on]').first(); await cb.click(); await h.idle(); await cb.click(); await h.idle();
-    return { pass: !edited && n1 === n0 + 1, actual: `düzeltme kaldı=${edited}, katman ${n0} → ${n1}`, evidence: await h.shot('A1.2d_katman') };
+    return { pass: !edited && n1 === n0 + 1 && n2 === n1, actual: `düzeltme kaldı=${edited}, katman ${n0} → ${n1} (+${kind}; aynısı yine: ${n2})`, evidence: await h.shot('A1.2d_katman') };
   });
 
   // ---------- step 3 ----------

@@ -1,7 +1,7 @@
 // Regression (2026-10-25): the move handle of a turned cut. The handle's axes used to stay on the guide frame, so a
 // turned cut could only slide along the straight guide axis. Now (default "Kesiye göre") the handle's x arrow is the
 // cut's normal and turns with the cut; dragging it with the mouse moves the plane square to itself, the angle stays,
-// and the cut's approval drops. "Dünya eksenleri" puts the handle on the world x-y-z.
+// and the cut's approval drops; on release the cut's point settles in the middle of the bone section (centreCut). "Dünya eksenleri" puts the handle on the world x-y-z.
 'use strict';
 const H = require('./lib');
 (async () => {
@@ -38,22 +38,30 @@ const H = require('./lib');
     }
     const before = await h.ev(() => { const pw = Studio.planesWorld()[0]; return { p: pw.p.toArray(), N: pw.N.toArray(), yaw: pw.pl.yaw, pitch: pw.pl.pitch }; });
     if (at) {
-      await page.mouse.down(); for (let k = 1; k <= 10; k++) { await page.mouse.move(at[0] + ux * 4 * k, at[1] + uy * 4 * k); await h.sleep(20); } await page.mouse.up();
+      await page.mouse.down(); for (let k = 1; k <= 10; k++) { await page.mouse.move(at[0] + ux * 4 * k, at[1] + uy * 4 * k); await h.sleep(20); }
+      // while the button is held the cut's point follows the arrow: it must travel along the cut's normal (a handle
+      // left on the guide frame would move it along the guide axis, cos 25° = 0.91 of it along the normal)
+      h.mid = await h.ev(b => { const pw = Studio.planesWorld()[0], V = pw.p.constructor, d = pw.p.clone().sub(new V(...b.p)); return { moved: d.length(), along: Math.abs(d.dot(new V(...b.N))) }; }, before);
+      await page.mouse.up();
       await h.sleep(400); await h.idle();
     }
     const after = await h.ev(b => {
       const pw = Studio.planesWorld()[0], V = pw.p.constructor, d = pw.p.clone().sub(new V(...b.p));
-      return { moved: d.length(), along: Math.abs(d.dot(new V(...b.N))), dotN: pw.N.dot(new V(...b.N)), yaw: pw.pl.yaw, pitch: pw.pl.pitch, ok: pw.pl.ok };
+      // on release the cut's point settles in the middle of the bone section it cuts (app.js centreCut, 7a277ac): the
+      // point also slides within the new plane, so the plane's move is its shift along the normal, not the point's travel
+      const sec = Studio.cutSection(pw.p, pw.N);
+      return { moved: d.length(), along: Math.abs(d.dot(new V(...b.N))), dotN: pw.N.dot(new V(...b.N)), yaw: pw.pl.yaw, pitch: pw.pl.pitch, ok: pw.pl.ok, off: sec ? sec.c.distanceTo(pw.p) : null };
     }, before);
+    const mid = h.mid || { moved: 0, along: 0 };
     // world axes
     const world = await h.ev(() => {
       const sel = document.getElementById('moveSpace'); sel.value = 'world'; sel.dispatchEvent(new Event('change'));
       const q = Studio.proxy.quaternion; const r = { w: Math.abs(q.w), xyz: Math.hypot(q.x, q.y, q.z) };
       sel.value = 'cut'; sel.dispatchEvent(new Event('change')); return r;
     });
-    const pass = prep.gizmo && axes.dotN > 0.999 && axes.box && axes.showY && axes.showZ && !!at && after.moved > 0.5 && after.along / after.moved > 0.98
+    const pass = prep.gizmo && axes.dotN > 0.999 && axes.box && axes.showY && axes.showZ && !!at && mid.moved > 0.5 && mid.along / mid.moved > 0.98 && Math.abs(after.along - mid.along) < 0.05 && after.off !== null && after.off < 0.5
       && after.dotN > 0.9999 && after.yaw === before.yaw && after.pitch === before.pitch && after.ok === false && world.w > 0.9999;
-    return { pass, actual: `x·N=${axes.dotN.toFixed(4)} kutu=${axes.box} tutuldu=${!!at} taşındı=${after.moved.toFixed(2)} mm (normal boyunca ${after.along.toFixed(2)}) açı ${after.yaw}/${after.pitch} onay=${after.ok} dünya q.w=${world.w.toFixed(4)}` };
+    return { pass, actual: `x·N=${axes.dotN.toFixed(4)} kutu=${axes.box} tutuldu=${!!at} sürüklerken ${mid.moved.toFixed(2)} mm (normal boyunca ${mid.along.toFixed(2)}); bırakınca normal boyunca ${after.along.toFixed(2)} mm (nokta ${after.moved.toFixed(2)} mm, kesit ortasına ${after.off === null ? '-' : after.off.toFixed(2)} mm) açı ${after.yaw}/${after.pitch} onay=${after.ok} dünya q.w=${world.w.toFixed(4)}` };
   });
   await h.run('L.2', 'Kesitte kesiyi döndürme ve taşıma', '2×2 görünüm, Kesi 1 seçili, aksiyel kesitte çizgideki yuvarlak tutamacı fareyle çevir, sonra çizgiyi sürükle',
     'Tutamaç kesiyi aksiyel düzlemde döndürür (normalin kesit eksenine açısı aynı kalır, açı değişir, pivot kesi üstünde kalır), çizgi sürüklemesi açıyı değiştirmeden kesiyi taşır, onay düşer', async () => {
@@ -65,7 +73,10 @@ const H = require('./lib');
       if (!kn) return null;
       return { X: r.left + kn.X / dpr, Y: r.top + kn.Y / dpr, PX: r.left + kn.PX / dpr, PY: r.top + kn.PY / dpr, pivot: kn.pivot.toArray(), A: MPR.sliceAxis(v).toArray(), N0: Studio.planesWorld()[0].N.toArray() };
     });
-    if (!k) return { pass: false, actual: 'aksiyel kesitte döndürme tutamacı yok' };
+    if (!k) {
+      const why = await h.ev(() => { const v = MPR.views[0]; return { sel: Studio.S.sel, lines: (v.lines || []).map(x => x.i), hidden: v.cell.hidden, w: v.canvas.clientWidth, mode: document.querySelector('#vmQuad[aria-pressed]') ? document.querySelector('#vmQuad').getAttribute('aria-pressed') : null, split: Studio.S.split, src: Studio.S.source && Studio.S.source.name, planes: Studio.S.planes.length }; });
+      return { pass: false, actual: `aksiyel kesitte döndürme tutamacı yok ${JSON.stringify(why)}`, evidence: await h.shot('L.2_tutamac_yok') };
+    }
     // turn the handle 20° around the pivot on screen
     const R = Math.hypot(k.X - k.PX, k.Y - k.PY), a0 = Math.atan2(k.Y - k.PY, k.X - k.PX);
     await page.mouse.move(k.X, k.Y); await page.mouse.down();

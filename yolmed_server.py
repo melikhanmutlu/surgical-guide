@@ -488,7 +488,13 @@ def _vec(x, n=3):
 
 
 def _num(x):
-    return isinstance(x, (int, float)) and not isinstance(x, bool)
+    """A finite JSON number (not a bool; NaN, Infinity and integers too large for a float are not numbers here)."""
+    if not isinstance(x, (int, float)) or isinstance(x, bool):
+        return False
+    try:
+        return math.isfinite(float(x))
+    except OverflowError:
+        return False
 
 
 def _validate_guide(req):
@@ -510,14 +516,19 @@ def _validate_guide(req):
     need(isinstance(fr, dict) and all(_vec(fr.get(k)) for k in ("p", "u", "v", "n")), "frame must be {p, u, v, n}, 3 numbers each")
     need(isinstance(g, dict) and all(_num(g.get(k)) for k in ("L", "W", "wrap", "wall", "clear", "bridge")),
          "g needs the numbers L, W, wrap, wall, clear, bridge")
-    need(all(g.get(k) is None or _num(g.get(k)) for k in ("side", "vc", "uc", "skirt", "boss", "bossW", "slotFlange")), "g.side, vc, uc, skirt, boss, bossW, slotFlange must be numbers")
+    need(all(g.get(k) is None or _num(g.get(k)) for k in ("side", "vc", "uc", "skirt", "boss", "bossW", "slotFlange", "padR", "relief")),
+         "g.side, vc, uc, skirt, boss, bossW, slotFlange, padR, relief must be numbers")
+    need(g.get("pads") is None or isinstance(g["pads"], bool) or (_num(g["pads"]) and g["pads"] in (0, 1)), "g.pads must be true/false or 0/1")
+    need(g.get("padSide") is None or (_num(g["padSide"]) and g["padSide"] in (-1, 0, 1)), "g.padSide must be -1, 0 or 1")
     planes, screws = req.get("planes") or [], req.get("screws") or []
     need(isinstance(planes, list) and all(isinstance(p, dict) and _vec(p.get("p")) and _vec(p.get("N")) and _num(p.get("w")) for p in planes),
          "planes must be a list of {p, N, w}")
     need(all(p.get("clip") is None or (isinstance(p.get("clip"), list) and len(p["clip"]) <= 4 and all(isinstance(c, dict) and _vec(c.get("p")) and _vec(c.get("N")) and (c.get("t") is None or _num(c.get("t"))) for c in p["clip"])) for p in planes),
          "planes[].clip must be a list of up to 4 {p, N, t}")
-    need(all(p.get("wing") is None or (isinstance(p.get("wing"), list) and len(p["wing"]) == 2 and all(_num(x) and -80 <= float(x) <= 80 for x in p["wing"]) and float(p["wing"][0]) < float(p["wing"][1])) for p in planes),
-         "planes[].wing must be [vLo, vHi] within [-80, 80]")
+    # a wing reaches at most 30 mm (+ 2 mm) past the body's edge (app.js slotWing): each end within W/2 + 32 mm of g.vc
+    wv, wr = float(g.get("vc") or 0), float(g["W"]) / 2 + 32
+    need(all(p.get("wing") is None or (isinstance(p.get("wing"), list) and len(p["wing"]) == 2 and all(_num(x) and abs(float(x) - wv) <= wr for x in p["wing"]) and float(p["wing"][0]) < float(p["wing"][1])) for p in planes),
+         "planes[].wing must be [vLo, vHi] within W/2 + 32 mm of g.vc")
     need(isinstance(screws, list) and all(isinstance(s, dict) and _vec(s.get("entry")) and _vec(s.get("dir")) and all(_num(s.get(k)) for k in ("d", "D", "sleeveH"))
                                           for s in screws), "screws must be a list of {entry, dir, d, D, sleeveH}")
     gap = req.get("gap")
@@ -1017,18 +1028,31 @@ def build_guide(req, progress=None):
         for Nc, ec in clips:
             m &= (Nc[0] * UU[i] + Nc[1] * VV2 + Nc[2] * NN2 - ec) >= 0
         return m
-    # the pads in guide-frame (u, v): two per cut on the kept side, as gkernel.js places them
+    # the pads in guide-frame (u, v): two per cut on the kept side, as gkernel.js places them. The kept side is g.padSide
+    # (+1: +u of every slot, -1: -u; a piece of a two-piece guide) or, without it, away from the body centre uc (one
+    # guide over both cuts). A pad whose centre is off the body length is not built; with fewer than 2 pads left the
+    # relief is not applied (the guide seats on its whole inner surface): a guide is never relieved everywhere.
     pad_at = np.zeros((nx, ny), bool)
+    n_pads = 0
     if pads_on:
         off = max(pad_r + 1, W / 4)
+        pad_side = float(g.get("padSide") or 0)
+        pads_uv = []
         for Nf, e, half, _c in slots:
             if abs(Nf[0]) < 0.3:
                 continue
             us = (e - Nf[1] * vc) / Nf[0]
-            sd_ = 1.0 if us - uc >= 0 else -1.0
+            sd_ = pad_side if pad_side else (1.0 if us - uc >= 0 else -1.0)
             pu = us + sd_ * (half + boss_w + pad_r + 1)
-            for dv in (-off, off):
-                pad_at |= np.hypot(UU[:, None] - pu, VV[None, :] - (vc + dv)) <= pad_r
+            if abs(pu - uc) > L / 2:
+                continue
+            pads_uv += [(pu, vc + dv) for dv in (-off, off)]
+        if len(pads_uv) < 2:
+            relief = 0.0
+        else:
+            n_pads = len(pads_uv)
+            for pu, pv in pads_uv:
+                pad_at |= np.hypot(UU[:, None] - pu, VV[None, :] - pv) <= pad_r
 
     def slab(i, with_slots, e_t):
         """The field of slab i: the box (length, width, wrap line, stops), the shell band on the envelope (cut by the
@@ -1320,6 +1344,7 @@ def build_guide(req, progress=None):
         "seat_dir": seat_dir,
         "screws": screw_info,
         "screws_missing": sum(1 for si in screw_info if si.get("no_body")),
+        "pads": n_pads,
         "print_checks": pc,
         "contact_mm2": round(contact * r * r, 1),
         "field_volume_mm3": round(vol_vox * r * r * r, 1),

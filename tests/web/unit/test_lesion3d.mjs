@@ -59,5 +59,21 @@ test('the slice brush still paints the whole disc (the surgeon draws on the CT)'
   assert.ok(L.some(q => !S.mask[q]) && L.some(q => S.mask[q]), 'disc covers bone and what is around it');
   LS.setTool('paint'); LS.clear();
 });
+test('a canal point or a root inside the painted lesion is inside the margin (before: measured to the lesion surface)', () => {
+  // before: the distance went to the lesion's surface voxels only, so a canal point at the centre of an 8 mm lesion read
+  // 5.6 mm ("kanala 5,6 mm") and a root lying wholly inside it "diş kökleri pay dışında"
+  let sx = 0, sy = 0, sz = 0, n = 0;
+  for (let k = 0; k < r.nz; k++) for (let j = 0; j < r.ny; j++) for (let i = 0; i < r.nx; i++) if (S.mask[i + r.nx * (j + r.ny * k)]) { const w = G.worldOf(r, i, j, k); if (Math.abs(w[0]) < 3) { sx += w[0]; sy += w[1]; sz += w[2]; n++; } }
+  const c = [sx / n, sy / n, sz / n], $ = id => P.doc.getElementById(id), e = $('lsRad'), keep = [S.canals, S.roots, S.lesion.margin];
+  e.value = '8'; (e.listeners.input || []).forEach(f => f({ target: e }));
+  LS.clear(); LS.setTool('paint');
+  let first = true; for (let x = -10; x <= 10; x += 0.8) { LS.paint([x, c[1], c[2]], 0, first); first = false; } LS.strokeEnd();
+  S.lesion.margin = 5; S.canals = [{ pts: [[0, c[1], c[2]]] }]; S.roots = [{ a: [-2, c[1], c[2] - 2], b: [-2, c[1], c[2] + 2], r: 2.5 }];
+  St.emit('changed');
+  const sh = LS.shellInfo();
+  assert.ok(sh.canal < 0, 'canal point at the centre: ' + sh.canal);
+  assert.equal(sh.inRoots, 1, 'the root inside the lesion is in the margin: ' + JSON.stringify(sh.roots));
+  S.canals = keep[0]; S.roots = keep[1]; S.lesion.margin = keep[2]; LS.setTool('paint'); LS.clear();
+});
 
 await run();

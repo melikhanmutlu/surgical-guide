@@ -8,7 +8,7 @@ import { test, run, assert } from './lib/t.mjs';
 import { studio, ready } from './lib/harness.mjs';
 import { mandibleBar } from '../../phantoms/phantoms.mjs';
 
-const P = studio({ post: ['segedit.js'], extra: { confirm: () => true, addEventListener() {}, removeEventListener() {} } });
+const P = studio({ post: ['segedit.js', 'ref.js'], extra: { confirm: () => true, addEventListener() {}, removeEventListener() {} } });
 const St = await ready(P); const T = P.g.THREE, S = St.S, G = P.eval('G'), $ = id => P.doc.getElementById(id);
 const v = mandibleBar({});
 S.vol = { hu: v.hu, nx: v.nx, ny: v.ny, nz: v.nz, sp: v.sp, origin: v.origin, axes: v.axes, meta: v.meta };
@@ -52,6 +52,23 @@ test('Shift-click keeps only the clicked piece', async () => {
 test('a click off the bone removes nothing', async () => {
   const before = sides(); const n = await SE.pickPiece(new T.Vector3(0, 0, 60), false);
   assert.equal(n, 0); assert.deepEqual(sides(), before);
+  await SE.reset(); await St.settled();
+});
+test('a click on a bone in one piece is refused (before: the whole planning bone was gone, no warning)', async () => {
+  const before = S.mask.reduce((a, b) => a + b, 0); assert.ok(before > 1000);
+  const n = await SE.pickPiece(new T.Vector3(0, 0, -12), false); await St.settled();
+  assert.equal(n, 0); assert.equal(S.mask.reduce((a, b) => a + b, 0), before, 'nothing removed');
+  assert.ok(!SE.edited()); assert.match($('seStat').innerHTML, /kemik modelinin tamamı/);
+  assert.equal(await SE.pickPiece(new T.Vector3(0, 0, -12), true), 0, 'Shift on the only piece: nothing changes');
+  assert.equal(S.mask.reduce((a, b) => a + b, 0), before);
+});
+test('after a piece is removed the midline and the condyles are found again on what is left', async () => {
+  // before: Ref kept the midline found on the bone with the piece on (it computes once per volume by itself)
+  const Ref = P.eval('Ref');
+  await cutInTwo(); await Ref.compute(false); const r0 = Ref.get(); assert.ok(r0, 'a midline on the cut bar');
+  await SE.pickPiece(new T.Vector3(30, 0, -12), false); await St.settled();
+  const r1 = Ref.get(); assert.ok(r1 && r1 !== r0, 'computed again');
+  assert.ok(Math.abs(r1.d - r0.d) > 5 || Math.abs(Math.abs(r1.n[0]) - Math.abs(r0.n[0])) > 0.1, 'the midline moved with the bone: ' + JSON.stringify([r0.n, r0.d, r1.n, r1.d]));
   await SE.reset(); await St.settled();
 });
 test('3D brush outline: hovering the bone with the eraser shows a ring of the brush radius on the surface', async () => {

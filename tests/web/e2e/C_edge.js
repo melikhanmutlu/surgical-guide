@@ -112,6 +112,11 @@ const VERI = process.env.VERI || '/mnt/project-files/surgical-guide-prototype/au
     const r = await page.$eval('#stage', e => e.getBoundingClientRect().toJSON());
     const band = pts.filter(p => p.y > r.top + r.height * 0.5 && p.y < r.top + r.height * 0.8).sort((a, b) => a.x - b.x);
     const p = band[Math.floor(band.length * 0.1)];
+    if (!p) {
+      // no bone point in the band: say what the screen showed there instead of failing on p.x
+      const why = await h.ev(r => { const el = Studio.renderer.domElement, tops = {}; for (let y = r.top + r.height * 0.5; y < r.top + r.height * 0.8; y += 20) for (let x = r.left + 20; x < r.right - 20; x += 40) { const t = document.elementFromPoint(x, y), k = t === el ? 'canvas' : t ? `${t.tagName}#${t.id}.${String(t.className).slice(0, 30)}` : 'null'; tops[k] = (tops[k] || 0) + 1; } return { tops, canvas: el.getBoundingClientRect().toJSON(), cam: Studio.camera.position.toArray().map(x => +x.toFixed(1)), busy: !document.getElementById('busy').hidden }; }, r);
+      return { pass: false, actual: `bantta kemik noktası yok (${pts.length} kemik noktası, y ${Math.min(...pts.map(q => q.y))}…${Math.max(...pts.map(q => q.y))}; sahne ${JSON.stringify(r)}); ${JSON.stringify(why)}`, evidence: await h.shot('C3_bant_bos') };
+    }
     await page.click('#pickAnchor'); await h.click3d(p.x, p.y); await h.settle();
     await page.evaluate(() => { const d = document.getElementById('secBounds'); if (!d.open) d.querySelector('summary').click(); });
     await h.setRange('#l_from', -20); await h.setRange('#l_to', 20); await h.setRange('#l_margin', 3);
@@ -187,10 +192,14 @@ const VERI = process.env.VERI || '/mnt/project-files/surgical-guide-prototype/au
       await h.setRange('#l_from', -30); await h.setRange('#l_to', 30); await h.setRange('#l_margin', 10);
       await page.click('#suggest'); await h.settle();
       const s = await st(), scr = await h.ev(() => Studio.S.screws.map(x => x ? x.u : null));
-      out.push({ per, planes: s.planes.map(p => p.off), L: s.L, screws: scr, pieces: s.pieces, crit: s.crit, list: s.critList });
+      const lay = await h.ev(() => ({ split: Studio.S.g.split, parts: [...new Set(Studio.S.screws.filter(Boolean).map(x => x.part))].length }));
+      out.push({ per, planes: s.planes.map(p => p.off), L: s.L, screws: scr, pieces: s.pieces, split: lay.split, parts: lay.parts, crit: s.crit, list: s.critList });
     }
     const ev = await h.shot('C9.1_genis');
-    const ok = out.every(o => !o.screws.includes(null) && (o.crit > 0 || o.pieces === 1));
+    // a 60 mm range: "Kesileri ... koy" builds the guide again like the first automatic plan (be2a6cc), and a resection
+    // of 55 mm or more gets two guides joined by a bar (longCase): with no critical check that layout is valid when
+    // each guide carries a screw (as C3); one guide must be one piece
+    const ok = out.every(o => !o.screws.includes(null) && (o.crit > 0 || (o.split === 2 ? o.pieces === 2 && o.parts === 2 : o.pieces === 1)));
     return { pass: ok, actual: JSON.stringify(out), evidence: ev };
   });
   await h.run('C9.2', 'Yeniden kontrol (D2 M1)', '"Bölgeyi modelde seç" sonra lezyon Fırçası; 3B kemiğe tıkla', 'Guide merkezi taşınmaz (seçim modu fırçayla kapanır)', async () => {
@@ -215,7 +224,7 @@ const VERI = process.env.VERI || '/mnt/project-files/surgical-guide-prototype/au
 
   // ---------- C6: server offline, then production STL ----------
   await h.run('C6', '8 · Teslim (sunucu kapalı)', 'Sunucuyu durdur, "Üret" (üretim STL)', 'Açık hata mesajı, meşgul katman kapanır, uygulama çalışmaya devam eder', async () => {
-    if (!process.env.SERVER_PID) return { pass: null, actual: 'SERVER_PID verilmedi, atlandı' };
+    if (!process.env.SERVER_PID) return { skip: true, actual: 'SERVER_PID verilmedi, atlandı' };
     await h.openStep(3); await page.click('#autoPrep'); await h.idle();
     process.kill(+process.env.SERVER_PID, 'SIGTERM'); await h.sleep(1500);
     await h.openStep(8);

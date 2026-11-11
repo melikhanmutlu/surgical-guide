@@ -19,8 +19,8 @@ const St = await ready(P); const S = St.S, G = P.eval('G'), W = P.g, B = P.eval(
 const BASE = 100000;
 
 const MAXILLA = (x, y, z) => Math.abs(x) < 34 && Math.abs(y) < 10 && z >= 40 && z < 75;
-function phantom(withMaxilla, withSkull) {
-  const sp = [0.8, 0.8, 0.8], o = [-60, -16, -2], nx = 150, ny = 40, nz = 125, hu = new Int16Array(nx * ny * nz).fill(-1000);
+function phantom(withMaxilla, withSkull, nz = 125) {
+  const sp = [0.8, 0.8, 0.8], o = [-60, -16, -2], nx = 150, ny = 40, hu = new Int16Array(nx * ny * nz).fill(-1000);
   for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
     const x = o[0] + i * sp[0], y = o[1] + j * sp[1], z = o[2] + k * sp[2], ax = Math.abs(x);
     const body = ax < 52 && Math.abs(y) < 6 && z >= 2 && z < 26;
@@ -35,9 +35,9 @@ function phantom(withMaxilla, withSkull) {
   }
   return { hu, nx, ny, nz, sp, origin: o, axes: [[1, 0, 0], [0, 1, 0], [0, 0, 1]], meta: {} };
 }
-async function load(withMaxilla, withSkull = false) {
+async function load(withMaxilla, withSkull = false, nz = 125) {
   await W.PlanExt.masks.set(null);
-  S.vol = phantom(withMaxilla, withSkull); S.source = { type: 'dicom', name: 'synthetic', fp: 'synthetic-jaw-' + withMaxilla + withSkull };
+  S.vol = phantom(withMaxilla, withSkull, nz); S.source = { type: 'dicom', name: 'synthetic', fp: 'synthetic-jaw-' + withMaxilla + withSkull + nz };
   S.red = G.reduce(S.vol, 0.8); S.kind = 'dicom'; S.autoAnchor = false; S.anchor = null; S.planes = []; S.screws = [];
   await St.segment(true); await St.settled();
 }
@@ -96,6 +96,19 @@ test('a scan cut through the skull base: the skull base goes with the upper jaw,
   assert.equal(top, 0, 'no skull base left in the planning bone');
   assert.ok(count((x, y, z) => Math.abs(x) > 46 && z > 70 && z < 81) > 50, 'the rami up to the joint stay mandible');
   assert.ok(!(S.segWarn || []).some(w => /kenarına dayanıyor/.test(w[2])), 'the edge warning is gone: ' + JSON.stringify(S.segWarn));
+});
+
+test('a scan whose top cuts the maxilla and both rami: the cut ramus tops stay mandible', async () => {
+  // before: bone at the scan top reaching the midline seeded every top-slab voxel as upper jaw, the cut ramus tops
+  // too, so the split handed ~19 mm of each ramus to "Üst çene" (7770 -> 2520 ramus voxels above z 40)
+  await load(true, false, 90);   // scan top z 69.2: through the maxilla block (z 40..75) and the rami (z ..92)
+  const before = count((x, y, z) => Math.abs(x) > 46 && z > 40);
+  W.Masks.setOcc(38); await W.Masks.jawRun(); await St.settled();
+  assert.ok(S.comps.some(c => c.label === BASE + 2), 'the maxilla is split off');
+  const after = count((x, y, z) => Math.abs(x) > 46 && z > 40);
+  assert.ok(after >= 0.95 * before, 'the rami stay mandible: ' + before + ' -> ' + after);
+  assert.ok(count((x, y, z) => Math.abs(x) > 46 && z > 62) > 100, 'up to the scan top');
+  assert.equal(count((x, y, z) => MAXILLA(x, y, z) && z > 41.5), 0, 'no maxilla left in the planning bone');
 });
 
 test('the upper jaw box: shown with a joined maxilla, the plane proposed and drawn in 3D; gone without one', async () => {

@@ -91,9 +91,10 @@ const moveOf = (r, kind, axis) => r.moves.filter(m => m.kind === kind && m.axis 
 test('fit test: a flat plate on flat bone slides and twists freely (the free directions are reported)', () => {
   const r = Seat.freeMoves(fitGrid(NX, NY, NZ, (i, j, k) => k < 8, (i, j, k) => k >= 8 && k < 13 && i > 3 && i < 26 && j > 3 && j < 16));
   assert.ok(r.ok && r.n > 0);
-  assert.ok(r.moves.filter(m => m.kind === 'slide').every(m => m.free), 'every slide on a flat face is free');
-  assert.ok(moveOf(r, 'rot', 'd').every(m => m.free), 'twisting on a flat face is free');
+  assert.equal(r.moves.filter(m => m.kind === 'slide').length, 8); assert.ok(r.moves.filter(m => m.kind === 'slide').every(m => m.free), 'every slide on a flat face is free');
+  assert.equal(moveOf(r, 'rot', 'd').length, 2); assert.ok(moveOf(r, 'rot', 'd').every(m => m.free), 'twisting on a flat face is free');
   // tilting about u or v pushes one edge into the bone
+  assert.equal(moveOf(r, 'rot', 'u').length + moveOf(r, 'rot', 'v').length, 4);
   assert.ok(moveOf(r, 'rot', 'u').every(m => !m.free) && moveOf(r, 'rot', 'v').every(m => !m.free), JSON.stringify(r.moves.filter(m => m.kind === 'rot').map(m => [m.axis, m.sign, m.free, m.pivot])));
 });
 
@@ -101,6 +102,7 @@ test('fit test: a guide in a groove cannot slide across it, only along it', () =
   const bone = (i, j, k) => k < 8 || ((j < 5 || j > 14) && k < 14);
   const r = Seat.freeMoves(fitGrid(NX, NY, NZ, bone, (i, j, k) => k >= 8 && k < 16 && i > 3 && i < 26 && j >= 5 && j <= 14));
   const sl = r.moves.filter(m => m.kind === 'slide');
+  assert.equal(sl.filter(m => Math.abs(m.dir[1]) > 0.5).length, 6); assert.equal(sl.filter(m => Math.abs(m.dir[0]) > 0.99).length, 2);
   assert.ok(sl.filter(m => Math.abs(m.dir[1]) > 0.5).every(m => !m.free), 'across the groove blocked');
   assert.ok(sl.filter(m => Math.abs(m.dir[0]) > 0.99).every(m => m.free), 'along the groove free');
 });
@@ -121,8 +123,22 @@ test('fit test with screws: two pins hold every slide and twist the bone alone l
   assert.ok(two.free > 0 && two.freeScrewed === 0, `free ${two.free}, with screws ${two.freeScrewed}`);
   const one = Seat.freeMoves(Object.assign({}, g, { screws: [{ el: [7.5, 5, 4], ol: [0, 0, 1] }] }));
   // the one pin stands at the contact centroid: the twist about it stays free, the slides are held
-  assert.ok(moveOf(one, 'rot', 'd').every(m => m.freeScrewed), 'one pin: the guide still turns about it');
-  assert.ok(one.moves.filter(m => m.kind === 'slide').every(m => !m.freeScrewed), 'one pin holds the slides');
+  assert.equal(moveOf(one, 'rot', 'd').length, 2); assert.ok(moveOf(one, 'rot', 'd').every(m => m.freeScrewed), 'one pin: the guide still turns about it');
+  assert.equal(one.moves.filter(m => m.kind === 'slide').length, 8); assert.ok(one.moves.filter(m => m.kind === 'slide').every(m => !m.freeScrewed), 'one pin holds the slides');
+});
+
+test('fit test with one screw off the contact centroid: the guide still turns about that screw', () => {
+  // before: the twist was tried only about the centroid, which moves a pin 3-4.5 mm off it sideways, so one pin
+  // anywhere but the centroid read as holding the guide (freeScrewed 0, no Kritik)
+  const g = fitGrid(NX, NY, NZ, (i, j, k) => k < 8, (i, j, k) => k >= 8 && k < 13 && i > 3 && i < 26 && j > 3 && j < 16);
+  for (const x of [3, 11]) {
+    const one = Seat.freeMoves(Object.assign({}, g, { screws: [{ el: [x, 5, 4], ol: [0, 0, 1] }] })), rd = moveOf(one, 'rot', 'd');
+    assert.equal(rd.length, 2); assert.ok(rd.every(m => m.freeScrewed), 'pin at x ' + x + ': turns about it ' + JSON.stringify(rd.map(m => [m.free, m.freeScrewed])));
+    assert.equal(one.freeScrewed, 2, 'only the twist is free with the pin in');
+  }
+  // two pins apart: the twist about either one moves the other sideways, still held
+  const two = Seat.freeMoves(Object.assign({}, g, { screws: [{ el: [4, 5, 4], ol: [0, 0, 1] }, { el: [11, 5, 4], ol: [0, 0, 1] }] }));
+  assert.equal(two.freeScrewed, 0);
 });
 
 await run('seat.js');

@@ -24,6 +24,7 @@ start_server() {
   for i in $(seq 1 30); do curl -s -o /dev/null "$BASE/health" && break; sleep 0.5; done
 }
 ONLY="${ONLY:-A1 A2 A3 S K C D F G H E Y3 L T R B}"
+failed=""
 for s in $ONLY; do
   start_server
   case $s in
@@ -32,8 +33,12 @@ for s in $ONLY; do
   esac
   echo "=== $s ($f) ==="
   t0=$(date +%s)
-  timeout 7200 node "$HERE/$f" 2>&1 | grep -E '^(PASS|FAIL|INFO|==)'
+  timeout 7200 node "$HERE/$f" 2>&1 | grep -E '^(PASS|FAIL|INFO|==)' | tee "$E2E_SCRATCH/last_$s.txt"
+  [ "${PIPESTATUS[0]}" = 0 ] || { failed="$failed $s"; }
   echo "--- $s $(( $(date +%s) - t0 )) s"
 done
 start_server
 node "$HERE/tablo.js"
+# exit 1 when a scenario had a failed step, crashed or ran out of time (each scenario exits 1 on a FAIL row: lib.js done)
+[ -z "$failed" ] || { echo "BAŞARISIZ SENARYOLAR:$failed"; exit 1; }
+echo "TÜM SENARYOLAR GEÇTİ"

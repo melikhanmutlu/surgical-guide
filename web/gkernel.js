@@ -126,19 +126,27 @@ var GKernel = (function () {
     const inSl = (s, uu, vv, nn) => !s.clip || s.clip.every(q => q.a * uu + q.b * vv + q.c * nn - q.e >= 0);
     // pads (plan 2026-10-30, step 5): with g.pads the guide touches the bone only on small round pads just past each saw
     // slot on the kept side (two per cut, above and below the middle of the body); everywhere else its inner surface
-    // stands `relief` mm further off the bone, so the fit rests on the pads (and the screw sleeves) alone
-    const padAt = new Uint8Array(nx * ny), pads = [];
+    // stands `relief` mm further off the bone, so the fit rests on the pads (and the screw sleeves) alone. The kept side is
+    // g.padSide (+1: +u of every slot, -1: -u; a piece of a two-piece guide) or, without it, away from the body centre uc
+    // (one guide over both cuts). A pad whose centre is off the body length is not built; with fewer than 2 pads left
+    // the relief is not applied (the guide seats on its whole inner surface): a guide is never relieved everywhere.
+    // (yolmed_server.py build_guide builds the same pads)
+    const padAt = new Uint8Array(nx * ny);
+    let pads = [];
     if (g.pads) {
-      const pr = g.padR || 4, off = Math.max(pr + 1, g.W / 4);
+      const pr = g.padR || 4, off = Math.max(pr + 1, g.W / 4), ps = g.padSide > 0 ? 1 : g.padSide < 0 ? -1 : 0;
       for (const sl of slots) {
         if (Math.abs(sl.a) < 0.3) continue;
-        const us = (sl.e - sl.b * vc) / sl.a, side = Math.sign(us - uc) || 1, pu = us + side * (sl.half + (g.bossW || 2) + pr + 1);
+        const us = (sl.e - sl.b * vc) / sl.a, side = ps || Math.sign(us - uc) || 1, pu = us + side * (sl.half + (g.bossW || 2) + pr + 1);
+        if (Math.abs(pu - uc) > g.L / 2) continue;
         for (const dv of [-off, off]) pads.push([pu, vc + dv]);
       }
-      for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) { const uu = lo[0] + i * h, vv = lo[1] + j * h; if (pads.some(pd => Math.hypot(uu - pd[0], vv - pd[1]) <= pr)) padAt[i + nx * j] = 1; }
+      if (pads.length < 2) pads = [];
+      else for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) { const uu = lo[0] + i * h, vv = lo[1] + j * h; if (pads.some(pd => Math.hypot(uu - pd[0], vv - pd[1]) <= pr)) padAt[i + nx * j] = 1; }
     }
-    const relief = g.pads ? (g.relief == null ? 1 : g.relief) : 0;
+    const relief = g.pads && pads.length >= 2 ? (g.relief == null ? 1 : g.relief) : 0;
     const F = new Float32Array(N).fill(h * 4);
+    const wingOnly = new Uint8Array(N);   // voxels of the slot wings alone (below: kept out of the body's width)
     const bridgeLo = cw - 0.5, bridgeHi = cw + 2.5, skirt = g.skirt == null ? 3 : g.skirt;
     // the slot rim (plan 1.3): the shell raised to `boss` mm over the inner surface within bossW mm of each slot side, so
     // the blade is guided over that depth instead of the wall alone (only a rim deeper than the wall is built)
@@ -192,7 +200,10 @@ var GKernel = (function () {
               rim = Math.min(rim, Math.max(Math.abs(s.a * uu + s.b * vv + s.c * nn - s.e) - s.half - bossW, cl - dE, dE - c - flH, vb, dep));
             }
             for (const s of slots) if (inSl(s, uu, vv, nn)) rim = Math.max(rim, s.half - Math.abs(s.a * uu + s.b * vv + s.c * nn - s.e));
-            F[id] = Math.min(F[id], Math.max(outer, rim, d - dE - skirt));
+            const f0 = F[id];
+            F[id] = Math.min(f0, Math.max(outer, rim, d - dE - skirt));
+            // a voxel only a wing made (past the body and its flange): not part of the body's own width (bodyW / bodyV)
+            if (wingy && f0 >= 0 && F[id] < 0 && av > g.W / 2 + flg) wingOnly[id] = 1;
           }
         }
       }
@@ -278,7 +289,7 @@ var GKernel = (function () {
     let vol = 0, contact = 0, undercutCols = 0, bvLo = Infinity, bvHi = -Infinity;
     for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
       const id = i + nx * (j + ny * k); if (!Gm[id]) continue;
-      vol++; const d = dd[id], vv = lo[1] + j * h; if (vv < bvLo) bvLo = vv; if (vv > bvHi) bvHi = vv;
+      vol++; const d = dd[id], vv = lo[1] + j * h; if (!wingOnly[id]) { if (vv < bvLo) bvLo = vv; if (vv > bvHi) bvHi = vv; }
       if (d > c && d <= bridgeHi) {
         if (d <= cw && d <= c + h) contact++;
         // bone above this voxel along the insertion direction (more than a voxel and a half: the silhouette itself is not an undercut)
@@ -295,7 +306,7 @@ var GKernel = (function () {
     const wrapProfile = []; for (let i = 0; i < nx; i += Math.max(1, Math.round(1 / h))) wrapProfile.push([+(lo[0] + i * h).toFixed(2), +wrapAt[i].toFixed(2)]);
     T.kernel = performance.now() - t0; tick(1);
     return { net, screws: screwOut, wrapProfile, pieces: comps.length, contact: contact * h * h, undercut: undercutCols * h * h, volume: vol * h * h * h, seat, fit, pads: pads.map(pd => pd.map(x => +x.toFixed(2))), seatDir, dropped,
-      bodyW: vol ? +(bvHi - bvLo + h).toFixed(1) : 0, bodyV: vol ? [+bvLo.toFixed(1), +bvHi.toFixed(1)] : null, T, Gm, B, F, edgeV, wrapAt };
+      bodyW: bvHi >= bvLo ? +(bvHi - bvLo + h).toFixed(1) : 0, bodyV: bvHi >= bvLo ? [+bvLo.toFixed(1), +bvHi.toFixed(1)] : null, T, Gm, B, F, edgeV, wrapAt };
   }
   // the buffers a worker answer moves instead of copying
   const transfer = o => [o.net.positions.buffer, o.net.indices.buffer, o.Gm.buffer, o.B.buffer, o.F.buffer, o.edgeV.buffer, o.wrapAt.buffer];

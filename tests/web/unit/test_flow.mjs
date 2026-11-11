@@ -93,4 +93,5 @@ test('a guide turn that would turn a cut is refused and the cuts stay', () => {
   assert(St.setGuideRot(20) === true && S.g.rot === 20, 'a small turn is fine');
 });
 await run('main flow: resection region and cuts');
-process.exit(0);
+// (the stubbed studio leaves timers running; leave with the code the runner set, 1 when a test failed)
+process.exit(process.exitCode || 0);

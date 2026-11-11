@@ -161,7 +161,10 @@ window.Lesion = (function () {
       if (i > 0 && j > 0 && k > 0 && i < r.nx - 1 && j < r.ny - 1 && k < r.nz - 1 && mask[v - 1] && mask[v + 1] && mask[v - r.nx] && mask[v + r.nx] && mask[v - r.nx * r.ny] && mask[v + r.nx * r.ny]) continue;
       surf.push(G.worldOf(r, i, j, k));
     }
-    const near = p => { let d = Infinity; for (const q of surf) { const x = p[0] - q[0], y = p[1] - q[1], z = p[2] - q[2], e = x * x + y * y + z * z; if (e < d) d = e; } return Math.sqrt(d); };
+    // a point inside a painted voxel is at distance 0 (else a root or canal lying wholly inside the lesion read as its
+    // distance to the nearest surface, several mm, and "outside the margin")
+    const inside = p => { const q = G.indexOf(r, p).map(Math.round); return q[0] >= 0 && q[1] >= 0 && q[2] >= 0 && q[0] < r.nx && q[1] < r.ny && q[2] < r.nz && !!mask[q[0] + r.nx * (q[1] + r.ny * q[2])]; };
+    const near = p => { if (inside(p)) return 0; let d = Infinity; for (const q of surf) { const x = p[0] - q[0], y = p[1] - q[1], z = p[2] - q[2], e = x * x + y * y + z * z; if (e < d) d = e; } return Math.sqrt(d); };
     let canal = null, roots = [];
     (S.canals || []).forEach(c => (c.pts || []).forEach(p => { const d = near(p) - (window.Canal ? Canal.R_CANAL : 1.5); if (canal == null || d < canal) canal = d; }));
     (S.roots || []).forEach((rt, i) => { let d = Infinity; for (let t = 0; t <= 1.0001; t += 0.1) { const p = [0, 1, 2].map(a => rt.a[a] + (rt.b[a] - rt.a[a]) * t); d = Math.min(d, near(p) - (rt.r || 2.5)); } roots.push({ i, d }); });

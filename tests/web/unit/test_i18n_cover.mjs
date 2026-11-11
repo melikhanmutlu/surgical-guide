@@ -128,4 +128,27 @@ test('no translated name inside a translated template', () => {
   assert.equal(bad.length, 0, bad.join('\n'));
 });
 
+// Denetim 8: the fit test messages put a list of motion names into one whole-sentence key ("… (#; # mm / #° …)"): a list of
+// words is never lifted to "#", so the key was dead and the message stayed Turkish. The sentence is joined from translated
+// parts now; a singular count takes the singular for the units added since (pad, voxel, motion, tooth root).
+test('fit test messages translate with their list of motions; new units take the singular', () => {
+  const dead = Object.keys(P.eval('I18N_EN')).filter(k => /\(#[;,] /.test(k) && /Oturma testi/.test(k));
+  assert.equal(dead.length, 0, dead.join('\n'));
+  const app = fs.readFileSync(REPO + '/web/app.js', 'utf8');
+  assert.ok(!/`Oturma testi: [^`]*\$\{names\(/.test(app), 'the list of motions is inside a whole-sentence template again');
+  for (const [tr, en] of [
+    ['Oturma testi: vidalar takılıyken bile guide yerinden oynayabiliyor', 'Fit test: even with the screws in, the guide can move'],
+    ['0,5 mm / 2° sanal oynatma kemiğe çarpmıyor, vidalar da tutmuyor', 'a virtual 0.5 mm / 2° motion runs into neither bone nor screws'],
+    ['Oturma testi: vidalar takılmadan önce guide tek konuma oturmuyor', 'Fit test: before the screws are in, the guide does not sit in one position only'],
+    ['0,5 mm / 2° sanal oynatma kemiğe çarpmıyor', 'a virtual 0.5 mm / 2° motion does not run into bone'],
+    ['kemik ekseni boyunca kayma', 'sliding along the bone axis'],
+    ['Örnek vaka açılamadı:', 'Could not open sample case:'],
+  ]) assert.equal(T(tr), en);
+  assert.match(T('Pedli guide deneyseldir (1 ped): basılı kemik modelinde oturma ve kesi doğruluğu ölçülmeden hastada kullanmayın.'), /\(1 pad\)/);
+  assert.match(T('1 diş kökü pay içinde'), /^1 tooth root inside/);
+  assert.match(T('Parça silindi: 1 voksel'), /1 voxel$/);
+  assert.match(T('Oturma testi geçti: guide 0,5 mm kaydırma ve 2° döndürmede her yönde kemiğe çarpıyor (1 hareket); tek konumda oturuyor.'), /\(1 motion\)/);
+  assert.ok(!/'Örnek vaka açılamadı: ' \+/.test(app), 'the error text is glued to the key again');
+});
+
 await run('i18n leftovers (all web/*.js vs i18n_en.js)');

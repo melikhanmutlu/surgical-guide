@@ -235,14 +235,23 @@ window.Bones = (function () {
     // a scan cropped through the skull base: the condyles sit in their fossae and the skull base joins them to the
     // maxilla round the side, so the split above handed the skull base and zygomatic arch to the mandible (the real
     // sample: one side). When the bone runs into the top of the scan and its top JAW.skull mm reach the midline (a
-    // skull base; a mandible alone has no midline bone at its top), that whole top slab marks the upper jaw too.
+    // skull base; a mandible alone has no midline bone at its top), the top slab joined to it marks the upper jaw too.
     const top = f.up > 0 ? f.k1 >= nz - 1 : f.k0 <= 0;
     let n3 = 0;
     if (top) {
       const skull = opt.skull ?? JAW.skull, inTop = k => f.h(k) >= f.H - skull;
-      let midTop = false;
-      for (let k = f.k0; k <= f.k1 && !midTop; k++) { if (!inTop(k)) continue; const o = k * nxy; for (let v = 0; v < nxy; v++) if (mask[o + v] && Math.abs(v % nx - f.cx) * sp[0] < JAW.suspectMid) { midTop = true; break; } }
-      if (midTop) for (let k = f.k0; k <= f.k1; k++) { if (!inTop(k)) continue; const o = k * nxy; for (let v = 0; v < nxy; v++) if (mask[o + v] && seeds[o + v] !== 2) { if (seeds[o + v] === 1) n1--; seeds[o + v] = 2; n2++; n3++; } }
+      // only the slab bone joined (6-connected) to the midline top bone through bone above the occlusal band: a scan
+      // whose top cuts the maxilla and both rami also reaches the midline, but there the cut ramus tops are separate
+      // pieces and must stay with the mandible (seeding the whole slab split each ramus halfway down). The join may run
+      // below the slab (a skull base reaches the midline lower down) but never through the band (the teeth contact).
+      const inS = new Uint8Array(mask.length), q = new Int32Array(mask.length); let qn = 0;
+      for (let k = f.k0; k <= f.k1; k++) { if (!(f.h(k) > occ + band)) continue; const o = k * nxy, t = inTop(k); for (let v = 0; v < nxy; v++) if (mask[o + v]) { inS[o + v] = 1; if (t && Math.abs(v % nx - f.cx) * sp[0] < JAW.suspectMid) { inS[o + v] = 2; q[qn++] = o + v; } } }
+      for (let qi = 0; qi < qn; qi++) {
+        const w = q[qi], i = w % nx, j = ((w / nx) | 0) % ny, k = (w / nxy) | 0;
+        const nb = [i > 0 ? w - 1 : -1, i < nx - 1 ? w + 1 : -1, j > 0 ? w - nx : -1, j < ny - 1 ? w + nx : -1, k > 0 ? w - nxy : -1, k < nz - 1 ? w + nxy : -1];
+        for (const u of nb) if (u >= 0 && inS[u] === 1) { inS[u] = 2; q[qn++] = u; }
+      }
+      for (let qi = 0; qi < qn; qi++) { const w = q[qi]; if (inTop((w / nxy) | 0) && seeds[w] !== 2) { if (seeds[w] === 1) n1--; seeds[w] = 2; n2++; n3++; } }
     }
     return n1 && n2 ? { seeds, n1, n2, H: f.H, skull: n3 } : null;
   }

@@ -151,6 +151,9 @@ window.Seat = (() => {
       const ww = w.map(x => x * sg), piv = axis === 'd' ? [0] : o.PIVOTS;
       // one rotation entry per axis and sense: free when the guide turns freely about any of the pivots
       const sub = piv.map(dep => ({ c: [c0[0] - d[0] * dep, c0[1] - d[1] * dep, c0[2] - d[2] * dep], R: rotM(norm(ww), o.A), dep }));
+      // and the twist about each screw's own line: about the centroid any screw off it moves sideways and looks held,
+      // but a guide held by one screw turns about that screw (two screws apart still hold each other's twist)
+      if (axis === 'd') scr.forEach(s => sub.push({ c: s.e, R: rotM(dot(s.a, ww) < 0 ? s.a.map(x => -x) : s.a, o.A), dep: 0 }));
       moves.push({ kind: 'rot', axis, sign: sg, sub });
     }
     for (const m of moves) {

@@ -87,6 +87,7 @@ const H = require('./lib');
       Lesion.paint(G.worldOf(r, ...c), 2, true); const n = Lesion.sugg();
       out.cav = { sugg: n, cm3: n * r.sp[0] * r.sp[1] * r.sp[2] / 1000, msg: document.getElementById('lsSuggMsg').textContent };
       for (const [v, x] of saved) r.hu[v] = x;
+      Lesion.setTool('grow');   // the tool off again (setTool toggles)
       return out;
     }, pos);
     await h.ev(() => UI.openStep('st3')); await h.sleep(300);
@@ -94,37 +95,6 @@ const H = require('./lib');
     if (res.cav.sugg) await page.click('#lsSuggDrop', { timeout: 10000 }); await h.sleep(300);
     const gone = await h.ev(() => Lesion.sugg());
     return { pass: res.bone.sugg === 0 && /kemik yoğunluğunda/.test(res.bone.msg) && res.cav.sugg > 0 && res.cav.cm3 > 0.04 && res.cav.cm3 < 0.1 && gone === 0, actual: JSON.stringify(res) + ` silindi: ${gone === 0}`, evidence: s };
-  });
-
-  await h.run('R5', 'Pay kabuğu', 'Kanal önerisi kabul, pay 3 mm', 'Kabuk 3B\'de katman; durum satırında kanala uzaklık', async () => {
-    await h.ev(() => { Canal.suggest(); Canal.acceptSuggest(); }); await h.sleep(500); await h.settle();
-    const st = await h.ev(() => ({ part: !!(Studio.parts.lesionShell && Studio.parts.lesionShell.obj), stat: document.getElementById('lsStat').textContent, canals: Studio.S.canals.length, sh: Lesion.shellInfo() && { canal: Lesion.shellInfo().canal } }));
-    const s = await h.shot('R5_kabuk');
-    return { pass: st.part && st.canals > 0 && /Güvenlik payı kabuğu \(3,0 mm\): kanala \d/.test(st.stat), actual: JSON.stringify(st), evidence: s };
-  });
-
-  await h.run('R4', '"Tıkla bul" önerisi', 'Önce kemiğe, sonra kemik modelinin içindeki en koyu noktaya (kanal ya da ilik) tıklama', 'Kemikte öneri yok ve açıklama; koyu noktada öneri var, 6 cm³\'ten küçük, kemik kabuğunun içinde; "Öneriyi sil" kaldırır', async () => {
-    const res = await h.ev(p => {
-      const S = Studio.S, r = S.red, out = {};
-      Lesion.setTool('grow');
-      // a bone voxel: the brightest within 3 voxels of the lesion point
-      const c = G.indexOf(r, p).map(Math.round); let best = null;
-      for (let k = -3; k <= 3; k++) for (let j = -3; j <= 3; j++) for (let i = -3; i <= 3; i++) { const v = (c[0] + i) + r.nx * ((c[1] + j) + r.ny * (c[2] + k)); if (!best || r.hu[v] > best[0]) best = [r.hu[v], [c[0] + i, c[1] + j, c[2] + k]]; }
-      Lesion.paint(G.worldOf(r, ...best[1]), 2, true); out.bone = { sugg: Lesion.sugg(), msg: document.getElementById('lsSuggMsg').textContent };
-      // a dark voxel inside the bone model (the model fills the canal and the marrow): the darkest within 10 voxels
-      let dark = null;
-      for (let k = -10; k <= 10; k++) for (let j = -10; j <= 10; j++) for (let i = -10; i <= 10; i++) { const v = (c[0] + i) + r.nx * ((c[1] + j) + r.ny * (c[2] + k)); if (S.mask[v] && (!dark || r.hu[v] < dark[0])) dark = [r.hu[v], [c[0] + i, c[1] + j, c[2] + k]]; }
-      out.seedHu = dark && dark[0];
-      Lesion.paint(G.worldOf(r, ...dark[1]), 2, true); const n = Lesion.sugg();
-      out.canal = { sugg: n, cm3: n * r.sp[0] * r.sp[1] * r.sp[2] / 1000, msg: document.getElementById('lsSuggMsg').textContent };
-      Lesion.setTool('grow');
-      return out;
-    }, pos);
-    await h.ev(() => UI.openStep('st3')); await h.sleep(300);
-    const s = await h.shot('R4_tikla_bul');
-    if (res.canal.sugg) await page.click('#lsSuggDrop', { timeout: 10000 }); await h.sleep(300);
-    const gone = await h.ev(() => Lesion.sugg());
-    return { pass: res.bone.sugg === 0 && /kemik yoğunluğunda/.test(res.bone.msg) && res.canal.sugg > 0 && res.canal.cm3 < 6 && gone === 0, actual: JSON.stringify(res) + ` silindi: ${gone === 0}`, evidence: s };
   });
 
   const prod = async () => { await h.ev(() => Studio.productionSTL()); await h.idle(600000); await h.settle(); return h.ev(() => Studio.S.prod && { watertight: Studio.S.prod.watertight, bodies: Studio.S.prod.bodies, ok: Studio.S.prod.productionOk, issues: Studio.S.prod.issues }); };

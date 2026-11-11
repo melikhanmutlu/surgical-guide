@@ -355,7 +355,7 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
       const kn = knobAt(v, X, Y);
       if (kn) { const d = startTurn(v, kn); if (d) { st.drag = d; dragTurn(d, kn.X, kn.Y); c.style.cursor = 'grabbing'; return; } }
       const li = hitLine(v, X, Y);
-      if (li >= 0) { st.drag = { kind: 'plane', v, i: li }; St.select('p' + li); c.style.cursor = 'grabbing'; return; }
+      if (li >= 0) { st.drag = { kind: 'plane', v, i: li, X, Y }; St.select('p' + li); c.style.cursor = 'grabbing'; return; }
       st.drag = { kind: 'cursor', v }; moveCursor(v, X, Y);
     });
     c.addEventListener('pointermove', e => {
@@ -369,10 +369,10 @@ var xl = s => (window.I18N ? I18N.t(s) : s);
       else if (d.kind === 'cursor') moveCursor(v, X, Y);
       else if (d.kind === 'wl') { const k = 1 / Math.min(devicePixelRatio, 2); st.win = { L: Math.round(d.L - (Y - d.Y) * 2 * k), W: Math.max(10, Math.round(d.W + (X - d.X) * 4 * k)) }; customWin(); redraw(); }
       else if (d.kind === 'custom') { const T = xf(v); v.custom.pick(v, T.ix(X), T.iy(Y)); }
-      else if (d.kind === 'plane') dragPlane(v, d.i, X, Y);
+      else if (d.kind === 'plane') { if (!d.moved && Math.hypot(X - d.X, Y - d.Y) < 3) return; d.moved = true; dragPlane(v, d.i, X, Y); }   // a click selects the cut; only a drag moves it (Denetim 8)
       else if (d.kind === 'paint') { const T = xf(v); d.P.paint(toWorld(imgToIdx(v, T.ix(X), T.iy(Y))), v.axis, false); }
     });
-    const end = () => { if (st.drag && st.drag.kind === 'handle' && st.drag.h.end) st.drag.h.end(); if (st.drag && st.drag.kind === 'plane') { St.unapprove(S.planes[st.drag.i]); if (St.centreCut) St.centreCut(st.drag.i); St.schedule(true); if (St.syncGizmo) St.syncGizmo(); } if (st.drag && st.drag.kind === 'turn' && st.drag.moved) { if (St.centreCut && st.drag.i != null) St.centreCut(st.drag.i); St.schedule(true); if (St.syncGizmo) St.syncGizmo(); } if (st.drag && st.drag.kind === 'paint') st.drag.P.strokeEnd(); st.drag = null; c.style.cursor = brushOf() ? 'none' : 'crosshair'; };
+    const end = () => { if (st.drag && st.drag.kind === 'handle' && st.drag.h.end) st.drag.h.end(); if (st.drag && st.drag.kind === 'plane' && st.drag.moved) { St.unapprove(S.planes[st.drag.i]); if (St.centreCut) St.centreCut(st.drag.i); St.schedule(true); if (St.syncGizmo) St.syncGizmo(); } if (st.drag && st.drag.kind === 'turn' && st.drag.moved) { if (St.centreCut && st.drag.i != null) St.centreCut(st.drag.i); St.schedule(true); if (St.syncGizmo) St.syncGizmo(); } if (st.drag && st.drag.kind === 'paint') st.drag.P.strokeEnd(); st.drag = null; c.style.cursor = brushOf() ? 'none' : 'crosshair'; };
     c.addEventListener('pointerup', end); c.addEventListener('pointercancel', end);
     c.addEventListener('pointerleave', () => { if (st.hover && st.hover.v === v.id) { st.hover = null; redraw(); } });
     c.addEventListener('dblclick', () => { st.max = st.max === v.id ? null : v.id; layout(); });
