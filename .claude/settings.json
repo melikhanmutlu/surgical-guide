@@ -8,7 +8,8 @@
     "impeccable": { "source": { "source": "github", "repo": "pbakaus/impeccable" } },
     "ui-ux-pro-max-skill": { "source": { "source": "github", "repo": "nextlevelbuilder/ui-ux-pro-max-skill" } },
     "taste-skill": { "source": { "source": "github", "repo": "Leonxlnx/taste-skill" } },
-    "humanizer": { "source": { "source": "github", "repo": "blader/humanizer" } }
+    "humanizer": { "source": { "source": "github", "repo": "blader/humanizer" } },
+    "openai-codex": { "source": { "source": "github", "repo": "openai/codex-plugin-cc" } }
   },
   "enabledPlugins": {
     "superpowers@superpowers-marketplace": true,
@@ -18,7 +19,8 @@
     "impeccable@impeccable": true,
     "ui-ux-pro-max@ui-ux-pro-max-skill": true,
     "taste-skill@taste-skill": true,
-    "humanizer@humanizer": true
+    "humanizer@humanizer": true,
+    "codex@openai-codex": true
   },
   "hooks": {
     "SessionStart": [
